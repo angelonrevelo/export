@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>export</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%234d8eff'/%3E%3Ctext x='8' y='12' text-anchor='middle' font-family='ui-monospace,monospace' font-size='11' font-weight='700' fill='white'%3Ee%3C/text%3E%3C/svg%3E">
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  background: #0e0e0e; color: #e8e8e8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-width: 640px; margin: 3rem auto 6rem; padding: 0 1rem;
+}
+h1 { font-size: 1.4rem; margin: 0 0 1.5rem; letter-spacing: -0.02em; font-weight: 500; }
+input, button, select {
+  font: inherit; padding: 0.6rem 0.8rem; border-radius: 6px;
+  border: 1px solid #2a2a2a; background: #181818; color: inherit;
+}
+input:focus, select:focus { outline: 2px solid #4d8eff; outline-offset: -2px; }
+button {
+  background: #4d8eff; color: #fff; border: none; cursor: pointer;
+}
+button:disabled { opacity: 0.4; cursor: default; }
+button:hover:not(:disabled) { background: #3a7ce8; }
+.row { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+.row > input[type="text"], .row > input[type="password"] { flex: 1; }
+hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
+.subtle { color: #666; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+
+#drop {
+  border: 2px dashed #2a2a2a;
+  border-radius: 8px;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: #777;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+#drop:hover, #drop.dragging {
+  border-color: #4d8eff;
+  color: #4d8eff;
+  background: rgba(77, 142, 255, 0.04);
+}
+#drop small { display: block; margin-top: 0.5rem; color: #555; font-size: 0.8em; }
+#drop-file { display: none; }
+
+#picked { display: none; margin-top: 0.75rem; }
+#picked.show { display: block; }
+#file-card {
+  background: #181818;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+#file-card .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#file-card .meta { color: #666; font-size: 0.85em; white-space: nowrap; }
+#clear-btn {
+  background: transparent; color: #888; border: 1px solid #2a2a2a;
+  padding: 0.3rem 0.6rem; font-size: 0.85em; cursor: pointer;
+}
+#clear-btn:hover { color: #ff6b6b; border-color: #ff6b6b; }
+
+#actions { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+#actions label {
+  padding: 0.4rem 0.9rem; border-radius: 6px; background: #181818;
+  border: 1px solid #2a2a2a; cursor: pointer; transition: all 0.1s;
+}
+#actions label:hover { border-color: #444; }
+#actions label.selected {
+  background: rgba(77, 142, 255, 0.12);
+  border-color: #4d8eff; color: #4d8eff;
+}
+#actions input { display: none; }
+
+#opt-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+#opt-label { color: #888; font-size: 0.9em; min-width: 6rem; }
+#opt-select { flex: 1; }
+#process { width: 100%; margin-top: 0.5rem; padding: 0.7rem; }
+
+#status {
+  margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 6px;
+  background: #181818; color: #aaa; min-height: 1.4em; display: none;
+  word-break: break-word;
+}
+#status.show { display: block; }
+.error { color: #ff6b6b; }
+.ready a { color: #4d8eff; text-decoration: none; }
+.ready a:hover { text-decoration: underline; }
+.bar {
+  height: 4px; background: #2a2a2a; border-radius: 2px; overflow: hidden;
+  margin-top: 0.5rem; display: none;
+}
+.bar.show { display: block; }
+.bar > div { height: 100%; background: #4d8eff; transition: width 0.3s; width: 0; }
+.bar.indeterminate > div {
+  width: 30% !important;
+  animation: barslide 1.4s ease-in-out infinite;
+}
+@keyframes barslide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(370%); }
+}
+
+#caps-toggle { margin-top: 2rem; text-align: center; }
+#caps-toggle a { color: #555; font-size: 0.85em; text-decoration: none; border-bottom: 1px dotted #444; }
+#caps-toggle a:hover { color: #4d8eff; border-bottom-color: #4d8eff; }
+#caps-panel {
+  margin-top: 1rem; padding: 1rem 1.25rem; background: #131313;
+  border: 1px solid #1d1d1d; border-radius: 6px; font-size: 0.85em;
+  color: #aaa; line-height: 1.6;
+}
+#caps-panel h3 { color: #ddd; margin: 0.75rem 0 0.25rem; font-size: 0.95em; font-weight: 500; }
+#caps-panel h3:first-child { margin-top: 0; }
+#caps-panel code { color: #4d8eff; background: #181818; padding: 0 0.3rem; border-radius: 3px; }
+
+#adv-toggle { margin-bottom: 0.5rem; }
+#adv-toggle a { color: #777; font-size: 0.85em; text-decoration: none; border-bottom: 1px dotted #333; }
+#adv-toggle a:hover { color: #4d8eff; border-bottom-color: #4d8eff; }
+#adv-panel {
+  background: #131313; border: 1px solid #1d1d1d; border-radius: 6px;
+  padding: 0.75rem 1rem; margin-bottom: 0.75rem; font-size: 0.85em;
+}
+#adv-panel label { display: flex; align-items: center; gap: 0.75rem; color: #aaa; }
+#adv-panel input[type="range"] { flex: 1; height: 4px; cursor: pointer; }
+#adv-panel .est { color: #4d8eff; font-variant-numeric: tabular-nums; min-width: 5rem; text-align: right; }
+.size-badge { color: #666; font-size: 0.8em; margin-left: 0.4rem; }
+.size-badge.win { color: #5fc28e; }
+</style>
+</head>
+<body>
+
+<h1>export</h1>
+
+<div class="row" id="auth">
+  <input type="password" id="pw" placeholder="password" autocomplete="current-password">
+  <button id="save-pw">unlock</button>
+</div>
+
+<div id="app" hidden>
+
+  <div class="subtle">from a URL</div>
+  <div class="row">
+    <input type="text" id="url" placeholder="https://youtube.com/watch?v=..." autofocus>
+    <select id="url-format">
+      <option value="mp3">mp3</option>
+      <option value="mp4">mp4</option>
+      <option value="images">images</option>
+      <option value="notes">notes (NoteGPT-style markdown)</option>
+      <option value="txt">txt (transcript)</option>
+      <option value="srt">srt (subtitles)</option>
+      <option value="vtt">vtt (subtitles)</option>
+    </select>
+    <button id="go">extract</button>
+  </div>
+
+  <hr class="sep">
+
+  <div class="subtle">from a file</div>
+  <div id="drop">
+    drag a file here, or click to pick
+    <small>images · video · audio · pdf · documents · or any files to compress</small>
+  </div>
+  <input type="file" id="drop-file" multiple>
+
+  <div id="picked">
+    <div id="file-card">
+      <span class="name" id="file-name"></span>
+      <span class="meta" id="file-meta"></span>
+      <button id="clear-btn" type="button">clear</button>
+    </div>
+    <div id="actions"></div>
+    <div id="opt-row">
+      <span id="opt-label">format:</span>
+      <select id="opt-select"></select>
+      <input type="text" id="opt-input" style="display:none; flex:1;" placeholder="">
+    </div>
+    <div id="adv-toggle" hidden>
+      <a href="#" id="adv-link">advanced ▾</a>
+    </div>
+    <div id="adv-panel" hidden>
+      <label>
+        <span>quality</span>
+        <input type="range" id="adv-quality" min="1" max="100" step="1" value="70">
+        <span class="est" id="adv-quality-val">70</span>
+      </label>
+      <div style="color:#666; font-size:0.8em; margin-top:0.5rem;">
+        Lower = smaller file, more visible compression. The slider overrides the
+        level dropdown above when this panel is open. <span class="est" id="adv-estimate"></span>
+      </div>
+    </div>
+    <button id="process">process</button>
+  </div>
+
+  <div id="status"></div>
+  <div class="bar" id="bar"><div></div></div>
+
+  <div id="caps-toggle">
+    <a href="#" id="caps-link">show what's supported</a>
+  </div>
+  <div id="caps-panel" hidden></div>
+</div>
+
+<script>
+const PW_KEY = "export_pw";
+const $ = (id) => document.getElementById(id);
+const getPw = () => localStorage.getItem(PW_KEY) || "";
+
+const TYPES = {
+  image:  { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif"],
+            convertTo: ["jpeg","png","webp","avif","pdf","txt","nobg","svg"], shrink: true },
+  video:  { exts: ["mp4","mov","webm","mkv","avi","m4v"],
+            convertTo: ["gif","txt","srt","vtt","notes"], shrink: true },
+  audio:  { exts: ["mp3","m4a","wav","flac","ogg","aac","opus"],
+            convertTo: ["mp3","m4a","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","denoise","stems"], shrink: false },
+  doc:    { exts: ["md","html","htm","rtf","epub","txt","tex","org","rst"],
+            convertTo: ["md","html","docx","rtf","epub","txt","odt","pdf","mp3","m4a","wav"], shrink: false },
+  office: { exts: ["docx","doc","pptx","ppt","xlsx","xls","odp","ods","odt"],
+            convertTo: ["pdf"], shrink: false },
+  pdf:    { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","docx","pdfa"], shrink: true },
+  other: { exts: [], convertTo: [], shrink: false },
+};
+
+function detectType(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  for (const [t, def] of Object.entries(TYPES)) if (def.exts.includes(ext)) return t;
+  return "other";
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  return (n/1024/1024).toFixed(1) + " MB";
+}
+
+function showApp() {
+  $("auth").hidden = true;
+  $("app").hidden = false;
+  $("url").focus();
+}
+
+if (getPw()) showApp();
+
+// ─── Capabilities panel ─────────────────────────────────────────────
+$("caps-link").onclick = async (e) => {
+  e.preventDefault();
+  const panel = $("caps-panel");
+  if (!panel.hidden) { panel.hidden = true; $("caps-link").textContent = "show what's supported"; return; }
+  $("caps-link").textContent = "loading…";
+  const r = await fetch("/api/capabilities");
+  const d = await r.json();
+  const fmt = (xs) => xs.map(x => `<code>${x}</code>`).join(" ");
+  const mb = (b) => `${(b / 1024 / 1024).toFixed(0)} MB`;
+  panel.innerHTML = `
+    <h3>From URL (~${d.url_extraction.video_audio_sites.match(/\d+/)[0]} sites)</h3>
+    <div>output: ${fmt(d.url_extraction.url_outputs)}</div>
+    <h3>Image input ${fmt(d.file_inputs.image)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.image)}</div>
+    <h3>Video input ${fmt(d.file_inputs.video)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.video)}</div>
+    <h3>Audio input ${fmt(d.file_inputs.audio)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.audio)}</div>
+    <h3>PDF input</h3>
+    <div>convert to: ${fmt(d.convert_outputs.pdf)} · operations: ${fmt(d.operations.pdf_ops)}</div>
+    <h3>Document input ${fmt(d.file_inputs.document)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.document)}</div>
+    <h3>Office input ${fmt(d.file_inputs.office)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.office)}</div>
+    <h3>Multi-file</h3>
+    <div>archive formats: ${fmt(d.operations.compress_archive)}</div>
+    <h3>Lossy shrink (image/video/pdf)</h3>
+    <div>levels: ${fmt(d.operations.shrink_levels)}</div>
+    <h3>Limits</h3>
+    <div>upload ≤ ${mb(d.limits.max_upload_bytes)} · multi-file total ≤ ${mb(d.limits.max_compress_bytes)} · jobs deleted after ${Math.round(d.limits.job_ttl_seconds/60)} min</div>`;
+  panel.hidden = false;
+  $("caps-link").textContent = "hide";
+};
+
+$("save-pw").onclick = () => {
+  const pw = $("pw").value;
+  if (!pw) return;
+  localStorage.setItem(PW_KEY, pw);
+  showApp();
+};
+$("pw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("save-pw").click(); });
+
+// ─── URL flow ────────────────────────────────────────────────────────
+$("go").onclick = async () => {
+  const url = $("url").value.trim();
+  if (!url) return;
+  const format = $("url-format").value;
+  setStatus("submitting...");
+  $("bar").classList.add("show");
+  setProgress(0);
+  $("go").disabled = true;
+  try {
+    const r = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "X-Password": getPw(), "Content-Type": "application/json" },
+      body: JSON.stringify({ url, format }),
+    });
+    if (r.status === 401) { localStorage.removeItem(PW_KEY); location.reload(); return; }
+    if (!r.ok) throw new Error(await r.text() || "failed");
+    const { job_id } = await r.json();
+    poll(job_id, format);
+  } catch (e) {
+    setStatus(e.message, "error");
+    $("go").disabled = false;
+  }
+};
+$("url").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });
+
+// ─── File flow ───────────────────────────────────────────────────────
+const drop = $("drop");
+drop.onclick = () => $("drop-file").click();
+
+["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, (e) => {
+  e.preventDefault();
+  drop.classList.add("dragging");
+}));
+["dragleave", "dragend"].forEach(ev => drop.addEventListener(ev, () => {
+  drop.classList.remove("dragging");
+}));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("dragging");
+  const dt = new DataTransfer();
+  for (const f of e.dataTransfer.files) dt.items.add(f);
+  $("drop-file").files = dt.files;
+  showPicked(dt.files);
+});
+
+$("drop-file").onchange = (e) => showPicked(e.target.files);
+
+$("clear-btn").onclick = () => {
+  $("drop-file").value = "";
+  $("picked").classList.remove("show");
+};
+
+function showPicked(files) {
+  if (!files || !files.length) {
+    $("picked").classList.remove("show");
+    return;
+  }
+  $("picked").classList.add("show");
+  if (files.length === 1) {
+    const f = files[0];
+    const type = detectType(f.name);
+    $("file-name").textContent = f.name;
+    $("file-meta").textContent = `${fmtBytes(f.size)} · ${type}`;
+    const def = TYPES[type];
+    const acts = [];
+    if (def.convertTo.length) acts.push("convert");
+    acts.push("compress");
+    if (def.shrink) acts.push("shrink");
+    if (type === "pdf") acts.push("split", "rotate", "watermark", "encrypt", "decrypt");
+    renderActions(acts, type);
+  } else {
+    const total = [...files].reduce((s, f) => s + f.size, 0);
+    const allPdf = [...files].every(f => detectType(f.name) === "pdf");
+    $("file-name").textContent = `${files.length} files`;
+    $("file-meta").textContent = fmtBytes(total);
+    const acts = ["compress"];
+    if (allPdf) acts.push("merge");
+    renderActions(acts, allPdf ? "pdf-multi" : "mixed");
+  }
+}
+
+function renderActions(acts, type) {
+  const c = $("actions");
+  c.innerHTML = "";
+  acts.forEach((a, i) => {
+    const lbl = document.createElement("label");
+    if (i === 0) lbl.classList.add("selected");
+    const id = `act-${a}`;
+    lbl.innerHTML = `<input type="radio" name="action" value="${a}" id="${id}" ${i===0?"checked":""}> ${a}`;
+    lbl.onclick = (e) => {
+      if (e.target.tagName === "INPUT") return;
+      lbl.querySelector("input").checked = true;
+      document.querySelectorAll("#actions label").forEach(x => x.classList.remove("selected"));
+      lbl.classList.add("selected");
+      updateOptForAction(type);
+    };
+    c.appendChild(lbl);
+  });
+  updateOptForAction(type);
+}
+
+// Which actions get the advanced knob (quality slider + size estimate).
+const ADV_ACTIONS = new Set(["shrink", "convert"]);
+const ADV_DEFAULTS = { shrink: 70, convert: 90 };
+
+function updateOptForAction(type) {
+  const action = document.querySelector("input[name=action]:checked")?.value;
+  const sel = $("opt-select");
+  const txt = $("opt-input");
+  sel.innerHTML = "";
+  let opts = [], label = "", showSel = true, showTxt = false, txtPlaceholder = "", txtType = "text";
+  if (action === "convert") {
+    opts = TYPES[type].convertTo;
+    label = "convert to:";
+  } else if (action === "compress") {
+    opts = ["zip", "7z", "tar.zst", "tar.gz"];
+    label = "archive as:";
+  } else if (action === "shrink") {
+    opts = ["low", "medium", "high"];
+    label = "quality:";
+  } else if (action === "rotate") {
+    opts = ["90", "180", "270"];
+    label = "rotate degrees:";
+  } else if (action === "watermark") {
+    showSel = false; showTxt = true; label = "watermark text:"; txtPlaceholder = "DRAFT";
+  } else if (action === "encrypt") {
+    showSel = false; showTxt = true; label = "set password:"; txtPlaceholder = "password"; txtType = "password";
+  } else if (action === "decrypt") {
+    showSel = false; showTxt = true; label = "current password:"; txtPlaceholder = "password"; txtType = "password";
+  } else if (action === "split" || action === "merge") {
+    showSel = false; showTxt = false; label = `(no options)`;
+  }
+  for (const o of opts) {
+    const opt = document.createElement("option");
+    opt.value = o; opt.textContent = o;
+    sel.appendChild(opt);
+  }
+  sel.style.display = showSel ? "" : "none";
+  txt.style.display = showTxt ? "" : "none";
+  txt.placeholder = txtPlaceholder;
+  txt.type = txtType;
+  txt.value = "";
+  $("opt-label").textContent = label;
+  if (action === "shrink") sel.value = "medium";
+
+  // Advanced knob: only meaningful for shrink + image-convert.
+  const showAdv = ADV_ACTIONS.has(action) && (action !== "convert" || type === "image");
+  $("adv-toggle").hidden = !showAdv;
+  $("adv-panel").hidden = true;
+  $("adv-link").textContent = "advanced ▾";
+  if (showAdv) {
+    $("adv-quality").value = qualityForLevel(action, sel.value);
+    $("adv-quality-val").textContent = $("adv-quality").value;
+    refreshEstimate();
+  }
+}
+
+const SHRINK_LEVEL_QUALITY = { low: 50, medium: 70, high: 85 };
+function qualityForLevel(action, levelOrFmt) {
+  if (action === "shrink") return SHRINK_LEVEL_QUALITY[levelOrFmt] ?? 70;
+  return ADV_DEFAULTS[action] || 70;
+}
+
+// Keep the slider and the level dropdown in sync. When the user changes the
+// level, snap the slider to its quality. When they move the slider, the
+// dropdown becomes purely informational (slider wins on submit).
+$("opt-select").addEventListener("change", () => {
+  if ($("adv-panel").hidden) return;
+  const action = document.querySelector("input[name=action]:checked")?.value;
+  if (action !== "shrink") return;
+  const v = qualityForLevel(action, $("opt-select").value);
+  $("adv-quality").value = v;
+  $("adv-quality-val").textContent = v;
+  refreshEstimate();
+});
+
+$("adv-link").onclick = (e) => {
+  e.preventDefault();
+  const open = $("adv-panel").hidden;
+  $("adv-panel").hidden = !open;
+  $("adv-link").textContent = open ? "advanced ▴" : "advanced ▾";
+};
+
+$("adv-quality").oninput = () => {
+  $("adv-quality-val").textContent = $("adv-quality").value;
+  refreshEstimate();
+};
+
+function refreshEstimate() {
+  const files = $("drop-file").files;
+  if (!files || !files.length) { $("adv-estimate").textContent = ""; return; }
+  const inputBytes = [...files].reduce((s, f) => s + f.size, 0);
+  const q = +$("adv-quality").value;
+  // Type-aware heuristic. Each format has a different quality→size curve and
+  // a content-dependent floor. JPEG can shrink very low; video can't escape
+  // its codec/audio overhead; PDF uses 4 discrete Ghostscript presets.
+  const t = files.length === 1 ? detectType(files[0].name) : "image";
+  let ratio;
+  if (t === "video") {
+    // SVT-AV1 has a ~4% practical floor (audio + headers + min bitrate).
+    ratio = Math.max(0.04, Math.pow(q / 100, 0.7));
+  } else if (t === "pdf") {
+    // Ghostscript /screen typically lands ~10-30% of original.
+    ratio = Math.max(0.10, Math.pow(q / 100, 1.0));
+  } else {
+    // Image (or default).
+    ratio = Math.pow(q / 100, 1.4);
+  }
+  const estBytes = inputBytes * ratio;
+  $("adv-estimate").textContent = `≈ ${fmtBytes(estBytes)} (${Math.round(ratio*100)}% of input, rough)`;
+}
+
+$("process").onclick = async () => {
+  const files = $("drop-file").files;
+  const action = document.querySelector("input[name=action]:checked")?.value;
+  const selVal = $("opt-select").value;
+  const txtVal = $("opt-input").value;
+  if (!files.length || !action) return;
+  setStatus("uploading...");
+  $("bar").classList.add("show");
+  setProgress(0);
+  $("process").disabled = true;
+  try {
+    let endpoint;
+    const fd = new FormData();
+    let pollHint = action;
+    if (action === "convert") {
+      endpoint = "/api/upload";
+      fd.append("file", files[0]);
+      fd.append("format", selVal);
+      if (!$("adv-panel").hidden) fd.append("quality", $("adv-quality").value);
+      pollHint = selVal;
+    } else if (action === "shrink") {
+      endpoint = "/api/shrink";
+      fd.append("file", files[0]);
+      fd.append("level", selVal);
+      if (!$("adv-panel").hidden) fd.append("quality", $("adv-quality").value);
+      // Begin a new shrink chain rooted at this upload.
+      _shrinkChain = {
+        originalSize: files[0].size,
+        currentQuality: $("adv-panel").hidden ? null : +$("adv-quality").value,
+        level: selVal,
+      };
+    } else if (action === "compress") {
+      endpoint = "/api/compress";
+      for (const f of files) fd.append("files", f);
+      fd.append("format", selVal);
+      pollHint = selVal;
+    } else if (action === "merge") {
+      endpoint = "/api/pdf/merge";
+      for (const f of files) fd.append("files", f);
+    } else if (["split", "rotate", "watermark", "encrypt", "decrypt"].includes(action)) {
+      endpoint = "/api/pdf/op";
+      fd.append("file", files[0]);
+      fd.append("op", action);
+      fd.append("value", action === "rotate" ? selVal : txtVal);
+    }
+    const r = await fetch(endpoint, {
+      method: "POST",
+      headers: { "X-Password": getPw() },
+      body: fd,
+    });
+    if (r.status === 401) { localStorage.removeItem(PW_KEY); location.reload(); return; }
+    if (!r.ok) throw new Error(await r.text() || "failed");
+    const { job_id } = await r.json();
+    poll(job_id, pollHint);
+  } catch (e) {
+    setStatus(e.message, "error");
+    $("process").disabled = false;
+  }
+};
+
+// ─── Status / polling ────────────────────────────────────────────────
+function setStatus(text, kind) {
+  const s = $("status");
+  s.textContent = text;
+  s.className = "show" + (kind ? ` ${kind}` : "");
+}
+function setProgress(pct) {
+  $("bar").firstElementChild.style.width = (pct || 0) + "%";
+}
+
+// Track only the most recent job — older polls become no-ops if the user
+// kicks off a new one. Prevents stale "transcribing: …" sticking on screen.
+let _activeJobId = null;
+const INDETERMINATE_STATES = new Set(["transcribing", "converting", "processing", "merging", "compressing", "shrinking"]);
+
+// State for incremental "shrink more" — keep the original input size across
+// iterations so the displayed ratio reflects total compression vs. start,
+// not just vs. the previous step.
+let _shrinkChain = null;  // { originalSize, currentQuality, action }
+
+async function shrinkMore(prevJobId, prevFilename) {
+  if (!_shrinkChain) return;
+  setStatus("re-uploading for further shrink...");
+  $("bar").classList.add("show");
+  setProgress(0);
+  const r = await fetch(`/api/files/${prevJobId}?pw=${encodeURIComponent(getPw())}`, {
+    headers: { "X-Password": getPw() },
+  });
+  const blob = await r.blob();
+  const file = new File([blob], prevFilename, { type: blob.type });
+  // Step quality down by 10 (floor 10). If no quality was set on the first
+  // shrink, start from 70 → 60.
+  const nextQ = Math.max(10, (_shrinkChain.currentQuality ?? 70) - 10);
+  _shrinkChain.currentQuality = nextQ;
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("level", _shrinkChain.level || "medium");
+  fd.append("quality", nextQ);
+  const r2 = await fetch("/api/shrink", {
+    method: "POST",
+    headers: { "X-Password": getPw() },
+    body: fd,
+  });
+  if (!r2.ok) { setStatus(await r2.text() || "shrink-more failed", "error"); return; }
+  const { job_id } = await r2.json();
+  poll(job_id);
+}
+
+async function poll(jobId) {
+  _activeJobId = jobId;
+  while (jobId === _activeJobId) {
+    await new Promise((r) => setTimeout(r, 1500));
+    if (jobId !== _activeJobId) return;  // a newer job took over
+    const r = await fetch(`/api/jobs/${jobId}`, { headers: { "X-Password": getPw() } });
+    if (r.status === 401) { localStorage.removeItem(PW_KEY); location.reload(); return; }
+    if (!r.ok) {
+      if (jobId !== _activeJobId) return;
+      setStatus("status check failed", "error");
+      $("go").disabled = false;
+      $("process").disabled = false;
+      return;
+    }
+    const j = await r.json();
+    if (jobId !== _activeJobId) return;
+    if (j.status === "ready") {
+      $("bar").classList.remove("indeterminate");
+      setProgress(100);
+      const url = `/api/files/${jobId}?pw=${encodeURIComponent(getPw())}`;
+      const name = j.filename || `${j.title || "file"}`;
+      let sizeNote = "";
+      // For shrink chains, compare against the *original* input, not the
+      // immediate previous step — that's the "shrunk 6× total" framing.
+      const baseline = _shrinkChain?.originalSize || j.original_size;
+      if (j.output_size && baseline) {
+        const pct = Math.round(100 * j.output_size / baseline);
+        const cls = pct < 100 ? "win" : "";
+        sizeNote = ` <span class="size-badge ${cls}">${fmtBytes(baseline)} → ${fmtBytes(j.output_size)} (${pct}%)</span>`;
+      } else if (j.output_size) {
+        sizeNote = ` <span class="size-badge">${fmtBytes(j.output_size)}</span>`;
+      }
+      // "shrink more" button — Clop-style incremental downscale by stepping
+      // quality down 10 each click (floor 10). Only shows if this was a
+      // shrink and we have somewhere to go.
+      let moreBtn = "";
+      if (_shrinkChain && j.filename && j.output_size) {
+        const cq = _shrinkChain.currentQuality ?? 70;
+        if (cq > 10) {
+          moreBtn = ` <button id="shrink-more" type="button">shrink more ↓</button>`;
+        }
+      }
+      $("status").innerHTML = `<a href="${url}" download>download "${name}"</a>${sizeNote}${moreBtn}`;
+      $("status").className = "show ready";
+      $("go").disabled = false;
+      $("process").disabled = false;
+      if ($("shrink-more")) {
+        $("shrink-more").onclick = () => shrinkMore(jobId, j.filename);
+      }
+      return;
+    }
+    if (j.status === "error") {
+      $("bar").classList.remove("indeterminate");
+      setStatus(`error: ${j.error}`, "error");
+      $("go").disabled = false;
+      $("process").disabled = false;
+      return;
+    }
+    setStatus(`${j.status}${j.title ? `: ${j.title}` : ""}`);
+    if (INDETERMINATE_STATES.has(j.status) && (j.progress === 0 || j.progress === 100)) {
+      // No progress callback for ML/conversion phases — show a sliding indeterminate bar
+      $("bar").classList.add("indeterminate");
+    } else {
+      $("bar").classList.remove("indeterminate");
+      setProgress(j.progress);
+    }
+  }
+}
+</script>
+
+</body>
+</html>

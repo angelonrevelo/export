@@ -1,0 +1,27 @@
+# systemd unit for export. Edit the User and paths, then:
+#   sudo cp scripts/export.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now export
+[Unit]
+Description=export — personal file/url conversion service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=youruser
+Group=youruser
+WorkingDirectory=/opt/export
+EnvironmentFile=/opt/export/.env
+ExecStart=/opt/export/scripts/run.sh
+Restart=on-failure
+RestartSec=5
+
+# basic hardening — relax if anything breaks
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/export /tmp/export
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+[project]
+name = "export"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "yt-dlp[curl-cffi]>=2025.1.0",
+    "gallery-dl>=1.27",
+    "pillow>=11.0",
+    "pillow-heif>=0.18",
+    "python-multipart>=0.0.9",
+    "py7zr>=0.21",
+    "pdf2image>=1.17",
+    "weasyprint>=63.0",
+    "pdfplumber>=0.11",
+    "pdf2docx>=0.5",
+    "pytesseract>=0.3.10",
+    "faster-whisper>=1.0",
+    "piper-tts>=1.2; sys_platform == 'linux'",
+    "ocrmypdf>=16.0",
+    "zstandard>=0.23",
+    "pypdf>=5.0",
+    "pikepdf>=9.0",
+    "reportlab>=4.2",
+    "rembg>=2.0",
+    "vtracer>=0.6",
+    "noisereduce>=3.0",
+    "demucs>=4.0",
+    "soundfile>=0.12",
+    "torchcodec>=0.4",
+    "curl_cffi>=0.7",
+    "watchdog>=4.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
