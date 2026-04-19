@@ -45,8 +45,8 @@ opportunistically. T5 is a research project we explicitly punt on.
 
 | Item | State | Risk | Notes |
 |---|---|---|---|
-| Per-file upload cap (100 MB) | ✓ | — | Hard limit in `/api/upload`, `/api/shrink`, `/api/pdf/op`. |
-| Multi-file total cap (500 MB) | ✓ | — | Enforced in `/api/compress` and `/api/pdf/merge`. |
+| Per-file upload cap | ⚠️ | T3, T4 | **Default: unlimited** (correct for personal use). Set `EXPORT_MAX_UPLOAD_MB=N` to enforce. **Required before any public exposure** — Phase 2 should ship a sane cap (e.g. 500 MB). |
+| Multi-file total cap | ⚠️ | T3, T4 | Same — `EXPORT_MAX_COMPRESS_MB` defaults to unlimited; cap before exposing. |
 | **No request rate limiting** | 🔴 | T3, T4 | Anyone with the password can submit unlimited jobs. Single shared CPU = trivial DoS. |
 | No per-user job concurrency limit | ⚠️ | T3 | Whisper is single-model; concurrent transcribes serialize but other ops compete for CPU. |
 | **SSRF via URL extraction** | 🔴 | T2-T4 | yt-dlp will fetch any URL the user gives it, including `http://169.254.169.254/...` (AWS metadata), `http://127.0.0.1:6379` (Redis), `http://internal.corp/admin`. |
@@ -109,6 +109,10 @@ afternoon of work.
       ~5 LOC.
 - [ ] **Stronger password** — 32+ chars from `openssl rand -base64 24`,
       documented requirement in `.env.example`.
+- [ ] **Set upload caps** — `EXPORT_MAX_UPLOAD_MB=500` and
+      `EXPORT_MAX_COMPRESS_MB=2000` (or whatever your disk can absorb).
+      Default is unlimited which is correct for personal use but a trivial
+      disk-fill DoS in any multi-user context.
 - [ ] **Document the threat model clearly to the trusted users** — they know
       that abuse can shut things down for everyone (single shared password,
       no audit).

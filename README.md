@@ -31,9 +31,9 @@ version.
 
 | Input type | Convert to | Other operations |
 |---|---|---|
-| **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif`) | `jpeg, png, webp, avif, pdf, txt (OCR), nobg (transparent PNG via rembg), svg (vectorize via vtracer)` | `shrink` |
-| **Video** (`.mp4 .mov .webm .mkv .avi .m4v`) | `gif, txt, srt, vtt (transcript via faster-whisper)` | `shrink` (SVT-AV1 re-encode) |
-| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split)` | — |
+| **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico`) | `jpeg, png, webp, avif, tiff, ico, pdf, txt (OCR), nobg (transparent PNG via rembg), svg (vectorize via vtracer)` | `shrink` (with quality slider) |
+| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv`) | `mp4, mov, webm, mkv, gif, txt, srt, vtt, notes (Whisper transcript)` | `shrink` (SVT-AV1 re-encode with quality slider) |
+| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt, notes (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split)` | — |
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback for scanned), docx, pdfa (searchable PDF/A via OCRmyPDF)` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .html .htm .rtf .epub .txt .tex .org .rst`) | `md, html, docx, rtf, epub, txt, odt, pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
 | **Office** (`.docx .doc .pptx .ppt .xlsx .xls .odp .ods .odt`) | `pdf` (via LibreOffice headless) | — |
@@ -42,7 +42,8 @@ version.
 
 | Action | Inputs | Output |
 |---|---|---|
-| **archive** | any files | `zip`, `7z`, `tar.zst` (3.8× smaller than tar.gz at zstd level 10), `tar.gz` |
+| **archive** (multi-file) | any files | `zip`, `7z`, `tar.zst` (3.8× smaller than tar.gz at zstd level 10), `tar.gz`, `tar.bz2`, `tar.xz` |
+| **single-file compress** | one file | `gz`, `bz2`, `xz`, `zst` (raw stream compression — no tar wrapper) |
 | **PDF merge** | 2+ PDFs | single combined PDF |
 
 ### Lossy shrink levels
@@ -52,6 +53,16 @@ version.
 | Image (any) | quality 50 | quality 70 | quality 85 |
 | Video | SVT-AV1 CRF 45, preset 8 | CRF 35, preset 6 | CRF 28, preset 4 |
 | PDF | Ghostscript `/screen` | `/ebook` | `/printer` |
+
+The **advanced disclosure** under shrink and image/video convert exposes a
+1–100 quality slider that overrides these presets. The slider's "estimated
+output size" is type-aware (image curve, AV1 floor for video, Ghostscript
+preset bands for PDF). After processing, the actual `original → output (n%)`
+delta is shown next to the download link, with a green badge if smaller.
+
+A **shrink more ↓** button appears after a successful shrink — clicks step
+quality down by 10 (floor 10), Clop-style, with cumulative size displayed
+relative to the original input.
 
 ## Quick start
 
@@ -160,6 +171,8 @@ until you have ≥10 handlers in one input domain.
 | `EXPORT_YTDLP_BROWSER` | (none) | Easier alternative — name of an installed browser (`chrome`, `firefox`, `safari`, `edge`, `brave`, `opera`, `vivaldi`). yt-dlp reads cookies live from the browser's cookie database. |
 | `EXPORT_HTTP_PROXY` | (none) | Routes URL extraction through a proxy. Beats IP blocks (TikTok, Rumble) and geo-restrictions. Format: `http://user:pw@host:port` or `socks5://127.0.0.1:9050` (Tor). |
 | `EXPORT_WATCH_DIR` | (none) | Folder watch mode (Clop-style). Anything dropped in this folder is auto-shrunk into `<dir>/_optimized/`. Image/video/PDF only. |
+| `EXPORT_MAX_UPLOAD_MB` | `0` (unlimited) | Per-file upload cap in MB. Set to a positive integer only if exposing publicly. |
+| `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge. |
 | `DYLD_FALLBACK_LIBRARY_PATH` | `/opt/homebrew/lib` (macOS) | WeasyPrint needs to find libgobject. |
 
 ### URL extractor notes
@@ -175,8 +188,13 @@ The error messages surfaced in the UI are humanized — instead of a 200-line yt
 
 ## Limits
 
-- Single file upload: 100 MB
-- Multi-file (compress / merge): 500 MB total
+- Single file upload: **unlimited** by default (set `EXPORT_MAX_UPLOAD_MB=N` to cap)
+- Multi-file (compress / merge): **unlimited** by default (set `EXPORT_MAX_COMPRESS_MB=N` to cap)
+- Job dirs auto-deleted after 1 hour (lifespan-managed cleanup loop)
+- Single-process — concurrent jobs share CPU; not designed for multi-tenant load
+- Whisper is single-instance — concurrent transcriptions queue serially
+- LibreOffice cold-starts each office→PDF call (~3 s); could daemonize with
+  `unoserver` later if it matters
 - Job dirs auto-deleted after 1 hour
 - Single-process — concurrent jobs share CPU; not designed for multi-tenant load
   (deferred until needed; would migrate to `arq + Redis` per the research)

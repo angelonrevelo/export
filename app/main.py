@@ -27,11 +27,13 @@ from .jobs import (
     PDF_OCR_OUTPUTS,
     PDF_OPS,
     PDF_TO_DOCX,
+    SINGLE_FILE_COMPRESS,
     PDF_TO_IMAGE,
     PDF_TO_TEXT,
     SHRINK_LEVELS,
     TTS_AUDIO_FORMATS,
     VIDEO_TO_GIF,
+    VIDEO_TO_VIDEO,
     WHISPER_OUTPUTS,
     jobs,
     run_compress_job,
@@ -46,11 +48,22 @@ ALLOWED_UPLOAD_FORMATS = (
     IMAGE_FORMATS | DOC_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT
     | IMAGE_TO_NOBG | IMAGE_TO_SVG
     | PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS
-    | DOC_TO_PDF | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS
+    | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
+    | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS
     | OFFICE_TO_PDF | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
 )
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
-MAX_COMPRESS_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB across all uploaded files
+# Upload caps — default UNLIMITED for local/personal use. Set
+# EXPORT_MAX_UPLOAD_MB or EXPORT_MAX_COMPRESS_MB to a positive integer to
+# enforce a soft cap (recommended only when exposing publicly — see SECURITY.md).
+def _mb_to_bytes(env: str) -> int:
+    raw = os.environ.get(env, "0").strip()
+    try:
+        return max(0, int(raw)) * 1024 * 1024
+    except ValueError:
+        return 0
+
+MAX_UPLOAD_BYTES = _mb_to_bytes("EXPORT_MAX_UPLOAD_MB")              # 0 = unlimited
+MAX_COMPRESS_TOTAL_BYTES = _mb_to_bytes("EXPORT_MAX_COMPRESS_MB")    # 0 = unlimited
 CLEANUP_AGE_SECONDS = 3600          # delete job dirs older than 1 h
 CLEANUP_INTERVAL_SECONDS = 900      # sweep every 15 min
 
@@ -147,7 +160,7 @@ async def upload_file(
     with input_path.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
             written += len(chunk)
-            if written > MAX_UPLOAD_BYTES:
+            if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
                 f.close()
                 input_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=413, detail=f"file > {MAX_UPLOAD_BYTES // (1024*1024)} MB")
@@ -174,8 +187,10 @@ async def compress_files(
     x_password: str | None = Header(None),
 ):
     check(x_password)
-    if format not in ARCHIVE_FORMATS:
-        raise HTTPException(status_code=400, detail=f"unsupported archive format: {format}")
+    if format not in (ARCHIVE_FORMATS | SINGLE_FILE_COMPRESS):
+        raise HTTPException(status_code=400, detail=f"unsupported compression format: {format}")
+    if format in SINGLE_FILE_COMPRESS and len(files) != 1:
+        raise HTTPException(status_code=400, detail=f".{format} requires exactly 1 file; use tar.{format} or zip for multiple")
     if not files:
         raise HTTPException(status_code=400, detail="no files provided")
 
@@ -190,7 +205,7 @@ async def compress_files(
         with target.open("wb") as out:
             while chunk := await f.read(1024 * 1024):
                 total += len(chunk)
-                if total > MAX_COMPRESS_TOTAL_BYTES:
+                if MAX_COMPRESS_TOTAL_BYTES and total > MAX_COMPRESS_TOTAL_BYTES:
                     out.close()
                     for p in saved + [target]:
                         p.unlink(missing_ok=True)
@@ -232,7 +247,7 @@ async def shrink_file(
     with input_path.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
             written += len(chunk)
-            if written > MAX_UPLOAD_BYTES:
+            if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
                 f.close()
                 input_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=413, detail=f"file > {MAX_UPLOAD_BYTES // (1024*1024)} MB")
@@ -276,7 +291,7 @@ async def pdf_merge(
         with target.open("wb") as out:
             while chunk := await f.read(1024 * 1024):
                 total += len(chunk)
-                if total > MAX_COMPRESS_TOTAL_BYTES:
+                if MAX_COMPRESS_TOTAL_BYTES and total > MAX_COMPRESS_TOTAL_BYTES:
                     out.close()
                     for p in saved + [target]:
                         p.unlink(missing_ok=True)
@@ -316,7 +331,7 @@ async def pdf_op(
     with input_path.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
             written += len(chunk)
-            if written > MAX_UPLOAD_BYTES:
+            if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
                 f.close()
                 input_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=413, detail=f"file > {MAX_UPLOAD_BYTES // (1024*1024)} MB")
@@ -373,20 +388,21 @@ def capabilities():
         },
         "convert_outputs": {
             "image":   sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG),
-            "video":   sorted(VIDEO_TO_GIF | WHISPER_OUTPUTS | {"txt"}),
+            "video":   sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | WHISPER_OUTPUTS | {"txt"}),
             "audio":   sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | {"txt"}),
             "pdf":     sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS),
             "document": sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
             "office":  sorted(OFFICE_TO_PDF),
         },
         "operations": {
-            "compress_archive": sorted(ARCHIVE_FORMATS),
-            "shrink_levels":    sorted(SHRINK_LEVELS),
-            "pdf_ops":          sorted(list(PDF_OPS) + ["merge"]),
+            "compress_archive":     sorted(ARCHIVE_FORMATS),
+            "compress_single_file": sorted(SINGLE_FILE_COMPRESS),
+            "shrink_levels":        sorted(SHRINK_LEVELS),
+            "pdf_ops":              sorted(list(PDF_OPS) + ["merge"]),
         },
         "limits": {
-            "max_upload_bytes":   MAX_UPLOAD_BYTES,
-            "max_compress_bytes": MAX_COMPRESS_TOTAL_BYTES,
+            "max_upload_bytes":   MAX_UPLOAD_BYTES,        # 0 = unlimited
+            "max_compress_bytes": MAX_COMPRESS_TOTAL_BYTES, # 0 = unlimited
             "job_ttl_seconds":    CLEANUP_AGE_SECONDS,
         },
     }

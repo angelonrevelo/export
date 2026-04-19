@@ -63,6 +63,8 @@ IMAGE_SAVE_OPTS = {
     "png":  {"optimize": True},
     "webp": {"quality": 90, "method": 6},
     "avif": {"quality": 70},
+    "tiff": {"compression": "tiff_lzw"},
+    "ico":  {"sizes": [(256, 256), (128, 128), (64, 64), (32, 32), (16, 16)]},
 }
 IMAGE_EXT_OVERRIDE = {"jpeg": "jpg"}
 IMAGE_FORMATS = set(IMAGE_SAVE_OPTS.keys())
@@ -80,11 +82,19 @@ DOC_TO_PDF = {"pdf"}
 # Bridge: video → gif via ffmpeg palette
 VIDEO_TO_GIF = {"gif"}
 
+# Video → video format conversion (with optional quality knob).
+# Codec defaults: mp4/mov/mkv → libx264 (universal playback); webm → libvp9.
+VIDEO_TO_VIDEO = {"mp4", "mov", "webm", "mkv"}
+
 # Pandoc-handled document formats. Pandoc auto-detects input by extension.
 DOC_FORMATS = {"md", "html", "docx", "rtf", "epub", "txt", "org", "rst", "odt", "tex"}
 PANDOC_WRITER = {"md": "markdown", "txt": "plain"}  # most map 1:1 to extension
 
-ARCHIVE_FORMATS = {"zip", "7z", "tar.gz", "tar.zst"}
+ARCHIVE_FORMATS = {"zip", "7z", "tar.gz", "tar.zst", "tar.bz2", "tar.xz"}
+
+# Single-file compression — wraps one file, no archive structure.
+# Streams via stdlib gzip/bz2/lzma + zstandard.
+SINGLE_FILE_COMPRESS = {"gz", "bz2", "xz", "zst"}
 
 PDF_OPS = {"split", "rotate", "watermark", "encrypt", "decrypt"}
 
@@ -97,9 +107,11 @@ AUDIO_DENOISE = {"denoise"}
 AUDIO_STEMS = {"stems"}
 
 SHRINK_LEVELS = {"low", "medium", "high"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic", ".heif", ".tiff", ".bmp"}
-VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
-AUDIO_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic", ".heif", ".tiff", ".bmp", ".gif", ".ico"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v",
+                  ".flv", ".wmv", ".3gp", ".ts", ".mts", ".m2ts", ".ogv"}
+AUDIO_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac",
+                  ".aiff", ".aif", ".wma"}
 PDF_SUFFIXES = {".pdf"}
 OFFICE_SUFFIXES = {".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".odp", ".ods", ".odt"}
 
@@ -269,10 +281,14 @@ def _run_gallerydl(job: dict, url: str, out_dir: Path) -> str:
 def _convert_image(input_path: Path, target_fmt: str, out_dir: Path, quality: int | None = None) -> Path:
     img = Image.open(input_path)
     img.load()
+    # Formats that can't carry alpha (or look bad with it): JPEG, ICO often
+    # benefits from RGBA, TIFF is fine either way.
     if target_fmt == "jpeg" and img.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
         bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
         img = bg
+    elif target_fmt == "ico" and img.mode != "RGBA":
+        img = img.convert("RGBA")
     ext = IMAGE_EXT_OVERRIDE.get(target_fmt, target_fmt)
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{ext}"
@@ -316,8 +332,41 @@ def _make_archive(files: list[Path], fmt: str, out_dir: Path, base_name: str) ->
             with tarfile.open(fileobj=compressor, mode="w|") as tf:
                 for f in files:
                     tf.add(f, arcname=f.name.removeprefix("input_"))
+    elif fmt == "tar.bz2":
+        with tarfile.open(out_path, "w:bz2", compresslevel=9) as tf:
+            for f in files:
+                tf.add(f, arcname=f.name.removeprefix("input_"))
+    elif fmt == "tar.xz":
+        with tarfile.open(out_path, "w:xz", preset=6) as tf:
+            for f in files:
+                tf.add(f, arcname=f.name.removeprefix("input_"))
     else:
         raise ValueError(f"unsupported archive format: {fmt}")
+    return out_path
+
+
+def _compress_single(input_path: Path, fmt: str, out_dir: Path) -> Path:
+    """Single-file compression (gz/bz2/xz/zst) — wraps one file, no archive."""
+    import bz2
+    import gzip
+    import lzma
+    base = input_path.name.removeprefix("input_")
+    out_path = out_dir / f"{base}.{fmt}"
+    if fmt == "gz":
+        with input_path.open("rb") as f_in, gzip.open(out_path, "wb", compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    elif fmt == "bz2":
+        with input_path.open("rb") as f_in, bz2.open(out_path, "wb", compresslevel=9) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    elif fmt == "xz":
+        with input_path.open("rb") as f_in, lzma.open(out_path, "wb", preset=6) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    elif fmt == "zst":
+        cctx = zstd.ZstdCompressor(level=10, threads=-1)
+        with input_path.open("rb") as f_in, out_path.open("wb") as f_out:
+            cctx.copy_stream(f_in, f_out)
+    else:
+        raise ValueError(f"unsupported single-file format: {fmt}")
     return out_path
 
 
@@ -435,14 +484,21 @@ def run_compress_job(job_id: str, input_paths: list[Path], fmt: str, downloads_d
         job["status"] = "compressing"
         if not input_paths:
             raise RuntimeError("no input files")
-        if len(input_paths) == 1:
-            base_name = input_paths[0].stem.removeprefix("input_")
+        if fmt in SINGLE_FILE_COMPRESS:
+            if len(input_paths) != 1:
+                raise ValueError(
+                    f".{fmt} compresses one file at a time. "
+                    f"For multiple files use tar.{fmt} or zip / 7z."
+                )
+            target = _compress_single(input_paths[0], fmt, out_dir)
         else:
-            base_name = "archive"
-        target = _make_archive(input_paths, fmt, out_dir, base_name)
+            base_name = (input_paths[0].stem.removeprefix("input_")
+                         if len(input_paths) == 1 else "archive")
+            target = _make_archive(input_paths, fmt, out_dir, base_name)
         for p in input_paths:
             p.unlink(missing_ok=True)
         job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
         job["progress"] = 100
         job["status"] = "ready"
     except Exception as e:
@@ -486,6 +542,35 @@ def _pdf_to_images(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
         for f in sorted(page_dir.iterdir()):
             zf.write(f, arcname=f.name)
     shutil.rmtree(page_dir, ignore_errors=True)
+    return out_path
+
+
+def _convert_video(input_path: Path, target_fmt: str, out_dir: Path, quality: int | None = None) -> Path:
+    """Re-mux/transcode video into a different container. quality is the same
+    1-100 scale used by the advanced slider — gets mapped to per-codec CRF."""
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.{target_fmt}"
+
+    if target_fmt == "webm":
+        vcodec, acodec = "libvpx-vp9", "libopus"
+        # vp9 CRF 0-63; q=100 → 18 (visually lossless), q=1 → 60.
+        crf = str(int(round(60 - (quality / 100) * 42))) if quality is not None else "30"
+    else:
+        # mp4 / mov / mkv: x264 + aac for universal device playback.
+        vcodec, acodec = "libx264", "aac"
+        # x264 CRF 0-51; q=100 → 18, q=1 → 35.
+        crf = str(int(round(35 - (quality / 100) * 17))) if quality is not None else "23"
+
+    cmd = [
+        "ffmpeg", "-y", "-i", str(input_path),
+        "-c:v", vcodec, "-crf", crf, "-preset", "medium",
+        "-c:a", acodec, "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {r.stderr.strip()[-500:]}")
     return out_path
 
 
@@ -982,6 +1067,8 @@ def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path
             target = _pdf_to_pdfa(input_path, out_dir)
         elif is_video_in and fmt in VIDEO_TO_GIF:
             target = _video_to_gif(input_path, out_dir)
+        elif is_video_in and fmt in VIDEO_TO_VIDEO:
+            target = _convert_video(input_path, fmt, out_dir, quality=quality)
         elif (is_audio_in or is_video_in) and fmt in WHISPER_OUTPUTS:
             target = _audio_video_to_transcript(input_path, fmt, out_dir)
         elif (is_audio_in or is_video_in) and fmt == "txt":

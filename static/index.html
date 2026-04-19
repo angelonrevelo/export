@@ -18,6 +18,13 @@ input, button, select {
   font: inherit; padding: 0.6rem 0.8rem; border-radius: 6px;
   border: 1px solid #2a2a2a; background: #181818; color: inherit;
 }
+select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23888' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.85rem center;
+  padding-right: 2rem;
+}
 input:focus, select:focus { outline: 2px solid #4d8eff; outline-offset: -2px; }
 button {
   background: #4d8eff; color: #fff; border: none; cursor: pointer;
@@ -146,14 +153,14 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
   <div class="subtle">from a URL</div>
   <div class="row">
     <input type="text" id="url" placeholder="https://youtube.com/watch?v=..." autofocus>
-    <select id="url-format">
+    <select id="url-format" title="output format">
       <option value="mp3">mp3</option>
       <option value="mp4">mp4</option>
       <option value="images">images</option>
-      <option value="notes">notes (NoteGPT-style markdown)</option>
-      <option value="txt">txt (transcript)</option>
-      <option value="srt">srt (subtitles)</option>
-      <option value="vtt">vtt (subtitles)</option>
+      <option value="notes" title="NoteGPT-style markdown — pause-grouped paragraphs, no timestamps">notes</option>
+      <option value="txt"   title="plain-text transcript">txt</option>
+      <option value="srt"   title="SubRip subtitle file with timestamps">srt</option>
+      <option value="vtt"   title="WebVTT subtitle file">vtt</option>
     </select>
     <button id="go">extract</button>
   </div>
@@ -211,11 +218,11 @@ const $ = (id) => document.getElementById(id);
 const getPw = () => localStorage.getItem(PW_KEY) || "";
 
 const TYPES = {
-  image:  { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif"],
-            convertTo: ["jpeg","png","webp","avif","pdf","txt","nobg","svg"], shrink: true },
-  video:  { exts: ["mp4","mov","webm","mkv","avi","m4v"],
-            convertTo: ["gif","txt","srt","vtt","notes"], shrink: true },
-  audio:  { exts: ["mp3","m4a","wav","flac","ogg","aac","opus"],
+  image:  { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico"],
+            convertTo: ["jpeg","png","webp","avif","tiff","ico","pdf","txt","nobg","svg"], shrink: true },
+  video:  { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv"],
+            convertTo: ["mp4","mov","webm","mkv","gif","txt","srt","vtt","notes"], shrink: true },
+  audio:  { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma"],
             convertTo: ["mp3","m4a","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","denoise","stems"], shrink: false },
   doc:    { exts: ["md","html","htm","rtf","epub","txt","tex","org","rst"],
             convertTo: ["md","html","docx","rtf","epub","txt","odt","pdf","mp3","m4a","wav"], shrink: false },
@@ -275,7 +282,7 @@ $("caps-link").onclick = async (e) => {
     <h3>Lossy shrink (image/video/pdf)</h3>
     <div>levels: ${fmt(d.operations.shrink_levels)}</div>
     <h3>Limits</h3>
-    <div>upload ≤ ${mb(d.limits.max_upload_bytes)} · multi-file total ≤ ${mb(d.limits.max_compress_bytes)} · jobs deleted after ${Math.round(d.limits.job_ttl_seconds/60)} min</div>`;
+    <div>upload ${d.limits.max_upload_bytes ? `≤ ${mb(d.limits.max_upload_bytes)}` : "unlimited"} · multi-file total ${d.limits.max_compress_bytes ? `≤ ${mb(d.limits.max_compress_bytes)}` : "unlimited"} · jobs deleted after ${Math.round(d.limits.job_ttl_seconds/60)} min</div>`;
   panel.hidden = false;
   $("caps-link").textContent = "hide";
 };
@@ -404,7 +411,15 @@ function updateOptForAction(type) {
     opts = TYPES[type].convertTo;
     label = "convert to:";
   } else if (action === "compress") {
-    opts = ["zip", "7z", "tar.zst", "tar.gz"];
+    // Multi-file always works for tar/zip/7z. Single-file *also* offers
+    // raw stream compressors (gz/bz2/xz/zst) since there's no need to wrap
+    // one file in a tar.
+    const files = $("drop-file").files;
+    if (files && files.length === 1) {
+      opts = ["zip", "7z", "tar.zst", "tar.gz", "tar.bz2", "tar.xz", "zst", "gz", "bz2", "xz"];
+    } else {
+      opts = ["zip", "7z", "tar.zst", "tar.gz", "tar.bz2", "tar.xz"];
+    }
     label = "archive as:";
   } else if (action === "shrink") {
     opts = ["low", "medium", "high"];
@@ -434,8 +449,10 @@ function updateOptForAction(type) {
   $("opt-label").textContent = label;
   if (action === "shrink") sel.value = "medium";
 
-  // Advanced knob: only meaningful for shrink + image-convert.
-  const showAdv = ADV_ACTIONS.has(action) && (action !== "convert" || type === "image");
+  // Advanced knob: shrink (any type) + image/video convert (anything with a
+  // quality dial in the underlying codec).
+  const ADV_CONVERT_TYPES = new Set(["image", "video"]);
+  const showAdv = ADV_ACTIONS.has(action) && (action !== "convert" || ADV_CONVERT_TYPES.has(type));
   $("adv-toggle").hidden = !showAdv;
   $("adv-panel").hidden = true;
   $("adv-link").textContent = "advanced ▾";
