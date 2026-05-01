@@ -35,4 +35,14 @@ echo
 echo "done."
 echo "  set in your .env or shell:"
 echo "    EXPORT_PIPER_VOICE=$(pwd)/voices/en_US-lessac-medium.onnx"
-echo "  then: bash scripts/run.sh"
+echo "  then: bash scripts/run.sh   # (or: npm run dev)"
+echo
+echo "  optional — for max-ephemeral 'unlimited storage' mode on a VPS, mount"
+echo "  /tmp/export as tmpfs (RAM-backed, no SSD wear, auto-clears on reboot):"
+echo
+echo "    sudo mkdir -p /tmp/export"
+echo "    echo 'tmpfs /tmp/export tmpfs size=4G,mode=1777 0 0' | sudo tee -a /etc/fstab"
+echo "    sudo mount /tmp/export"
+echo
+echo "  then add EXPORT_DOWNLOAD_AUTODELETE=1 to .env so files get nuked the"
+echo "  instant the user finishes their download — see SECURITY.md / README.md"

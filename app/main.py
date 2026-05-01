@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -18,6 +18,7 @@ from .jobs import (
     AUDIO_STEMS,
     DOC_FORMATS,
     DOC_TO_PDF,
+    FONT_FORMATS,
     IMAGE_FORMATS,
     IMAGE_TO_NOBG,
     IMAGE_TO_PDF,
@@ -31,6 +32,8 @@ from .jobs import (
     PDF_TO_IMAGE,
     PDF_TO_TEXT,
     SHRINK_LEVELS,
+    SPREADSHEET_FORMATS,
+    SUBTITLE_FORMATS,
     TTS_AUDIO_FORMATS,
     VIDEO_TO_GIF,
     VIDEO_TO_VIDEO,
@@ -39,6 +42,8 @@ from .jobs import (
     run_compress_job,
     run_convert_job,
     run_job,
+    run_image_batch_job,
+    run_images_to_pdf_job,
     run_pdf_merge_job,
     run_pdf_op_job,
     run_shrink_job,
@@ -51,6 +56,7 @@ ALLOWED_UPLOAD_FORMATS = (
     | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
     | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS
     | OFFICE_TO_PDF | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
+    | SPREADSHEET_FORMATS | SUBTITLE_FORMATS | FONT_FORMATS
 )
 # Upload caps — default UNLIMITED for local/personal use. Set
 # EXPORT_MAX_UPLOAD_MB or EXPORT_MAX_COMPRESS_MB to a positive integer to
@@ -64,8 +70,18 @@ def _mb_to_bytes(env: str) -> int:
 
 MAX_UPLOAD_BYTES = _mb_to_bytes("EXPORT_MAX_UPLOAD_MB")              # 0 = unlimited
 MAX_COMPRESS_TOTAL_BYTES = _mb_to_bytes("EXPORT_MAX_COMPRESS_MB")    # 0 = unlimited
-CLEANUP_AGE_SECONDS = 3600          # delete job dirs older than 1 h
-CLEANUP_INTERVAL_SECONDS = 900      # sweep every 15 min
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+CLEANUP_AGE_SECONDS = _env_int("EXPORT_CLEANUP_AGE_SECONDS", 3600)        # 1 h default
+CLEANUP_INTERVAL_SECONDS = _env_int("EXPORT_CLEANUP_INTERVAL_SECONDS", 900)  # 15 min default
+# When truthy (1/true/yes), delete the output file + job dir as soon as the
+# user finishes their download. Maximum-ephemeral mode for VPS deployments.
+DOWNLOAD_AUTODELETE = os.environ.get("EXPORT_DOWNLOAD_AUTODELETE", "").lower() in ("1", "true", "yes", "on")
 
 PASSWORD = os.environ.get("EXPORT_PASSWORD", "changeme")
 DOWNLOADS_DIR = Path(os.environ.get("EXPORT_DOWNLOADS", "/tmp/export"))
@@ -266,6 +282,149 @@ async def shrink_file(
     return {"job_id": job_id}
 
 
+_IMAGE_EXT_FOR_BATCH = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic",
+                        ".heif", ".tiff", ".bmp", ".gif"}
+BATCH_IMAGE_OUT_FORMATS = {"pdf", "jpeg", "png", "webp", "avif", "gif", "mp4"}
+
+
+async def _save_batch_uploads(files: list[UploadFile], job_dir: Path) -> tuple[list[Path], int]:
+    """Shared upload-saving for /api/images/* endpoints. Returns (saved_paths, total_bytes)."""
+    saved: list[Path] = []
+    total = 0
+    for f in files:
+        ext = "." + (f.filename or "").rsplit(".", 1)[-1].lower()
+        if ext not in _IMAGE_EXT_FOR_BATCH:
+            for p in saved:
+                p.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"not an image: {f.filename} (need .jpg/.png/.heic/etc.)",
+            )
+        target = job_dir / f"input_{f.filename}"
+        with target.open("wb") as out:
+            while chunk := await f.read(1024 * 1024):
+                total += len(chunk)
+                if MAX_COMPRESS_TOTAL_BYTES and total > MAX_COMPRESS_TOTAL_BYTES:
+                    out.close()
+                    for p in saved + [target]:
+                        p.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="upload too large")
+                out.write(chunk)
+        saved.append(target)
+    return saved, total
+
+
+@app.post("/api/images/batch")
+async def images_batch(
+    bg: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    format: str = Form(...),
+    rotations: str = Form("{}"),
+    x_password: str | None = Header(None),
+):
+    """Multi-image batch conversion. Output format determines the shape:
+      pdf  → single multi-page PDF
+      jpeg/png/webp/avif → each converted, then zipped
+      gif  → single animated GIF (slideshow, 2s/frame)
+      mp4  → single MP4 slideshow video (3s/frame, libx264)"""
+    check(x_password)
+    if format not in BATCH_IMAGE_OUT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported batch format: {format} (allowed: {sorted(BATCH_IMAGE_OUT_FORMATS)})",
+        )
+    if not files:
+        raise HTTPException(status_code=400, detail="no images provided")
+    import json as _json
+    try:
+        rot_map = _json.loads(rotations) if rotations else {}
+        if not isinstance(rot_map, dict):
+            rot_map = {}
+    except _json.JSONDecodeError:
+        rot_map = {}
+
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = DOWNLOADS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    saved, total = await _save_batch_uploads(files, job_dir)
+
+    label = {
+        "pdf": "pdf", "gif": "animated GIF", "mp4": "slideshow video",
+    }.get(format, f"zipped {format}s")
+    jobs[job_id] = {
+        "status": "pending",
+        "progress": 0,
+        "title": f"{len(saved)} image{'s' if len(saved) != 1 else ''} → {label}",
+        "error": None,
+        "filename": None,
+        "original_size": total,
+        "output_size": None,
+    }
+    bg.add_task(run_image_batch_job, job_id, saved, format, DOWNLOADS_DIR, rot_map)
+    return {"job_id": job_id}
+
+
+@app.post("/api/images/to-pdf")
+async def images_to_pdf(
+    bg: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    rotations: str = Form("{}"),
+    x_password: str | None = Header(None),
+):
+    """Combine N images into a single multi-page PDF.
+    Killer use case: phone photos of a quiz/document → submittable PDF.
+    Each photo is auto-rotated using its EXIF orientation tag, then user-
+    rotated by the per-file degrees in `rotations` (JSON {filename: degrees})."""
+    check(x_password)
+    import json as _json
+    try:
+        rot_map = _json.loads(rotations) if rotations else {}
+        if not isinstance(rot_map, dict):
+            rot_map = {}
+    except _json.JSONDecodeError:
+        rot_map = {}
+    if not files:
+        raise HTTPException(status_code=400, detail="no images provided")
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = DOWNLOADS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: list[Path] = []
+    total = 0
+    for f in files:
+        ext = "." + (f.filename or "").rsplit(".", 1)[-1].lower()
+        if ext not in _IMAGE_EXT_FOR_BATCH:
+            for p in saved:
+                p.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"not an image: {f.filename} (need .jpg/.png/.heic/etc.)",
+            )
+        target = job_dir / f"input_{f.filename}"
+        with target.open("wb") as out:
+            while chunk := await f.read(1024 * 1024):
+                total += len(chunk)
+                if MAX_COMPRESS_TOTAL_BYTES and total > MAX_COMPRESS_TOTAL_BYTES:
+                    out.close()
+                    for p in saved + [target]:
+                        p.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="upload too large")
+                out.write(chunk)
+        saved.append(target)
+
+    jobs[job_id] = {
+        "status": "pending",
+        "progress": 0,
+        "title": f"{len(saved)} image{'s' if len(saved) != 1 else ''} → pdf",
+        "error": None,
+        "filename": None,
+        "original_size": total,
+        "output_size": None,
+    }
+    bg.add_task(run_images_to_pdf_job, job_id, saved, DOWNLOADS_DIR, rot_map)
+    return {"job_id": job_id}
+
+
 @app.post("/api/pdf/merge")
 async def pdf_merge(
     bg: BackgroundTasks,
@@ -366,7 +525,53 @@ def download_file(job_id: str, pw: str | None = None):
     path = DOWNLOADS_DIR / job_id / job["filename"]
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing")
+
+    # Stream-and-delete mode: nuke the output + job dir + dict entry as soon
+    # as the response completes. Truly ephemeral storage at the cost of "I'd
+    # like to download that again" being a re-process.
+    if DOWNLOAD_AUTODELETE:
+        from starlette.background import BackgroundTask
+
+        def _cleanup():
+            try:
+                shutil.rmtree(path.parent, ignore_errors=True)
+                jobs.pop(job_id, None)
+            except Exception:
+                pass
+
+        return FileResponse(
+            path, filename=job["filename"], media_type="application/octet-stream",
+            background=BackgroundTask(_cleanup),
+        )
+
     return FileResponse(path, filename=job["filename"], media_type="application/octet-stream")
+
+
+@app.post("/api/thumbnail")
+async def thumbnail(
+    file: UploadFile = File(...),
+    x_password: str | None = Header(None),
+):
+    """Server-side thumbnail rendering. Browsers can't decode HEIC/HEIF/AVIF/
+    TIFF in <img> tags but the server has Pillow + pillow-heif. POST a file,
+    get back a small JPEG. Used by the frontend preview tiles."""
+    check(x_password)
+    import io
+    from PIL import Image, ImageOps
+    # Cap to keep one user's giant photo from blowing memory on this preview path.
+    data = await file.read(50 * 1024 * 1024)
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        img.thumbnail((220, 220))  # max edge 220 px
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=72, optimize=True)
+        return Response(content=buf.getvalue(), media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=300"})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"can't decode as image: {e}")
 
 
 @app.get("/api/capabilities")
@@ -379,20 +584,26 @@ def capabilities():
             "url_outputs": ["mp3", "mp4", "images", "txt", "srt", "vtt"],
         },
         "file_inputs": {
-            "image":  sorted([".jpg",".jpeg",".png",".webp",".avif",".heic",".heif",".tiff",".bmp",".gif"]),
-            "video":  sorted([".mp4",".mov",".webm",".mkv",".avi",".m4v"]),
-            "audio":  sorted([".mp3",".m4a",".wav",".flac",".ogg",".aac",".opus"]),
-            "pdf":    [".pdf"],
-            "document": sorted([".md",".html",".htm",".rtf",".epub",".txt",".tex",".org",".rst"]),
-            "office": sorted([".docx",".doc",".pptx",".ppt",".xlsx",".xls",".odp",".ods",".odt"]),
+            "image":       sorted([".jpg",".jpeg",".png",".webp",".avif",".heic",".heif",".tiff",".bmp",".gif",".ico",".jp2",".psd",".tga",".pcx",".eps",".icns"]),
+            "video":       sorted([".mp4",".mov",".webm",".mkv",".avi",".m4v",".flv",".wmv",".3gp",".ts",".mts",".m2ts",".ogv"]),
+            "audio":       sorted([".mp3",".m4a",".wav",".flac",".ogg",".aac",".opus",".aiff",".aif",".wma"]),
+            "pdf":         [".pdf"],
+            "document":    sorted([".md",".markdown",".html",".htm",".rtf",".epub",".txt",".tex",".org",".rst",".ipynb",".adoc",".asciidoc",".textile",".docbook",".fb2"]),
+            "office":      sorted([".docx",".doc",".pptx",".ppt",".xlsx",".xls",".odp",".ods",".odt"]),
+            "spreadsheet": sorted([".csv",".tsv",".xlsx",".json"]),
+            "subtitle":    sorted([".srt",".vtt",".ass",".ssa",".sub",".sbv"]),
+            "font":        sorted([".ttf",".otf",".woff",".woff2"]),
         },
         "convert_outputs": {
-            "image":   sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG),
-            "video":   sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | WHISPER_OUTPUTS | {"txt"}),
-            "audio":   sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | {"txt"}),
-            "pdf":     sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS),
-            "document": sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
-            "office":  sorted(OFFICE_TO_PDF),
+            "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG),
+            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | WHISPER_OUTPUTS | {"txt"}),
+            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | {"txt"}),
+            "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS),
+            "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
+            "office":      sorted(OFFICE_TO_PDF),
+            "spreadsheet": sorted(SPREADSHEET_FORMATS),
+            "subtitle":    sorted(SUBTITLE_FORMATS),
+            "font":        sorted(FONT_FORMATS),
         },
         "operations": {
             "compress_archive":     sorted(ARCHIVE_FORMATS),

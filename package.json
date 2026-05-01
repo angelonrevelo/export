@@ -1,0 +1,13 @@
+{
+  "name": "export",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Muscle-memory shim. Real implementation is Python/FastAPI — see README.md.",
+  "scripts": {
+    "dev":   "bash scripts/run.sh",
+    "start": "bash scripts/run.sh",
+    "watch": "bash scripts/run.sh",
+    "install:macos": "bash scripts/install-macos.sh",
+    "install:linux": "bash scripts/install-linux.sh"
+  }
+}

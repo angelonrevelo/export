@@ -3,6 +3,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Auto-bootstrap .env so `npm run dev` / `bash scripts/run.sh` work first try.
+# Writes a random EXPORT_PASSWORD; everything else stays at .env.example defaults.
+if [ ! -f .env ] && [ -f .env.example ]; then
+  cp .env.example .env
+  RANDOM_PW="$(openssl rand -base64 24 2>/dev/null | tr -d '/+=' | head -c 32)"
+  if [ -n "$RANDOM_PW" ]; then
+    # in-place sed that works on both BSD (mac) and GNU sed
+    sed -i.bak "s/^EXPORT_PASSWORD=changeme/EXPORT_PASSWORD=${RANDOM_PW}/" .env && rm .env.bak
+    echo ">>> created .env with random EXPORT_PASSWORD: ${RANDOM_PW}"
+  else
+    echo ">>> created .env from .env.example — edit EXPORT_PASSWORD before exposing publicly"
+  fi
+fi
+
 # load .env if present (export each KEY=VALUE line, ignore comments)
 if [ -f .env ]; then
   set -a

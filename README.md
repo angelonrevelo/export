@@ -1,11 +1,11 @@
 # export
 
 A personal web tool that converts, extracts, compresses, and transforms files —
-from URLs (YouTube, Twitter, etc.) and from local uploads. ~85 conversion paths
-across image / video / audio / document / PDF / archive, all running locally
-with open-source libraries. Designed to replace the half-dozen
-freeconvert/ilovepdf/yt-mp3 sites you'd otherwise tab through, plus
-NoteGPT-style URL-to-transcript that those sites don't offer.
+from URLs (YouTube, Twitter, etc.) and from local uploads. ~110 conversion
+paths across image / video / audio / document / PDF / spreadsheet / subtitle
+/ font / archive, all running locally with open-source libraries. Designed to
+replace the half-dozen freeconvert/ilovepdf/yt-mp3 sites you'd otherwise tab
+through, plus NoteGPT-style URL-to-transcript that those sites don't offer.
 
 ```
 http://localhost:8500   →   single password   →   paste a URL or drop a file
@@ -31,12 +31,15 @@ version.
 
 | Input type | Convert to | Other operations |
 |---|---|---|
-| **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico`) | `jpeg, png, webp, avif, tiff, ico, pdf, txt (OCR), nobg (transparent PNG via rembg), svg (vectorize via vtracer)` | `shrink` (with quality slider) |
+| **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns`) | `jpeg, png, webp, avif, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract), nobg (transparent PNG via rembg), svg (vectorize via vtracer)` | `shrink` (with quality slider) |
 | **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv`) | `mp4, mov, webm, mkv, gif, txt, srt, vtt, notes (Whisper transcript)` | `shrink` (SVT-AV1 re-encode with quality slider) |
 | **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt, notes (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split)` | — |
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback for scanned), docx, pdfa (searchable PDF/A via OCRmyPDF)` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
-| **Documents** (`.md .html .htm .rtf .epub .txt .tex .org .rst`) | `md, html, docx, rtf, epub, txt, odt, pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
+| **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
 | **Office** (`.docx .doc .pptx .ppt .xlsx .xls .odp .ods .odt`) | `pdf` (via LibreOffice headless) | — |
+| **Spreadsheet** (`.csv .tsv .xlsx .json`) | `csv, tsv, xlsx, json` (cross-conversion via openpyxl + stdlib csv/json; tabular JSON only) | — |
+| **Subtitle** (`.srt .vtt .ass .ssa .sub .sbv`) | `srt, vtt, ass, ssa, sub, sbv` (cross-conversion via pysubs2) | — |
+| **Font** (`.ttf .otf .woff .woff2`) | `ttf, otf, woff, woff2` (container conversion via fontTools — TTF↔OTF is a no-op, woff/woff2 wrap or unwrap) | — |
 
 ### Multi-file operations
 
@@ -45,6 +48,7 @@ version.
 | **archive** (multi-file) | any files | `zip`, `7z`, `tar.zst` (3.8× smaller than tar.gz at zstd level 10), `tar.gz`, `tar.bz2`, `tar.xz` |
 | **single-file compress** | one file | `gz`, `bz2`, `xz`, `zst` (raw stream compression — no tar wrapper) |
 | **PDF merge** | 2+ PDFs | single combined PDF |
+| **Image batch convert** | 2+ images | `pdf` (multi-page), `jpeg / png / webp / avif` (each converted, zipped), `gif` (animated slideshow, 2 s/frame), `mp4` (libx264 slideshow, 3 s/frame). EXIF rotation auto-applied; per-tile rotate (↺ / ↻) and remove (✕) controls in the UI. |
 
 ### Lossy shrink levels
 
@@ -71,9 +75,13 @@ relative to the original input.
 ```bash
 git clone <this repo> export && cd export
 bash scripts/install-macos.sh
-cp .env.example .env && $EDITOR .env   # set EXPORT_PASSWORD=...
-bash scripts/run.sh
+npm run dev    # or: bash scripts/run.sh
 ```
+
+`run.sh` auto-creates `.env` with a random password on first launch.
+For muscle-memory comfort, the project ships a `package.json` with `dev`,
+`start`, and `watch` scripts that all wrap `scripts/run.sh` — no actual Node
+deps, just the one-line shim.
 
 Open `http://localhost:8500` and enter your password. The first request that
 needs a downloaded model (Whisper, rembg, demucs) will pause for ~30s while it
@@ -145,18 +153,22 @@ until you have ≥10 handlers in one input domain.
 |---|---|
 | HTTP | FastAPI + uvicorn |
 | Frontend | Single HTML page, vanilla JS, no framework |
-| Job state | Python dict + FastAPI `BackgroundTasks` |
-| Image | Pillow + pillow-heif + pillow-avif-plugin |
-| Video / Audio | ffmpeg (libsvtav1, libopus, libmp3lame, libvorbis, libx264, aac) |
-| URL extraction | yt-dlp + gallery-dl |
-| Documents | Pandoc + WeasyPrint + LibreOffice headless |
+| Job state | Python dict + FastAPI `BackgroundTasks` (single-process); folder-watch via `watchdog` |
+| Image | Pillow (incl. PSD/TGA/PCX/EPS/ICNS/JP2 read) + pillow-heif + pillow-avif-plugin |
+| Video / Audio | ffmpeg (libsvtav1, libx264, libvpx-vp9, libopus, libmp3lame, libvorbis, aac, flac) |
+| URL extraction | yt-dlp[curl-cffi] (~1800 sites) + gallery-dl + deno (YouTube JS challenge solver) |
+| Documents | Pandoc (md/html/docx/rtf/epub/odt/tex/pptx/ipynb/...) + WeasyPrint + LibreOffice headless |
 | PDF | pypdf + pikepdf + reportlab + pdfplumber + pdf2docx + pdf2image + Ghostscript + OCRmyPDF |
-| OCR | Tesseract (via pytesseract) |
-| STT | faster-whisper (default `distil-large-v3`) |
-| TTS | macOS `say` / `piper-tts` (Linux) |
-| Audio AI | Demucs (htdemucs) for stems, noisereduce for denoise |
-| Image AI | rembg (u2net) for background removal, vtracer for vectorization |
-| Compression | zstandard, py7zr, stdlib zipfile + tarfile |
+| Spreadsheet | openpyxl + stdlib csv/json |
+| Subtitle | pysubs2 |
+| Font | fontTools + brotli (for woff2) |
+| OCR | Tesseract (via pytesseract); applied as auto-fallback when scanned PDFs return empty pdfplumber output |
+| STT | faster-whisper (default `distil-large-v3`, multilingual, ~6× faster than whisper-large-v3) |
+| TTS | macOS `say` / `piper-tts` (Linux fallback) |
+| Audio AI | Demucs (htdemucs) for vocal/drum/bass/other stem separation, noisereduce for spectral denoise |
+| Image AI | rembg (u2net) for background removal, vtracer for raster→SVG |
+| Compression | zstandard (`tar.zst` + single-file `.zst`), py7zr (`.7z`), stdlib zipfile + tarfile (gzip/bzip2/xz) |
+| Browser impersonation | curl_cffi (TLS fingerprint mimicry for TikTok/IG) |
 
 ## Configuration
 
@@ -173,7 +185,30 @@ until you have ≥10 handlers in one input domain.
 | `EXPORT_WATCH_DIR` | (none) | Folder watch mode (Clop-style). Anything dropped in this folder is auto-shrunk into `<dir>/_optimized/`. Image/video/PDF only. |
 | `EXPORT_MAX_UPLOAD_MB` | `0` (unlimited) | Per-file upload cap in MB. Set to a positive integer only if exposing publicly. |
 | `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge. |
+| `EXPORT_CLEANUP_AGE_SECONDS` | `3600` (1 h) | Age threshold for the lifespan cleanup loop. Lower for more-ephemeral storage. |
+| `EXPORT_CLEANUP_INTERVAL_SECONDS` | `900` (15 min) | How often the cleanup loop sweeps. |
+| `EXPORT_DOWNLOAD_AUTODELETE` | (off) | When `1`, the output file + job dir are deleted the *instant* the download stream finishes. Maximum-ephemeral mode. Trade-off: re-downloading means re-processing. |
 | `DYLD_FALLBACK_LIBRARY_PATH` | `/opt/homebrew/lib` (macOS) | WeasyPrint needs to find libgobject. |
+
+### Ephemeral-storage modes
+
+| Use case | Strategy | Storage profile |
+|---|---|---|
+| **Personal localhost** (default) | Local `/tmp/export`, 1-hour TTL | Effectively ephemeral; old jobs auto-pruned |
+| **Small VPS, trusted friends** | tmpfs mount + shorter TTL + `EXPORT_DOWNLOAD_AUTODELETE=1` | Maximum ephemeral; bounded by RAM, not disk |
+| **Public-facing service** | All of above + S3/R2 with lifecycle policy | True "unlimited"; bounded retention, unbounded throughput |
+
+For the VPS path, mount `/tmp/export` as RAM-backed tmpfs:
+
+```bash
+sudo mkdir -p /tmp/export
+echo 'tmpfs /tmp/export tmpfs size=4G,mode=1777 0 0' | sudo tee -a /etc/fstab
+sudo mount /tmp/export
+```
+
+Combined with `EXPORT_DOWNLOAD_AUTODELETE=1`, files never touch persistent
+storage. The "storage" constraint becomes peak concurrent jobs × average job
+size, not total throughput.
 
 ### URL extractor notes
 
@@ -189,12 +224,50 @@ The error messages surfaced in the UI are humanized — instead of a 200-line yt
 ## Limits
 
 - Single file upload: **unlimited** by default (set `EXPORT_MAX_UPLOAD_MB=N` to cap)
-- Multi-file (compress / merge): **unlimited** by default (set `EXPORT_MAX_COMPRESS_MB=N` to cap)
+- Multi-file (compress / merge / batch): **unlimited** by default (set `EXPORT_MAX_COMPRESS_MB=N` to cap)
 - Job dirs auto-deleted after 1 hour (lifespan-managed cleanup loop)
 - Single-process — concurrent jobs share CPU; not designed for multi-tenant load
 - Whisper is single-instance — concurrent transcriptions queue serially
 - LibreOffice cold-starts each office→PDF call (~3 s); could daemonize with
   `unoserver` later if it matters
+- The `/api/thumbnail` endpoint reads up to 50 MB per file for preview rendering
+  (HEIC/AVIF/TIFF/ICO that browsers can't decode natively)
+
+## Compatibility matrix (input × output)
+
+The full live matrix is at `GET /api/capabilities` (no auth required) and
+the **show what's supported** link in the UI renders it inline. Snapshot:
+
+### Single-file conversions
+
+| Input → | image | pdf | docx | epub | html | md | txt | mp3 | mp4 | csv | xlsx | json | srt | vtt | ttf | woff2 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| image | ✓ | ✓ | — | — | — | — | OCR | — | — | — | — | — | — | — | — | — |
+| video | — | — | — | — | — | — | STT | — | ✓ | — | — | — | STT | STT | — | — |
+| audio | — | — | — | — | — | — | STT | ✓ | — | — | — | — | STT | STT | — | — |
+| pdf | ✓ | OCR | ✓ | — | — | — | ✓+OCR | — | — | — | — | — | — | — | — | — |
+| document | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | TTS | — | — | — | — | — | — | — | — |
+| office | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| spreadsheet | — | — | — | — | — | — | — | — | — | ✓ | ✓ | ✓ | — | — | — | — |
+| subtitle | — | — | — | — | — | — | — | — | — | — | — | — | ✓ | ✓ | — | — |
+| font | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✓ | ✓ |
+| URL | — | — | — | — | — | — | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
+
+(`✓` = direct conversion, `OCR` = via Tesseract, `STT` = via Whisper, `TTS` =
+via `say`/piper, `—` = not exposed. The `image` row also covers special
+outputs `nobg` (transparent PNG) and `svg` (vectorized) that don't fit the matrix.)
+
+### Operations (not format conversions)
+
+| Action | Input | Notes |
+|---|---|---|
+| `shrink` | image / video / pdf | Lossy size reduction with `low / medium / high` presets + advanced quality slider (1–100) |
+| `compress` (archive) | any files | `zip` / `7z` / `tar.zst` / `tar.gz` / `tar.bz2` / `tar.xz` |
+| `compress` (single-file) | one file | `gz` / `bz2` / `xz` / `zst` (raw stream, no tar) |
+| `merge` | 2+ PDFs | Single combined PDF |
+| `split` | one PDF | Each page as a separate PDF, zipped |
+| `rotate` / `watermark` / `encrypt` / `decrypt` | one PDF | Per-PDF operations |
+| Image batch convert | 2+ images | PDF / batch zip / animated GIF / MP4 slideshow |
 - Job dirs auto-deleted after 1 hour
 - Single-process — concurrent jobs share CPU; not designed for multi-tenant load
   (deferred until needed; would migrate to `arq + Redis` per the research)

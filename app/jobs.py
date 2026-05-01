@@ -12,7 +12,7 @@ import py7zr
 import yt_dlp
 import zstandard as zstd
 from gallery_dl import config as gdl_config, job as gdl_job
-from PIL import Image
+from PIL import Image, ImageOps
 
 pillow_heif.register_heif_opener()
 
@@ -65,6 +65,10 @@ IMAGE_SAVE_OPTS = {
     "avif": {"quality": 70},
     "tiff": {"compression": "tiff_lzw"},
     "ico":  {"sizes": [(256, 256), (128, 128), (64, 64), (32, 32), (16, 16)]},
+    "bmp":  {},
+    "gif":  {"optimize": True},
+    "icns": {"sizes": [(1024, 1024), (512, 512), (256, 256), (128, 128), (64, 64), (32, 32), (16, 16)]},
+    "jp2":  {"quality_mode": "rates", "quality_layers": [10]},  # JPEG 2000
 }
 IMAGE_EXT_OVERRIDE = {"jpeg": "jpg"}
 IMAGE_FORMATS = set(IMAGE_SAVE_OPTS.keys())
@@ -87,8 +91,26 @@ VIDEO_TO_GIF = {"gif"}
 VIDEO_TO_VIDEO = {"mp4", "mov", "webm", "mkv"}
 
 # Pandoc-handled document formats. Pandoc auto-detects input by extension.
-DOC_FORMATS = {"md", "html", "docx", "rtf", "epub", "txt", "org", "rst", "odt", "tex"}
-PANDOC_WRITER = {"md": "markdown", "txt": "plain"}  # most map 1:1 to extension
+DOC_FORMATS = {"md", "html", "docx", "rtf", "epub", "txt", "org", "rst", "odt", "tex", "pptx"}
+PANDOC_WRITER = {"md": "markdown", "txt": "plain", "pptx": "pptx"}  # most map 1:1 to extension
+# Inputs Pandoc can read (broader than what we generate)
+DOC_INPUT_SUFFIXES = {
+    ".md", ".markdown", ".html", ".htm", ".rtf", ".epub", ".txt",
+    ".tex", ".org", ".rst", ".odt", ".ipynb", ".adoc", ".asciidoc",
+    ".textile", ".docbook", ".fb2", ".docx", ".pptx",
+}
+
+# Spreadsheets via openpyxl + stdlib csv/json
+SPREADSHEET_FORMATS = {"csv", "tsv", "xlsx", "json"}
+SPREADSHEET_SUFFIXES = {f".{f}" for f in SPREADSHEET_FORMATS}
+
+# Subtitles via pysubs2
+SUBTITLE_FORMATS = {"srt", "vtt", "ass", "ssa", "sub", "sbv"}
+SUBTITLE_SUFFIXES = {f".{f}" for f in SUBTITLE_FORMATS}
+
+# Fonts via fonttools (TTF/OTF ↔ WOFF/WOFF2; TTF↔OTF is a no-op container swap)
+FONT_FORMATS = {"ttf", "otf", "woff", "woff2"}
+FONT_SUFFIXES = {f".{f}" for f in FONT_FORMATS}
 
 ARCHIVE_FORMATS = {"zip", "7z", "tar.gz", "tar.zst", "tar.bz2", "tar.xz"}
 
@@ -107,7 +129,13 @@ AUDIO_DENOISE = {"denoise"}
 AUDIO_STEMS = {"stems"}
 
 SHRINK_LEVELS = {"low", "medium", "high"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic", ".heif", ".tiff", ".bmp", ".gif", ".ico"}
+# Pillow-readable image inputs. PSD/TGA/PCX/EPS/ICNS rely on Pillow's broader
+# format support; they get the same dispatch path as JPEG/PNG.
+IMAGE_SUFFIXES = {
+    ".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic", ".heif",
+    ".tiff", ".bmp", ".gif", ".ico", ".jp2",
+    ".psd", ".tga", ".pcx", ".eps", ".icns",
+}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v",
                   ".flv", ".wmv", ".3gp", ".ts", ".mts", ".m2ts", ".ogv"}
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac",
@@ -280,6 +308,7 @@ def _run_gallerydl(job: dict, url: str, out_dir: Path) -> str:
 
 def _convert_image(input_path: Path, target_fmt: str, out_dir: Path, quality: int | None = None) -> Path:
     img = Image.open(input_path)
+    img = ImageOps.exif_transpose(img)  # honor camera-rotation EXIF tag
     img.load()
     # Formats that can't carry alpha (or look bad with it): JPEG, ICO often
     # benefits from RGBA, TIFF is fine either way.
@@ -296,6 +325,94 @@ def _convert_image(input_path: Path, target_fmt: str, out_dir: Path, quality: in
     if quality is not None and "quality" in save_opts:
         save_opts["quality"] = max(1, min(100, quality))
     img.save(out_path, format=target_fmt.upper(), **save_opts)
+    return out_path
+
+
+def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """Cross-convert tabular data: csv ↔ tsv ↔ xlsx ↔ json. Reads first sheet
+    of multi-sheet xlsx. JSON must be a list of dicts (header row) or list of
+    lists (raw rows). Numbers and strings preserved; dates → ISO strings."""
+    import csv as csv_mod
+    import json as json_mod
+    import openpyxl
+    from datetime import date, datetime
+    src = input_path.suffix.lower()
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.{target_fmt}"
+
+    # --- read input into rows: list[list[Any]] ---
+    if src in (".csv", ".tsv"):
+        delim = "\t" if src == ".tsv" else ","
+        with input_path.open("r", encoding="utf-8-sig", newline="") as f:
+            rows = list(csv_mod.reader(f, delimiter=delim))
+    elif src == ".xlsx":
+        wb = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
+        ws = wb.active
+        rows = [[cell.value for cell in row] for row in ws.iter_rows()]
+    elif src == ".json":
+        data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            keys = list(data[0].keys())
+            rows = [keys] + [[d.get(k, "") for k in keys] for d in data]
+        elif isinstance(data, list):
+            rows = data if not data or isinstance(data[0], list) else [[v] for v in data]
+        else:
+            raise RuntimeError("JSON must be a list of dicts or list of lists for tabular conversion")
+    else:
+        raise RuntimeError(f"unsupported spreadsheet input: {src}")
+
+    # --- write output ---
+    def _stringify(v):
+        if isinstance(v, (date, datetime)):
+            return v.isoformat()
+        return "" if v is None else v
+
+    if target_fmt in ("csv", "tsv"):
+        delim = "\t" if target_fmt == "tsv" else ","
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv_mod.writer(f, delimiter=delim)
+            w.writerows([[_stringify(c) for c in r] for r in rows])
+    elif target_fmt == "xlsx":
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for r in rows:
+            ws.append([_stringify(c) for c in r])
+        wb.save(out_path)
+    elif target_fmt == "json":
+        if rows and len(rows) > 1:
+            keys = [str(k) for k in rows[0]]
+            data = [{k: _stringify(v) for k, v in zip(keys, r)} for r in rows[1:]]
+        else:
+            data = [list(r) for r in rows]
+        out_path.write_text(json_mod.dumps(data, indent=2, default=str), encoding="utf-8")
+    return out_path
+
+
+def _convert_subtitle(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """Cross-convert subtitle formats: srt ↔ vtt ↔ ass ↔ ssa ↔ sub ↔ sbv."""
+    import pysubs2
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.{target_fmt}"
+    subs = pysubs2.load(str(input_path))
+    subs.save(str(out_path), format_=target_fmt)
+    return out_path
+
+
+def _convert_font(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """Convert between font containers: ttf/otf ↔ woff/woff2.
+    Note: ttf↔otf is essentially a no-op (same container, different glyph
+    table type). True ttf↔otf glyph re-encoding is a fontographer-tier
+    operation we don't attempt."""
+    from fontTools.ttLib import TTFont
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.{target_fmt}"
+    font = TTFont(str(input_path))
+    if target_fmt in ("woff", "woff2"):
+        font.flavor = target_fmt
+    else:
+        # ttf or otf — strip any WOFF wrapping
+        font.flavor = None
+    font.save(str(out_path))
     return out_path
 
 
@@ -375,8 +492,9 @@ def _shrink_image(input_path: Path, level: str, out_dir: Path, quality: int | No
         quality = {"low": 50, "medium": 70, "high": 85}[level]
     quality = max(1, min(100, quality))
     img = Image.open(input_path)
+    src_fmt = (img.format or "JPEG").lower()  # capture before exif_transpose strips it
+    img = ImageOps.exif_transpose(img)
     img.load()
-    src_fmt = (img.format or "JPEG").lower()
     # PNG quality is meaningless; route lossless inputs through webp for actual savings.
     out_fmt = "webp" if src_fmt in ("png", "tiff", "bmp") else src_fmt
     if out_fmt not in ("jpeg", "webp", "avif"):
@@ -506,8 +624,193 @@ def run_compress_job(job_id: str, input_paths: list[Path], fmt: str, downloads_d
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
 
 
+BATCH_IMAGE_FORMATS = {"pdf", "jpeg", "png", "webp", "avif", "gif", "mp4"}
+
+
+def _open_oriented(path: Path, rotations: dict[str, int] | None = None) -> Image.Image:
+    """Open image, apply EXIF orientation, then user-applied rotation."""
+    img = Image.open(path)
+    img = ImageOps.exif_transpose(img)
+    img.load()
+    if rotations:
+        original_name = path.name.removeprefix("input_")
+        deg = int(rotations.get(original_name, 0)) % 360
+        if deg:
+            img = img.rotate(-deg, expand=True)  # PIL rotates CCW; negate for CW
+    return img
+
+
+def _batch_image_convert(input_paths: list[Path], target_fmt: str, out_dir: Path,
+                          rotations: dict[str, int] | None = None) -> Path:
+    """Convert each input image to `target_fmt` (jpeg/png/webp/avif), zip the
+    results. Honors EXIF + user rotations."""
+    converted_dir = out_dir / "_batch"
+    converted_dir.mkdir(exist_ok=True)
+    failures = []
+    for p in input_paths:
+        try:
+            img = _open_oriented(p, rotations)
+            ext = IMAGE_EXT_OVERRIDE.get(target_fmt, target_fmt)
+            stem = p.stem.removeprefix("input_")
+            out_one = converted_dir / f"{stem}.{ext}"
+            if target_fmt == "jpeg" and img.mode in ("RGBA", "LA", "P"):
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
+                img = bg
+            img.save(out_one, format=target_fmt.upper(), **IMAGE_SAVE_OPTS.get(target_fmt, {}))
+        except Exception as e:
+            failures.append(f"{p.name}: {e}")
+    if failures and not any(converted_dir.iterdir()):
+        shutil.rmtree(converted_dir, ignore_errors=True)
+        raise RuntimeError("all images failed: " + "; ".join(failures[:3]))
+    out_path = out_dir / f"images_{target_fmt}.zip"
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_STORED) as zf:
+        for f in sorted(converted_dir.iterdir()):
+            zf.write(f, arcname=f.name)
+    shutil.rmtree(converted_dir, ignore_errors=True)
+    return out_path
+
+
+def _images_to_animated_gif(input_paths: list[Path], out_dir: Path,
+                             rotations: dict[str, int] | None = None,
+                             frame_seconds: float = 2.0) -> Path:
+    """Combine N images into a single animated GIF (slideshow). Frames are
+    capped to 800px max edge to keep file sizes sane."""
+    if not input_paths:
+        raise RuntimeError("no images")
+    frames: list[Image.Image] = []
+    for p in input_paths:
+        img = _open_oriented(p, rotations)
+        img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        frames.append(img)
+    base = input_paths[0].stem.removeprefix("input_")
+    out_path = out_dir / (f"{base}.gif" if len(input_paths) == 1
+                          else f"{base}_and_{len(input_paths) - 1}_more.gif")
+    frames[0].save(out_path, save_all=True, append_images=frames[1:],
+                   duration=int(frame_seconds * 1000), loop=0, optimize=True)
+    return out_path
+
+
+def _images_to_video(input_paths: list[Path], out_dir: Path,
+                      rotations: dict[str, int] | None = None,
+                      frame_seconds: float = 3.0) -> Path:
+    """Combine N images into an MP4 slideshow. Each image normalized to RGB
+    JPEG first (for ffmpeg input), then concatenated at one frame per
+    `frame_seconds` seconds. Cap width at 1920."""
+    if not input_paths:
+        raise RuntimeError("no images")
+    work = out_dir / "_slideshow"
+    work.mkdir(exist_ok=True)
+    for i, p in enumerate(input_paths):
+        img = _open_oriented(p, rotations)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img.save(work / f"frame_{i:04d}.jpg", quality=88)
+    base = input_paths[0].stem.removeprefix("input_")
+    out_path = out_dir / (f"{base}.mp4" if len(input_paths) == 1
+                          else f"{base}_and_{len(input_paths) - 1}_more.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        "-framerate", f"{1.0 / frame_seconds:.4f}",
+        "-pattern_type", "glob", "-i", str(work / "frame_*.jpg"),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-vf", "scale='min(1920,iw)':-2,format=yuv420p",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    shutil.rmtree(work, ignore_errors=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg slideshow failed: {r.stderr.strip()[-500:]}")
+    return out_path
+
+
+def run_image_batch_job(job_id: str, input_paths: list[Path], fmt: str,
+                          downloads_dir: Path,
+                          rotations: dict[str, int] | None = None) -> None:
+    """Dispatch batch image conversion based on output format."""
+    job = jobs[job_id]
+    out_dir = downloads_dir / job_id
+    try:
+        job["status"] = "converting"
+        if fmt == "pdf":
+            target = _images_to_pdf(input_paths, out_dir, rotations)
+        elif fmt in {"jpeg", "png", "webp", "avif"}:
+            target = _batch_image_convert(input_paths, fmt, out_dir, rotations)
+        elif fmt == "gif":
+            target = _images_to_animated_gif(input_paths, out_dir, rotations)
+        elif fmt == "mp4":
+            target = _images_to_video(input_paths, out_dir, rotations)
+        else:
+            raise ValueError(f"unsupported batch format: {fmt}")
+        for p in input_paths:
+            p.unlink(missing_ok=True)
+        job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
+        job["progress"] = 100
+        job["status"] = "ready"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
+def _images_to_pdf(input_paths: list[Path], out_dir: Path,
+                   rotations: dict[str, int] | None = None) -> Path:
+    """Combine N images into a single multi-page PDF. EXIF-rotated first
+    (camera orientation), then user-rotated per `rotations` (degrees CW
+    keyed by original filename, e.g. {"IMG_1234.HEIC": 90})."""
+    if not input_paths:
+        raise RuntimeError("no images to combine")
+    rotations = rotations or {}
+    pages: list[Image.Image] = []
+    for p in input_paths:
+        img = Image.open(p)
+        img = ImageOps.exif_transpose(img)
+        img.load()
+        # User-applied rotation. PIL rotates CCW by default; negate for CW intent.
+        original_name = p.name.removeprefix("input_")
+        deg = int(rotations.get(original_name, 0)) % 360
+        if deg:
+            img = img.rotate(-deg, expand=True)
+        if img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        pages.append(img)
+    base = input_paths[0].stem.removeprefix("input_")
+    out_path = out_dir / (f"{base}.pdf" if len(input_paths) == 1
+                          else f"{base}_and_{len(input_paths) - 1}_more.pdf")
+    pages[0].save(out_path, "PDF", resolution=150,
+                  save_all=True, append_images=pages[1:])
+    return out_path
+
+
+def run_images_to_pdf_job(job_id: str, input_paths: list[Path],
+                          downloads_dir: Path,
+                          rotations: dict[str, int] | None = None) -> None:
+    job = jobs[job_id]
+    out_dir = downloads_dir / job_id
+    try:
+        job["status"] = "converting"
+        target = _images_to_pdf(input_paths, out_dir, rotations)
+        for p in input_paths:
+            p.unlink(missing_ok=True)
+        job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
+        job["progress"] = 100
+        job["status"] = "ready"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
 def _image_to_pdf(input_path: Path, out_dir: Path) -> Path:
     img = Image.open(input_path)
+    img = ImageOps.exif_transpose(img)
     img.load()
     if img.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
@@ -640,6 +943,7 @@ def _image_to_text(input_path: Path, out_dir: Path) -> Path:
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.txt"
     img = Image.open(input_path)
+    img = ImageOps.exif_transpose(img)  # OCR also benefits from rotation correction
     img.load()
     text = pytesseract.image_to_string(img)
     out_path.write_text(text, encoding="utf-8")
@@ -1041,12 +1345,15 @@ def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path
     try:
         job["status"] = "converting"
         suffix = input_path.suffix.lower()
-        is_image_in  = suffix in IMAGE_SUFFIXES
-        is_pdf_in    = suffix in PDF_SUFFIXES
-        is_video_in  = suffix in VIDEO_SUFFIXES
-        is_audio_in  = suffix in AUDIO_SUFFIXES
-        is_office_in = suffix in OFFICE_SUFFIXES
-        is_doc_in    = suffix.lstrip(".") in DOC_FORMATS or suffix in (".htm",)
+        is_image_in       = suffix in IMAGE_SUFFIXES
+        is_pdf_in         = suffix in PDF_SUFFIXES
+        is_video_in       = suffix in VIDEO_SUFFIXES
+        is_audio_in       = suffix in AUDIO_SUFFIXES
+        is_office_in      = suffix in OFFICE_SUFFIXES
+        is_doc_in         = suffix in DOC_INPUT_SUFFIXES
+        is_spreadsheet_in = suffix in SPREADSHEET_SUFFIXES
+        is_subtitle_in    = suffix in SUBTITLE_SUFFIXES
+        is_font_in        = suffix in FONT_SUFFIXES
         if is_image_in and fmt in IMAGE_FORMATS:
             target = _convert_image(input_path, fmt, out_dir, quality=quality)
         elif is_image_in and fmt in IMAGE_TO_PDF:
@@ -1085,8 +1392,14 @@ def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path
             target = _text_to_audio(input_path, fmt, out_dir)
         elif is_doc_in and fmt in DOC_TO_PDF:
             target = _doc_to_pdf(input_path, out_dir)
-        elif fmt in DOC_FORMATS:
+        elif fmt in DOC_FORMATS and is_doc_in:
             target = _convert_doc(input_path, fmt, out_dir)
+        elif is_spreadsheet_in and fmt in SPREADSHEET_FORMATS:
+            target = _convert_spreadsheet(input_path, fmt, out_dir)
+        elif is_subtitle_in and fmt in SUBTITLE_FORMATS:
+            target = _convert_subtitle(input_path, fmt, out_dir)
+        elif is_font_in and fmt in FONT_FORMATS:
+            target = _convert_font(input_path, fmt, out_dir)
         else:
             raise ValueError(f"no bridge: {suffix or '(no ext)'} → {fmt}")
         input_path.unlink(missing_ok=True)

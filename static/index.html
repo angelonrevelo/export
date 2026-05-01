@@ -137,6 +137,57 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 #adv-panel .est { color: #4d8eff; font-variant-numeric: tabular-nums; min-width: 5rem; text-align: right; }
 .size-badge { color: #666; font-size: 0.8em; margin-left: 0.4rem; }
 .size-badge.win { color: #5fc28e; }
+
+#previews {
+  display: flex; flex-wrap: wrap; gap: 0.6rem;
+  margin-bottom: 0.75rem; max-height: 14rem; overflow-y: auto;
+}
+.tile {
+  position: relative; width: 5rem;
+  display: flex; flex-direction: column; gap: 0.25rem;
+}
+.tile .visual {
+  position: relative; width: 5rem; height: 5rem; border-radius: 4px;
+  border: 1px solid #2a2a2a; background: #181818; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.tile .visual img {
+  width: 100%; height: 100%; object-fit: cover;
+  transition: transform 0.15s ease;
+}
+.tile .visual.chip {
+  flex-direction: column; color: #888;
+  font-size: 0.75em; font-weight: 500;
+}
+.tile .visual.chip span { color: #4d8eff; font-size: 0.95em; margin-top: 0.15rem; }
+.tile .badge {
+  position: absolute; top: 2px; right: 2px;
+  background: rgba(77, 142, 255, 0.85); color: white;
+  font-size: 0.7em; padding: 0 0.3rem; border-radius: 3px;
+  line-height: 1.4; pointer-events: none;
+}
+.tile .ctl {
+  display: flex; gap: 2px; justify-content: space-between;
+  opacity: 0.55; transition: opacity 0.1s;
+}
+.tile:hover .ctl { opacity: 1; }
+.tile .ctl button {
+  flex: 1; padding: 0.15rem 0; font-size: 0.85em;
+  background: #181818; color: #aaa; border: 1px solid #2a2a2a;
+  border-radius: 3px; cursor: pointer; min-width: 0;
+}
+.tile .ctl button:hover { color: #4d8eff; border-color: #4d8eff; }
+.tile .ctl .rm:hover    { color: #ff6b6b; border-color: #ff6b6b; }
+.tile .name {
+  font-size: 0.65em; color: #555;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-align: center;
+}
+#previews .more {
+  width: 5rem; height: 5rem; border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px dashed #2a2a2a; color: #666; font-size: 0.85em;
+}
 </style>
 </head>
 <body>
@@ -180,6 +231,7 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
       <span class="meta" id="file-meta"></span>
       <button id="clear-btn" type="button">clear</button>
     </div>
+    <div id="previews"></div>
     <div id="actions"></div>
     <div id="opt-row">
       <span id="opt-label">format:</span>
@@ -218,17 +270,23 @@ const $ = (id) => document.getElementById(id);
 const getPw = () => localStorage.getItem(PW_KEY) || "";
 
 const TYPES = {
-  image:  { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico"],
-            convertTo: ["jpeg","png","webp","avif","tiff","ico","pdf","txt","nobg","svg"], shrink: true },
-  video:  { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv"],
-            convertTo: ["mp4","mov","webm","mkv","gif","txt","srt","vtt","notes"], shrink: true },
-  audio:  { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma"],
-            convertTo: ["mp3","m4a","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","denoise","stems"], shrink: false },
-  doc:    { exts: ["md","html","htm","rtf","epub","txt","tex","org","rst"],
-            convertTo: ["md","html","docx","rtf","epub","txt","odt","pdf","mp3","m4a","wav"], shrink: false },
-  office: { exts: ["docx","doc","pptx","ppt","xlsx","xls","odp","ods","odt"],
-            convertTo: ["pdf"], shrink: false },
-  pdf:    { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","docx","pdfa"], shrink: true },
+  image:       { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico","jp2","psd","tga","pcx","eps","icns"],
+                 convertTo: ["jpeg","png","webp","avif","tiff","bmp","gif","ico","icns","jp2","pdf","txt","nobg","svg"], shrink: true },
+  video:       { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv"],
+                 convertTo: ["mp4","mov","webm","mkv","gif","txt","srt","vtt","notes"], shrink: true },
+  audio:       { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma"],
+                 convertTo: ["mp3","m4a","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","denoise","stems"], shrink: false },
+  doc:         { exts: ["md","markdown","html","htm","rtf","epub","txt","tex","org","rst","ipynb","adoc","asciidoc","textile","docbook","fb2"],
+                 convertTo: ["md","html","docx","rtf","epub","txt","odt","tex","pptx","pdf","mp3","m4a","wav"], shrink: false },
+  office:      { exts: ["docx","doc","pptx","ppt","xlsx","xls","odp","ods","odt"],
+                 convertTo: ["pdf"], shrink: false },
+  pdf:         { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","docx","pdfa"], shrink: true },
+  spreadsheet: { exts: ["csv","tsv","xlsx","json"],
+                 convertTo: ["csv","tsv","xlsx","json"], shrink: false },
+  subtitle:    { exts: ["srt","vtt","ass","ssa","sub","sbv"],
+                 convertTo: ["srt","vtt","ass","ssa","sub","sbv"], shrink: false },
+  font:        { exts: ["ttf","otf","woff","woff2"],
+                 convertTo: ["ttf","otf","woff","woff2"], shrink: false },
   other: { exts: [], convertTo: [], shrink: false },
 };
 
@@ -345,15 +403,19 @@ $("drop-file").onchange = (e) => showPicked(e.target.files);
 
 $("clear-btn").onclick = () => {
   $("drop-file").value = "";
+  _rotations = {};
   $("picked").classList.remove("show");
+  $("previews").innerHTML = "";
 };
 
 function showPicked(files) {
   if (!files || !files.length) {
     $("picked").classList.remove("show");
+    $("previews").innerHTML = "";
     return;
   }
   $("picked").classList.add("show");
+  renderPreviews(files);
   if (files.length === 1) {
     const f = files[0];
     const type = detectType(f.name);
@@ -369,12 +431,162 @@ function showPicked(files) {
   } else {
     const total = [...files].reduce((s, f) => s + f.size, 0);
     const allPdf = [...files].every(f => detectType(f.name) === "pdf");
+    const allImages = [...files].every(f => detectType(f.name) === "image");
     $("file-name").textContent = `${files.length} files`;
     $("file-meta").textContent = fmtBytes(total);
-    const acts = ["compress"];
-    if (allPdf) acts.push("merge");
-    renderActions(acts, allPdf ? "pdf-multi" : "mixed");
+    // For typical "I dropped a folder of photos" flows, convert→PDF is the
+    // headline action; PDF merge for multi-PDF; compress otherwise.
+    const acts = [];
+    if (allImages) acts.push("convert");  // primary: stitch into one PDF
+    if (allPdf) acts.push("merge");       // primary: combine PDFs
+    acts.push("compress");                // always available as fallback
+    const ctx = allPdf ? "pdf-multi" : (allImages ? "image-multi" : "mixed");
+    renderActions(acts, ctx);
   }
+}
+
+// Browsers can natively render only a subset of image formats in <img>.
+// HEIC/HEIF/AVIF/TIFF/ICO won't decode → show a labelled placeholder instead.
+const BROWSER_RENDERABLE = new Set(["jpg","jpeg","png","webp","gif","svg","bmp"]);
+
+// Per-tile rotation state (degrees clockwise: 0/90/180/270). Keyed by filename.
+// Cleared whenever the file set changes (clear button, clear-all on new drop).
+let _rotations = {};
+
+function renderPreviews(files) {
+  const c = $("previews");
+  c.innerHTML = "";
+  const imgs = [...files].filter(f => detectType(f.name) === "image");
+  if (!imgs.length) return;
+  const VISIBLE = 10;
+  imgs.slice(0, VISIBLE).forEach(f => buildTile(c, f));
+  if (imgs.length > VISIBLE) {
+    const more = document.createElement("span");
+    more.className = "more";
+    more.textContent = `+${imgs.length - VISIBLE}`;
+    c.appendChild(more);
+  }
+}
+
+function buildTile(parent, f) {
+  const ext = f.name.split(".").pop().toLowerCase();
+  const tile = document.createElement("div");
+  tile.className = "tile";
+  tile.dataset.name = f.name;
+
+  const visual = document.createElement("div");
+  visual.className = "visual";
+  visual.title = f.name;
+
+  if (BROWSER_RENDERABLE.has(ext)) {
+    const img = document.createElement("img");
+    img.alt = f.name;
+    const reader = new FileReader();
+    reader.onload = (e) => { img.src = e.target.result; };
+    reader.readAsDataURL(f);
+    visual.appendChild(img);
+  } else {
+    // Browser can't decode this format (HEIC, AVIF, TIFF, ICO).
+    // Show chip placeholder *immediately* and async-swap in a server-rendered
+    // JPEG thumbnail once /api/thumbnail responds.
+    visual.classList.add("chip");
+    visual.innerHTML = `${ext.toUpperCase()}<span>${(f.size / 1024).toFixed(0)}KB</span>`;
+    fetchServerThumbnail(visual, f, () => {
+      // Re-apply rotation to the new <img> we just inserted (preserves badge).
+      const tile = visual.closest(".tile");
+      const deg = _rotations[f.name] || 0;
+      if (deg && tile) applyRotationVisual(tile, deg);
+    });
+  }
+
+  const badge = document.createElement("div");
+  badge.className = "badge";
+  badge.hidden = true;
+  visual.appendChild(badge);
+
+  const ctl = document.createElement("div");
+  ctl.className = "ctl";
+  const rotL = mkBtn("↺", "rotate left",  () => bumpRotation(f.name, -90, tile));
+  const rotR = mkBtn("↻", "rotate right", () => bumpRotation(f.name,  90, tile));
+  const rm   = mkBtn("✕", "remove",       () => removeFile(f.name));
+  rm.classList.add("rm");
+  ctl.append(rotL, rotR, rm);
+
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = f.name;
+
+  tile.append(visual, ctl, name);
+  parent.appendChild(tile);
+  applyRotationVisual(tile, _rotations[f.name] || 0);
+}
+
+// Server-side thumbnail render for formats the browser can't decode.
+// Replaces chip text with the returned JPEG when (and only if) it succeeds.
+async function fetchServerThumbnail(visual, file, onSwapped) {
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const r = await fetch("/api/thumbnail", {
+      method: "POST",
+      headers: { "X-Password": getPw() },
+      body: fd,
+    });
+    if (!r.ok) return;  // keep chip on failure
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    // Strip chip text/spans but preserve the .badge child
+    [...visual.childNodes].forEach(n => {
+      if (n.nodeType === 3) n.remove();           // text nodes
+      else if (!n.classList?.contains("badge")) n.remove();  // chip <span> etc.
+    });
+    visual.classList.remove("chip");
+    const img = document.createElement("img");
+    img.alt = file.name;
+    img.src = url;
+    visual.insertBefore(img, visual.firstChild);
+    if (onSwapped) onSwapped();
+  } catch { /* network error — keep chip */ }
+}
+
+function mkBtn(label, title, onclick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  b.title = title;
+  b.onclick = onclick;
+  return b;
+}
+
+function bumpRotation(name, delta, tile) {
+  const cur = _rotations[name] || 0;
+  const next = ((cur + delta) % 360 + 360) % 360;  // normalize 0-359
+  if (next === 0) delete _rotations[name];
+  else _rotations[name] = next;
+  applyRotationVisual(tile, next);
+}
+
+function applyRotationVisual(tile, deg) {
+  const img = tile.querySelector(".visual img");
+  if (img) img.style.transform = deg ? `rotate(${deg}deg)` : "";
+  const badge = tile.querySelector(".badge");
+  if (deg) {
+    badge.textContent = `${deg}°`;
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+function removeFile(name) {
+  const dt = new DataTransfer();
+  for (const f of $("drop-file").files) {
+    if (f.name !== name) dt.items.add(f);
+  }
+  $("drop-file").files = dt.files;
+  delete _rotations[name];
+  // Re-trigger the whole picked-state recompute (action set may change too).
+  showPicked(dt.files);
 }
 
 function renderActions(acts, type) {
@@ -408,7 +620,15 @@ function updateOptForAction(type) {
   sel.innerHTML = "";
   let opts = [], label = "", showSel = true, showTxt = false, txtPlaceholder = "", txtType = "text";
   if (action === "convert") {
-    opts = TYPES[type].convertTo;
+    if (type === "image-multi") {
+      // pdf  = multi-page document
+      // jpeg/png/webp/avif = each converted, zipped
+      // gif  = animated slideshow GIF
+      // mp4  = slideshow video
+      opts = ["pdf", "jpeg", "png", "webp", "avif", "gif", "mp4"];
+    } else {
+      opts = TYPES[type].convertTo;
+    }
     label = "convert to:";
   } else if (action === "compress") {
     // Multi-file always works for tar/zip/7z. Single-file *also* offers
@@ -532,7 +752,16 @@ $("process").onclick = async () => {
     let endpoint;
     const fd = new FormData();
     let pollHint = action;
-    if (action === "convert") {
+    if (action === "convert" && files.length > 1) {
+      // Multi-image batch — output shape depends on chosen format
+      endpoint = "/api/images/batch";
+      for (const f of files) fd.append("files", f);
+      fd.append("format", selVal);
+      if (Object.keys(_rotations).length) {
+        fd.append("rotations", JSON.stringify(_rotations));
+      }
+      pollHint = selVal;
+    } else if (action === "convert") {
       endpoint = "/api/upload";
       fd.append("file", files[0]);
       fd.append("format", selVal);
