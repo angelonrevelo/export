@@ -112,15 +112,18 @@ deletes job dirs older than 1 h every 15 min.
 │                                                 │
 │   ┌───────────────────────────────────────┐     │
 │   │ FastAPI (app/main.py)                 │     │
-│   │   /api/jobs       → URL extraction    │     │
-│   │   /api/upload     → file conversion   │     │
-│   │   /api/compress   → multi-file zip    │     │
-│   │   /api/shrink     → lossy size cut    │     │
-│   │   /api/pdf/merge  → multi-PDF merge   │     │
-│   │   /api/pdf/op     → split/rotate/...  │     │
-│   │   /api/jobs/:id   → poll status       │     │
-│   │   /api/files/:id  → download          │     │
-│   │   /api/capabilities → format listing  │     │
+│   │   /api/jobs            → URL extract  │     │
+│   │   /api/upload          → file convert │     │
+│   │   /api/compress        → multi-file   │     │
+│   │   /api/shrink          → lossy size   │     │
+│   │   /api/pdf/merge       → multi-PDF    │     │
+│   │   /api/pdf/op          → split/rot/.. │     │
+│   │   /api/images/batch    → N img → 1    │     │
+│   │   /api/images/to-pdf   → legacy       │     │
+│   │   /api/thumbnail       → server prev. │     │
+│   │   /api/jobs/:id        → poll status  │     │
+│   │   /api/files/:id       → download     │     │
+│   │   /api/capabilities    → format list  │     │
 │   └───────────────────────────────────────┘     │
 │                  ↕                              │
 │   In-memory `jobs` dict + BackgroundTasks       │
@@ -136,16 +139,22 @@ We deliberately don't use a generic graph router (that's the
 `autoheal/` project for the writeup on why we picked the simpler model).
 Instead, each conversion is an explicit function with an entry in the dispatch.
 
-To add one new bridge in `app/jobs.py`:
+To add one new bridge in [app/jobs.py](app/jobs.py):
 
 1. Add a format set: `MY_NEW_BRIDGE = {"target_fmt"}`
 2. Write a helper: `def _do_my_thing(input_path, out_dir) -> Path: ...`
 3. Add a branch in `run_convert_job`'s if/elif chain
-4. Re-export the format set from `app/main.py`'s import + `ALLOWED_UPLOAD_FORMATS`
-5. Add `target_fmt` to `static/index.html`'s `TYPES.<input>.convertTo` array
+4. Re-export the format set from [app/main.py](app/main.py)'s import + `ALLOWED_UPLOAD_FORMATS`
+5. Add `target_fmt` to [static/index.html](static/index.html)'s `TYPES.<input>.convertTo` array
+6. Add `target_fmt` to the matching `convert_outputs` list in `/api/capabilities`
 
 That's the whole pattern. ~30 lines per new conversion. No abstraction needed
 until you have ≥10 handlers in one input domain.
+
+For multi-file batch operations (like `/api/images/batch`), follow the
+existing pattern: dedicated endpoint that takes `list[UploadFile]`, dispatches
+into a `_batch_*` helper that handles each input then either zips them or
+combines into one output.
 
 ### Tech stack
 
@@ -172,23 +181,60 @@ until you have ≥10 handlers in one input domain.
 
 ## Configuration
 
+Every knob is set via env var (read from `.env` if present — auto-created on
+first run with a random password). Setting one to its default has the same
+effect as not setting it.
+
+### Required
+
 | Env var | Default | Notes |
 |---|---|---|
-| `EXPORT_PASSWORD` | `changeme` | Required. Sent as `X-Password` header. |
-| `EXPORT_DOWNLOADS` | `/tmp/export` | Where job output lives. |
-| `EXPORT_WHISPER_MODEL` | `distil-large-v3` | Any faster-whisper model name. |
-| `EXPORT_WHISPER_MODEL_DIR` | (auto) | Override model cache dir. |
-| `EXPORT_PIPER_VOICE` | (none) | Required on Linux for TTS — path to a `.onnx` voice. |
-| `EXPORT_YTDLP_COOKIES` | (none) | Path to a Netscape-format `cookies.txt`. Unlocks login-walled Instagram, locked X tweets, private FB groups. |
-| `EXPORT_YTDLP_BROWSER` | (none) | Easier alternative — name of an installed browser (`chrome`, `firefox`, `safari`, `edge`, `brave`, `opera`, `vivaldi`). yt-dlp reads cookies live from the browser's cookie database. |
-| `EXPORT_HTTP_PROXY` | (none) | Routes URL extraction through a proxy. Beats IP blocks (TikTok, Rumble) and geo-restrictions. Format: `http://user:pw@host:port` or `socks5://127.0.0.1:9050` (Tor). |
-| `EXPORT_WATCH_DIR` | (none) | Folder watch mode (Clop-style). Anything dropped in this folder is auto-shrunk into `<dir>/_optimized/`. Image/video/PDF only. |
+| `EXPORT_PASSWORD` | `changeme` | Required. Sent as `X-Password` header. `run.sh` auto-generates a random one if `.env` is missing. Use `openssl rand -base64 24` for production. |
+
+### Storage & limits
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_DOWNLOADS` | `/tmp/export` | Where job output lives. Mount as tmpfs for RAM-backed ephemeral storage on a VPS. |
 | `EXPORT_MAX_UPLOAD_MB` | `0` (unlimited) | Per-file upload cap in MB. Set to a positive integer only if exposing publicly. |
-| `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge. |
+| `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge / batch. |
 | `EXPORT_CLEANUP_AGE_SECONDS` | `3600` (1 h) | Age threshold for the lifespan cleanup loop. Lower for more-ephemeral storage. |
 | `EXPORT_CLEANUP_INTERVAL_SECONDS` | `900` (15 min) | How often the cleanup loop sweeps. |
-| `EXPORT_DOWNLOAD_AUTODELETE` | (off) | When `1`, the output file + job dir are deleted the *instant* the download stream finishes. Maximum-ephemeral mode. Trade-off: re-downloading means re-processing. |
-| `DYLD_FALLBACK_LIBRARY_PATH` | `/opt/homebrew/lib` (macOS) | WeasyPrint needs to find libgobject. |
+| `EXPORT_DOWNLOAD_AUTODELETE` | (off) | When `1` / `true` / `yes`, the output file + job dir are deleted the *instant* the download stream finishes. Maximum-ephemeral mode. |
+
+### Folder watch
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_WATCH_DIR` | (none) | Folder watch mode (Clop-style). Anything image/video/PDF dropped in this folder is auto-shrunk into `<dir>/_optimized/`. |
+
+### Whisper STT
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_WHISPER_MODEL` | `distil-large-v3` | Any faster-whisper model name. Smaller = less disk + faster but lower quality. |
+| `EXPORT_WHISPER_MODEL_DIR` | (auto) | Override model cache dir (defaults to `~/.cache/huggingface`). |
+
+### Piper TTS
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_PIPER_VOICE` | (none) | Required on Linux for TTS — path to a `.onnx` voice. macOS uses built-in `say` instead. `install-linux.sh` downloads `voices/en_US-lessac-medium.onnx` for you. |
+
+### URL extraction (yt-dlp / gallery-dl)
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_YTDLP_BROWSER` | (none) | Easiest cookie source — name of an installed browser (`chrome`, `firefox`, `safari`, `edge`, `brave`, `opera`, `vivaldi`). yt-dlp reads cookies live. |
+| `EXPORT_YTDLP_COOKIES` | (none) | Headless alternative — Netscape-format `cookies.txt` path. |
+| `EXPORT_HTTP_PROXY` | (none) | Routes URL extraction through a proxy. Beats IP blocks (TikTok, Rumble) and geo-restrictions. Format: `http://user:pw@host:port` or `socks5://127.0.0.1:9050` (Tor). |
+
+### Platform
+
+| Env var | Default | Notes |
+|---|---|---|
+| `DYLD_FALLBACK_LIBRARY_PATH` | `/opt/homebrew/lib` (macOS) | WeasyPrint needs libgobject. Set automatically by `run.sh`. |
+| `LD_LIBRARY_PATH` | (system) | Linux equivalent — usually unset is correct. |
 
 ### Ephemeral-storage modes
 
@@ -288,6 +334,19 @@ instead of the raw 200-line yt-dlp stack trace. Examples:
 | "Page not found — the URL may be wrong, expired, or deleted" | 404 — check the URL |
 | "Geo-restricted — set EXPORT_HTTP_PROXY to a server in an allowed region" | Geographic block |
 
+## Running it
+
+| Command | What it does |
+|---|---|
+| `npm run dev` / `npm start` / `npm run watch` | Wraps `bash scripts/run.sh`. Auto-creates `.env` with a random password on first run. No actual Node deps — pure muscle-memory shim. |
+| `bash scripts/run.sh` | Same. Loads `.env`, sets `DYLD_FALLBACK_LIBRARY_PATH` on macOS, execs uvicorn on port 8500. |
+| `npm run install:macos` / `bash scripts/install-macos.sh` | One-shot macOS setup: brew installs (ffmpeg, pandoc, ghostscript, poppler, tesseract, pango, deno), LibreOffice cask, venv + `pip install -e .`. |
+| `npm run install:linux` / `bash scripts/install-linux.sh` | One-shot Debian/Ubuntu setup: apt installs, deno via official installer, venv + pip, downloads piper voice. Prints tmpfs guidance for ephemeral storage. |
+
+The first job that needs a downloaded model (Whisper, rembg, demucs, Piper)
+pauses ~30 s while it fetches and caches. Subsequent jobs reuse the cached
+model.
+
 ## Security & deployment scope
 
 `export` is built for **personal use** (localhost or your private network). If
@@ -296,6 +355,9 @@ with a friend — read [SECURITY.md](SECURITY.md) first. It contains an honest
 audit of the current security posture and a phased hardening roadmap (Phase 1:
 where we are; Phase 2: ~90 min of work for "trusted small group on the open
 internet"; Phase 3: real product territory).
+
+The Phase 2 hardening checklist explicitly includes setting `EXPORT_MAX_UPLOAD_MB`
+and enabling `EXPORT_DOWNLOAD_AUTODELETE=1` for any public exposure.
 
 ## License
 

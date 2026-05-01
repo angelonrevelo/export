@@ -66,7 +66,8 @@ opportunistically. T5 is a research project we explicitly punt on.
 
 | Item | State | Risk | Notes |
 |---|---|---|---|
-| 1-hour TTL cleanup loop | ✓ | — | Disk doesn't accumulate. |
+| 1-hour TTL cleanup loop (configurable) | ✓ | — | Disk doesn't accumulate. Tunable via `EXPORT_CLEANUP_AGE_SECONDS`. |
+| Stream-and-delete download mode | ⚙️ opt-in | — | `EXPORT_DOWNLOAD_AUTODELETE=1` gives true ephemeral storage (file deleted instant download finishes). Recommended for any public exposure. |
 | Lifespan-managed background tasks | ✓ | — | Clean shutdown on SIGTERM. |
 | Single-process FastAPI | ⚠️ | T3 | One CPU-bound job (Whisper, demucs) can stall API responses. |
 | No structured logging | ⚠️ | — | uvicorn logs only. No audit trail of who did what when. |
@@ -113,6 +114,16 @@ afternoon of work.
       `EXPORT_MAX_COMPRESS_MB=2000` (or whatever your disk can absorb).
       Default is unlimited which is correct for personal use but a trivial
       disk-fill DoS in any multi-user context.
+- [ ] **Enable stream-and-delete** — `EXPORT_DOWNLOAD_AUTODELETE=1` in
+      `.env`. Files + job dirs are nuked the instant the user finishes their
+      download. Combined with a tmpfs mount on `/tmp/export`, this gives
+      true ephemeral storage with zero retention.
+- [ ] **Shorten cleanup TTL** — `EXPORT_CLEANUP_AGE_SECONDS=900` (15 min)
+      so jobs the user abandoned don't sit around. Pair with
+      `EXPORT_CLEANUP_INTERVAL_SECONDS=60` for tighter sweeps.
+- [ ] **Mount /tmp/export as tmpfs** (Linux only) — RAM-backed storage,
+      auto-clears on reboot, no SSD wear, faster I/O. One line in
+      `/etc/fstab` (see `scripts/install-linux.sh` notes).
 - [ ] **Document the threat model clearly to the trusted users** — they know
       that abuse can shut things down for everyone (single shared password,
       no audit).
