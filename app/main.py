@@ -16,6 +16,7 @@ from .jobs import (
     AUDIO_DENOISE,
     AUDIO_FORMATS,
     AUDIO_STEMS,
+    AUDIO_TO_VIDEO,
     DOC_FORMATS,
     DOC_TO_PDF,
     FONT_FORMATS,
@@ -57,7 +58,7 @@ ALLOWED_UPLOAD_FORMATS = (
     | IMAGE_TO_NOBG | IMAGE_TO_SVG
     | PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS
     | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
-    | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS
+    | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO
     | OFFICE_TO_PDF | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
     | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT | SUBTITLE_FORMATS | FONT_FORMATS
 )
@@ -664,8 +665,8 @@ def capabilities():
         },
         "convert_outputs": {
             "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG),
-            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | WHISPER_OUTPUTS | {"txt"}),
-            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | {"txt"}),
+            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | {"txt"}),
+            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | {"txt"}),
             "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS),
             "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
             "office":      sorted(OFFICE_TO_PDF),

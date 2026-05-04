@@ -134,6 +134,9 @@ IMAGE_TO_SVG = {"svg"}
 # Audio AI: speech denoise (noisereduce) and music source separation (Demucs)
 AUDIO_DENOISE = {"denoise"}
 AUDIO_STEMS = {"stems"}
+# audio → mp4 with animated waveform on a dark bg. Useful for podcast clip
+# sharing on platforms that need a video (Twitter/IG/LinkedIn/etc).
+AUDIO_TO_VIDEO = {"audiogram"}
 
 SHRINK_LEVELS = {"low", "medium", "high"}
 # Pillow-readable image inputs. PSD/TGA/PCX/EPS/ICNS rely on Pillow's broader
@@ -1417,6 +1420,77 @@ def _audio_denoise(input_path: Path, out_dir: Path) -> Path:
     return out_path
 
 
+def _audio_to_audiogram(input_path: Path, out_dir: Path) -> Path:
+    """Render audio as a 1080×1080 mp4 with a static waveform of the whole clip
+    + an animated playhead that sweeps across as the audio plays.
+
+    Two-pass: (1) showwavespic generates a high-quality static waveform image
+    of the entire audio (filled-envelope mode, dynaudnorm normalized so quiet
+    podcasts still show detail); (2) composite that image onto a black canvas
+    and overlay a moving 8-px white playhead whose x position interpolates
+    from 0 to canvas width over the audio's duration.
+
+    Why waveform over spectrogram: spectrogram becomes unreadable noise when
+    you compress 1+ hour of audio into 1080 pixels (each column = ~4 s of FFT
+    averaging). Waveform compresses gracefully — the amplitude envelope still
+    reads as loud/quiet patterns over time at any clip length."""
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}_audiogram.mp4"
+
+    # Probe duration so the playhead's drawbox knows how fast to sweep.
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(input_path)],
+        capture_output=True, text=True,
+    )
+    try:
+        duration = max(float(probe.stdout.strip()), 0.5)
+    except (ValueError, AttributeError):
+        duration = 60.0  # fallback; playhead just won't be perfectly accurate
+
+    spec_png = out_dir / f"{stem}_wave.png"
+    # Pass 1: full-audio waveform → static png. dynaudnorm normalizes amplitude
+    # so quiet content still has visible peaks; showwavespic with draw=full
+    # fills between the min/max envelope (much more visually substantial than
+    # a thin line); split_channels=0 collapses stereo into one shape.
+    p1 = subprocess.run([
+        "ffmpeg", "-y", "-i", str(input_path),
+        "-filter_complex",
+        "aformat=channel_layouts=mono,dynaudnorm=p=0.9,"
+        "showwavespic=s=1080x500:colors=0x58a6ff:split_channels=0:draw=full",
+        str(spec_png),
+    ], capture_output=True, text=True)
+    if p1.returncode != 0:
+        raise RuntimeError(f"ffmpeg audiogram (waveform) failed: {p1.stderr.strip()[-500:]}")
+
+    # Pass 2: loop the spectrogram on a black canvas + sweeping playhead + audio.
+    # Playhead is a separate lavfi color source (8×500 px) overlaid with
+    # eval=frame so the x expression re-evaluates per frame. drawbox in this
+    # ffmpeg lacks an eval option and silently bakes its expressions at init
+    # time, so overlay is the only filter that can do the sweep correctly.
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-framerate", "30", "-i", str(spec_png),    # 0: spectrogram
+        "-i", str(input_path),                                      # 1: audio
+        "-f", "lavfi", "-i", "color=c=black:s=1080x1080:r=30",     # 2: canvas
+        "-f", "lavfi", "-i", f"color=c=white@0.85:s=8x500:d={duration}:r=30",  # 3: playhead
+        "-filter_complex",
+        f"[2:v][0:v]overlay=x=0:y=(H-h)/2[withspec];"
+        f"[withspec][3:v]overlay=x='min(t/{duration}*1080,1080-8)':y=290:"
+        f"eval=frame:format=auto,format=yuv420p[v]",
+        "-map", "[v]", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", "-shortest",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    spec_png.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg audiogram (mux) failed: {r.stderr.strip()[-500:]}")
+    return out_path
+
+
 def _audio_separate_stems(input_path: Path, out_dir: Path) -> Path:
     """Run Demucs htdemucs to split audio into vocals/drums/bass/other, then zip the stems."""
     stem = input_path.stem.removeprefix("input_")
@@ -1540,7 +1614,11 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _audio_denoise(input_path, out_dir)
     if is_audio_in and fmt in AUDIO_STEMS:
         return _audio_separate_stems(input_path, out_dir)
-    if is_audio_in and fmt in AUDIO_FORMATS:
+    # ffmpeg handles video containers transparently for audio extraction
+    # (-vn) and waveform rendering, so video → audio/audiogram is the same call.
+    if (is_audio_in or is_video_in) and fmt in AUDIO_TO_VIDEO:
+        return _audio_to_audiogram(input_path, out_dir)
+    if (is_audio_in or is_video_in) and fmt in AUDIO_FORMATS:
         return _convert_audio(input_path, fmt, out_dir)
     if is_office_in and fmt in OFFICE_TO_PDF:
         return _office_to_pdf(input_path, out_dir)

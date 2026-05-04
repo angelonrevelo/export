@@ -32,8 +32,8 @@ version.
 | Input type | Convert to | Other operations |
 |---|---|---|
 | **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns`) | `jpeg, png, webp, avif, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract), nobg (transparent PNG via rembg), svg (vectorize via vtracer)` | `shrink` (with quality slider) |
-| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv`) | `mp4, mov, webm, mkv, gif, txt, srt, vtt, notes (Whisper transcript)` | `shrink` (SVT-AV1 re-encode with quality slider) |
-| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt, notes (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split)` | — |
+| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv`) | `mp4, mov, webm, mkv, gif, mp3, m4a, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram` (1080×1080 mp4 with waveform + sweeping playhead), `txt, srt, vtt, notes` (Whisper transcript) | `shrink` (SVT-AV1 re-encode with quality slider) |
+| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt, notes (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split), audiogram (1080×1080 mp4 with full-clip waveform + sweeping playhead — useful for sharing podcast clips on platforms that need video)` | — |
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback for scanned), docx, pdfa (searchable PDF/A via OCRmyPDF)` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
 | **Office** (`.docx .doc .pptx .ppt .xlsx .xls .odp .ods .odt`) | `pdf` (via LibreOffice headless) | — |
@@ -176,7 +176,7 @@ For multi-file batch operations:
 | Frontend | Single HTML page, vanilla JS, no framework |
 | Job state | Python dict + FastAPI `BackgroundTasks` (single-process); folder-watch via `watchdog` |
 | Image | Pillow (incl. PSD/TGA/PCX/EPS/ICNS/JP2 read) + pillow-heif + pillow-avif-plugin |
-| Video / Audio | ffmpeg (libsvtav1, libx264, libvpx-vp9, libopus, libmp3lame, libvorbis, aac, flac) |
+| Video / Audio | ffmpeg (libsvtav1, libx264, libvpx-vp9, libopus, libmp3lame, libvorbis, aac, flac); audiogram pipeline uses `showwavespic` + `dynaudnorm` for the static waveform and `overlay` with `eval=frame` for the sweeping playhead |
 | URL extraction | yt-dlp[curl-cffi] (~1800 sites) + gallery-dl + deno (YouTube JS challenge solver) |
 | Documents | Pandoc (md/html/docx/rtf/epub/odt/tex/pptx/ipynb/...) + WeasyPrint + LibreOffice headless |
 | PDF | pypdf + pikepdf + reportlab + pdfplumber + pdf2docx + pdf2image + Ghostscript + OCRmyPDF |
@@ -301,8 +301,8 @@ the **show what's supported** link in the UI renders it inline. Snapshot:
 | Input → | image | pdf | docx | epub | html | md | txt | mp3 | mp4 | csv | xlsx | json | srt | vtt | ttf | woff2 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | image | ✓ | ✓ | — | — | — | — | OCR | — | — | — | — | — | — | — | — | — |
-| video | — | — | — | — | — | — | STT | — | ✓ | — | — | — | STT | STT | — | — |
-| audio | — | — | — | — | — | — | STT | ✓ | — | — | — | — | STT | STT | — | — |
+| video | — | — | — | — | — | — | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
+| audio | — | — | — | — | — | — | STT | ✓ | AG | — | — | — | STT | STT | — | — |
 | pdf | ✓ | OCR | ✓ | — | — | — | ✓+OCR | — | — | — | — | — | — | — | — | — |
 | document | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | TTS | — | — | — | — | — | — | — | — |
 | office | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
@@ -312,8 +312,10 @@ the **show what's supported** link in the UI renders it inline. Snapshot:
 | URL | — | — | — | — | — | — | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
 
 (`✓` = direct conversion, `OCR` = via Tesseract, `STT` = via Whisper, `TTS` =
-via `say`/piper, `—` = not exposed. The `image` row also covers special
-outputs `nobg` (transparent PNG) and `svg` (vectorized) that don't fit the matrix.)
+via `say`/piper, `AG` = audiogram (mp4 with waveform + playhead), `—` = not exposed.
+The `image` row also covers special outputs `nobg` (transparent PNG) and `svg`
+(vectorized) that don't fit the matrix; the `audio` row also produces `denoise`
+(noisereduce wav) and `stems` (Demucs zip).)
 
 ### Operations (not format conversions)
 
