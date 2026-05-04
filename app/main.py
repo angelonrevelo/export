@@ -33,12 +33,14 @@ from .jobs import (
     PDF_TO_TEXT,
     SHRINK_LEVELS,
     SPREADSHEET_FORMATS,
+    SPREADSHEET_TO_TEXT,
     SUBTITLE_FORMATS,
     TTS_AUDIO_FORMATS,
     VIDEO_TO_GIF,
     VIDEO_TO_VIDEO,
     WHISPER_OUTPUTS,
     jobs,
+    run_batch_convert_job,
     run_compress_job,
     run_convert_job,
     run_job,
@@ -47,6 +49,7 @@ from .jobs import (
     run_pdf_merge_job,
     run_pdf_op_job,
     run_shrink_job,
+    MERGEABLE_FORMATS,
 )
 
 ALLOWED_UPLOAD_FORMATS = (
@@ -56,7 +59,7 @@ ALLOWED_UPLOAD_FORMATS = (
     | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
     | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS
     | OFFICE_TO_PDF | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
-    | SPREADSHEET_FORMATS | SUBTITLE_FORMATS | FONT_FORMATS
+    | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT | SUBTITLE_FORMATS | FONT_FORMATS
 )
 # Upload caps — default UNLIMITED for local/personal use. Set
 # EXPORT_MAX_UPLOAD_MB or EXPORT_MAX_COMPRESS_MB to a positive integer to
@@ -77,7 +80,7 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
 
-CLEANUP_AGE_SECONDS = _env_int("EXPORT_CLEANUP_AGE_SECONDS", 3600)        # 1 h default
+CLEANUP_AGE_SECONDS = _env_int("EXPORT_CLEANUP_AGE_SECONDS", 21600)       # 6 h default
 CLEANUP_INTERVAL_SECONDS = _env_int("EXPORT_CLEANUP_INTERVAL_SECONDS", 900)  # 15 min default
 # When truthy (1/true/yes), delete the output file + job dir as soon as the
 # user finishes their download. Maximum-ephemeral mode for VPS deployments.
@@ -425,6 +428,71 @@ async def images_to_pdf(
     return {"job_id": job_id}
 
 
+@app.post("/api/batch")
+async def batch_convert(
+    bg: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    format: str = Form(...),
+    merge: str = Form("0"),
+    quality: int | None = Form(None),
+    x_password: str | None = Header(None),
+):
+    """Mass convert N homogeneous files to `format`. With merge=1, returns one
+    merged file using the format-aware merger in jobs.py:_merge_outputs:
+      pdf      → pypdf merge
+      xlsx     → multi-sheet workbook (one input per sheet)
+      json     → wrap as a single JSON array
+      csv/tsv  → header-deduped concatenation
+      srt/vtt/ass/ssa/sub/sbv → pysubs2 with cumulative timestamp shift
+      mp3/m4a/wav/flac/ogg/opus/aac/mp4/mov/webm/mkv → ffmpeg concat
+      jpeg/png/webp/avif/tiff/bmp → tile grid (cols=ceil(sqrt(N)))
+      txt/md/html/rtf/...        → labeled text concat
+    With merge=0 (or for non-mergeable formats), returns a zip of N converted files."""
+    check(x_password)
+    if not files or len(files) < 2:
+        raise HTTPException(status_code=400, detail="batch needs at least 2 files")
+    if format not in ALLOWED_UPLOAD_FORMATS:
+        raise HTTPException(status_code=400, detail=f"unsupported format: {format}")
+    do_merge = merge.lower() in ("1", "true", "yes", "on")
+    if do_merge and format not in MERGEABLE_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"format '{format}' is not mergeable (mergeable: {sorted(MERGEABLE_FORMATS)})",
+        )
+
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = DOWNLOADS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: list[Path] = []
+    total = 0
+    for f in files:
+        target = job_dir / f"input_{f.filename}"
+        with target.open("wb") as out:
+            while chunk := await f.read(1024 * 1024):
+                total += len(chunk)
+                if MAX_COMPRESS_TOTAL_BYTES and total > MAX_COMPRESS_TOTAL_BYTES:
+                    out.close()
+                    for p in saved + [target]:
+                        p.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="upload too large")
+                out.write(chunk)
+        saved.append(target)
+
+    label = f"merged {format}" if do_merge else f"{len(saved)} {format}s (zip)"
+    jobs[job_id] = {
+        "status": "pending",
+        "progress": 0,
+        "title": f"{len(saved)} files → {label}",
+        "error": None,
+        "filename": None,
+        "original_size": total,
+        "output_size": None,
+    }
+    bg.add_task(run_batch_convert_job, job_id, saved, format, DOWNLOADS_DIR, do_merge, quality)
+    return {"job_id": job_id}
+
+
 @app.post("/api/pdf/merge")
 async def pdf_merge(
     bg: BackgroundTasks,
@@ -601,7 +669,7 @@ def capabilities():
             "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS),
             "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
             "office":      sorted(OFFICE_TO_PDF),
-            "spreadsheet": sorted(SPREADSHEET_FORMATS),
+            "spreadsheet": sorted(SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT),
             "subtitle":    sorted(SUBTITLE_FORMATS),
             "font":        sorted(FONT_FORMATS),
         },
@@ -610,6 +678,7 @@ def capabilities():
             "compress_single_file": sorted(SINGLE_FILE_COMPRESS),
             "shrink_levels":        sorted(SHRINK_LEVELS),
             "pdf_ops":              sorted(list(PDF_OPS) + ["merge"]),
+            "batch_mergeable":      sorted(MERGEABLE_FORMATS),
         },
         "limits": {
             "max_upload_bytes":   MAX_UPLOAD_BYTES,        # 0 = unlimited

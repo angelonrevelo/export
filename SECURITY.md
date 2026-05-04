@@ -66,7 +66,7 @@ opportunistically. T5 is a research project we explicitly punt on.
 
 | Item | State | Risk | Notes |
 |---|---|---|---|
-| 1-hour TTL cleanup loop (configurable) | ✓ | — | Disk doesn't accumulate. Tunable via `EXPORT_CLEANUP_AGE_SECONDS`. |
+| 6-hour TTL cleanup loop (configurable) | ✓ | — | Disk doesn't accumulate. Tunable via `EXPORT_CLEANUP_AGE_SECONDS`. |
 | Stream-and-delete download mode | ⚙️ opt-in | — | `EXPORT_DOWNLOAD_AUTODELETE=1` gives true ephemeral storage (file deleted instant download finishes). Recommended for any public exposure. |
 | Lifespan-managed background tasks | ✓ | — | Clean shutdown on SIGTERM. |
 | Single-process FastAPI | ⚠️ | T3 | One CPU-bound job (Whisper, demucs) can stall API responses. |
@@ -94,12 +94,13 @@ afternoon of work.
       `Caddyfile`. Cert renewal is automatic.
 - [ ] **Move download auth from `?pw=` query param to short-lived signed
       tokens** — when a job becomes ready, mint a one-shot UUID download token
-      stored alongside the job, valid for 1 hour. Frontend calls
+      stored alongside the job, valid for 6 hours. Frontend calls
       `/api/files/{job_id}?token=<short-uuid>` instead of `?pw=<password>`.
       ~30 LOC change in `app/main.py` + `app/jobs.py`.
 - [ ] **Rate limiting** — `pip install slowapi`, decorate `/api/jobs`,
-      `/api/upload`, `/api/compress`, `/api/shrink`, `/api/pdf/*`. Default to
-      something like `30/minute` per IP. ~15 min.
+      `/api/upload`, `/api/compress`, `/api/shrink`, `/api/pdf/*`,
+      `/api/batch`, `/api/images/*`. Default to something like `30/minute`
+      per IP. ~15 min.
 - [ ] **SSRF guard in URL extractor** — before passing a URL to yt-dlp/gallery-dl,
       resolve its hostname, verify the resolved IP is not in any RFC1918
       private range (10/8, 172.16/12, 192.168/16), the link-local 169.254/16

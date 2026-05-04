@@ -103,6 +103,13 @@ DOC_INPUT_SUFFIXES = {
 # Spreadsheets via openpyxl + stdlib csv/json
 SPREADSHEET_FORMATS = {"csv", "tsv", "xlsx", "json"}
 SPREADSHEET_SUFFIXES = {f".{f}" for f in SPREADSHEET_FORMATS}
+# Spreadsheet inputs can also degrade to plain-text outputs — useful when the
+# JSON is nested and you just want a readable dump rather than a rectangular sheet.
+SPREADSHEET_TO_TEXT = {"txt", "md", "html"}
+# Heuristic: when rendering JSON to HTML, string values under these keys are
+# treated as raw HTML (rendered inline) rather than HTML-escaped. Useful for
+# nested content like {"reviewer": {"subtopics": [{"html": "<p>..."}]}}.
+_JSON_HTML_KEYS = {"html", "body", "content", "rendered", "markup"}
 
 # Subtitles via pysubs2
 SUBTITLE_FORMATS = {"srt", "vtt", "ass", "ssa", "sub", "sbv"}
@@ -328,10 +335,112 @@ def _convert_image(input_path: Path, target_fmt: str, out_dir: Path, quality: in
     return out_path
 
 
+def _html_page(title: str, body: str) -> str:
+    """Wrap body in a minimal styled HTML page (no external CSS/JS)."""
+    safe_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        f"<title>{safe_title}</title>"
+        "<style>"
+        "body{font:14px/1.55 -apple-system,system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem;color:#222;background:#fafafa}"
+        "h1{font-size:1.4rem;margin-bottom:1.5rem;color:#000}"
+        "dl{margin:0 0 0 0.75rem;border-left:2px solid #e5e5e5;padding-left:0.75rem}"
+        "dt{font-weight:600;color:#555;margin-top:0.4rem}"
+        "dd{margin:0 0 0.4rem 0.75rem}"
+        "ol,ul{margin:0.25rem 0 0.5rem 1.25rem;padding:0}"
+        "li{margin:0.15rem 0}"
+        ".raw-html{border:1px solid #e0e0e0;border-radius:4px;padding:0.5rem 0.75rem;background:#fff;margin:0.25rem 0}"
+        "table{border-collapse:collapse;width:100%;background:#fff}"
+        "th,td{border:1px solid #ddd;padding:0.4rem 0.6rem;text-align:left;vertical-align:top}"
+        "th{background:#f0f0f0}"
+        ".scalar{color:#0a4}"
+        ".key{color:#06c}"
+        "</style></head><body>"
+        f"<h1>{safe_title}</h1>{body}</body></html>"
+    )
+
+
+def _json_to_html(obj, key_hint: str | None = None) -> str:
+    """Recursively render a JSON value as styled HTML.
+    String values under keys in _JSON_HTML_KEYS are rendered raw (not escaped),
+    which makes nested {"html": "<h2>..."} content actually display."""
+    esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    if isinstance(obj, dict):
+        if not obj:
+            return "<em>(empty object)</em>"
+        parts = ["<dl>"]
+        for k, v in obj.items():
+            parts.append(f"<dt class=\"key\">{esc(k)}</dt><dd>{_json_to_html(v, key_hint=str(k).lower())}</dd>")
+        parts.append("</dl>")
+        return "".join(parts)
+    if isinstance(obj, list):
+        if not obj:
+            return "<em>(empty list)</em>"
+        items = "".join(f"<li>{_json_to_html(x, key_hint=key_hint)}</li>" for x in obj)
+        return f"<ol>{items}</ol>"
+    if obj is None:
+        return "<span class=\"scalar\">null</span>"
+    if isinstance(obj, bool):
+        return f"<span class=\"scalar\">{str(obj).lower()}</span>"
+    if isinstance(obj, (int, float)):
+        return f"<span class=\"scalar\">{obj}</span>"
+    s = str(obj)
+    if key_hint in _JSON_HTML_KEYS and "<" in s and ">" in s:
+        # Field key signals raw HTML — render it inline so users see formatted content.
+        return f"<div class=\"raw-html\">{s}</div>"
+    return esc(s)
+
+
+def _flatten_json_for_table(obj):
+    """Coerce arbitrary JSON into rows: list[list[Any]] with header row.
+    Tries (in order):
+      1. list[dict] → keys as header, values as rows
+      2. list[list] → raw rows
+      3. list of scalars → one column
+      4. dict with a nested list[dict] one level deep → use that
+      5. dict (anything else) → 2-col [key, value] sheet (values JSON-stringified)
+    Always returns rows; never raises."""
+    import json as json_mod
+    if isinstance(obj, list):
+        if not obj:
+            return [[]]
+        if isinstance(obj[0], dict):
+            keys = sorted({k for d in obj if isinstance(d, dict) for k in d.keys()},
+                          key=lambda k: list(obj[0].keys()).index(k) if k in obj[0] else 1e9)
+            return [keys] + [[d.get(k, "") if isinstance(d, dict) else "" for k in keys] for d in obj]
+        if isinstance(obj[0], list):
+            return obj
+        return [[v] for v in obj]
+    if isinstance(obj, dict):
+        # Look one level deep for a nested list of dicts (e.g. {"reviewer": {"subtopics": [...]}}).
+        def _walk(d, depth=0):
+            if depth > 3:
+                return None
+            if isinstance(d, list) and d and isinstance(d[0], dict):
+                return d
+            if isinstance(d, dict):
+                for v in d.values():
+                    found = _walk(v, depth + 1)
+                    if found:
+                        return found
+            return None
+        nested = _walk(obj)
+        if nested:
+            return _flatten_json_for_table(nested)
+        # Fallback: dump key/value as 2-column sheet, JSON-encode complex values.
+        rows = [["key", "value"]]
+        for k, v in obj.items():
+            v_str = v if isinstance(v, (str, int, float, bool)) or v is None \
+                    else json_mod.dumps(v, ensure_ascii=False)
+            rows.append([k, v_str])
+        return rows
+    return [["value"], [obj]]
+
+
 def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
-    """Cross-convert tabular data: csv ↔ tsv ↔ xlsx ↔ json. Reads first sheet
-    of multi-sheet xlsx. JSON must be a list of dicts (header row) or list of
-    lists (raw rows). Numbers and strings preserved; dates → ISO strings."""
+    """Cross-convert tabular data: csv ↔ tsv ↔ xlsx ↔ json, plus txt/md dump.
+    Reads first sheet of multi-sheet xlsx. Nested JSON is auto-tabularized:
+    looks for an inner list[dict], falls back to a 2-col key/value sheet."""
     import csv as csv_mod
     import json as json_mod
     import openpyxl
@@ -351,13 +460,7 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
         rows = [[cell.value for cell in row] for row in ws.iter_rows()]
     elif src == ".json":
         data = json_mod.loads(input_path.read_text(encoding="utf-8"))
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            keys = list(data[0].keys())
-            rows = [keys] + [[d.get(k, "") for k in keys] for d in data]
-        elif isinstance(data, list):
-            rows = data if not data or isinstance(data[0], list) else [[v] for v in data]
-        else:
-            raise RuntimeError("JSON must be a list of dicts or list of lists for tabular conversion")
+        rows = _flatten_json_for_table(data)
     else:
         raise RuntimeError(f"unsupported spreadsheet input: {src}")
 
@@ -379,12 +482,59 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
             ws.append([_stringify(c) for c in r])
         wb.save(out_path)
     elif target_fmt == "json":
-        if rows and len(rows) > 1:
+        if src == ".json":
+            # JSON → JSON: pass the original through unchanged (preserves nesting).
+            data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+        elif rows and len(rows) > 1:
             keys = [str(k) for k in rows[0]]
             data = [{k: _stringify(v) for k, v in zip(keys, r)} for r in rows[1:]]
         else:
             data = [list(r) for r in rows]
-        out_path.write_text(json_mod.dumps(data, indent=2, default=str), encoding="utf-8")
+        out_path.write_text(json_mod.dumps(data, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
+    elif target_fmt in ("txt", "md"):
+        # Plain-text dump. For JSON inputs we pretty-print the original (preserves
+        # nested structure & is the most useful "read me as text" form). For
+        # csv/tsv/xlsx we write a tab-aligned table.
+        if src == ".json":
+            data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+            body = json_mod.dumps(data, indent=2, ensure_ascii=False)
+            if target_fmt == "md":
+                body = f"```json\n{body}\n```\n"
+        else:
+            lines = ["\t".join(str(_stringify(c)) for c in r) for r in rows]
+            body = "\n".join(lines) + "\n"
+            if target_fmt == "md":
+                # Render as a real markdown table when there's a header + data.
+                if len(rows) >= 2:
+                    hdr = [str(_stringify(c)) for c in rows[0]]
+                    sep = ["---"] * len(hdr)
+                    md_rows = ["| " + " | ".join(hdr) + " |",
+                               "| " + " | ".join(sep) + " |"]
+                    for r in rows[1:]:
+                        md_rows.append("| " + " | ".join(str(_stringify(c)).replace("|", "\\|") for c in r) + " |")
+                    body = "\n".join(md_rows) + "\n"
+        out_path.write_text(body, encoding="utf-8")
+    elif target_fmt == "html":
+        # Render as a styled, readable HTML page. JSON walks the tree (with
+        # _JSON_HTML_KEYS rendered raw); csv/tsv/xlsx render as a real <table>.
+        if src == ".json":
+            data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+            body = _json_to_html(data)
+        else:
+            esc = lambda v: ("" if v is None else str(_stringify(v))).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+            if rows and len(rows) >= 2:
+                hdr = "".join(f"<th>{esc(c)}</th>" for c in rows[0])
+                body_rows = "".join(
+                    "<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>"
+                    for r in rows[1:]
+                )
+                body = f"<table><thead><tr>{hdr}</tr></thead><tbody>{body_rows}</tbody></table>"
+            else:
+                body = "<p><em>(empty)</em></p>"
+        title = stem.replace("_", " ")
+        out_path.write_text(_html_page(title, body), encoding="utf-8")
+    else:
+        raise RuntimeError(f"unsupported spreadsheet output: {target_fmt}")
     return out_path
 
 
@@ -1192,7 +1342,7 @@ def _format_ts(seconds: float, comma: bool) -> str:
     return out.replace(".", ",") if comma else out
 
 
-def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path, job: dict | None = None) -> Path:
     from faster_whisper import WhisperModel
     name = os.environ.get("EXPORT_WHISPER_MODEL", "distil-large-v3")
     if _whisper_state["model"] is None or _whisper_state["name"] != name:
@@ -1205,8 +1355,15 @@ def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path)
 
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{target_fmt}"
-    segments_iter, _info = model.transcribe(str(input_path), beam_size=1)
-    segments = list(segments_iter)
+    segments_iter, info = model.transcribe(str(input_path), beam_size=1)
+    # Drain the generator ourselves so we can publish per-segment progress.
+    # info.duration is the audio length in seconds; s.end advances toward it.
+    duration = max(float(getattr(info, "duration", 0.0) or 0.0), 0.001)
+    segments = []
+    for s in segments_iter:
+        segments.append(s)
+        if job is not None:
+            job["progress"] = max(1, min(99, int(100 * s.end / duration)))
 
     if target_fmt == "txt":
         out_path.write_text(
@@ -1339,69 +1496,304 @@ def _doc_to_pdf(input_path: Path, out_dir: Path) -> Path:
     return out_path
 
 
+def _convert_one(input_path: Path, fmt: str, out_dir: Path,
+                 quality: int | None = None, job: dict | None = None) -> Path:
+    """Single-file convert dispatch. Shared by run_convert_job and run_batch_convert_job.
+    Caller is responsible for cleanup of input_path after success."""
+    suffix = input_path.suffix.lower()
+    is_image_in       = suffix in IMAGE_SUFFIXES
+    is_pdf_in         = suffix in PDF_SUFFIXES
+    is_video_in       = suffix in VIDEO_SUFFIXES
+    is_audio_in       = suffix in AUDIO_SUFFIXES
+    is_office_in      = suffix in OFFICE_SUFFIXES
+    is_doc_in         = suffix in DOC_INPUT_SUFFIXES
+    is_spreadsheet_in = suffix in SPREADSHEET_SUFFIXES
+    is_subtitle_in    = suffix in SUBTITLE_SUFFIXES
+    is_font_in        = suffix in FONT_SUFFIXES
+    if is_image_in and fmt in IMAGE_FORMATS:
+        return _convert_image(input_path, fmt, out_dir, quality=quality)
+    if is_image_in and fmt in IMAGE_TO_PDF:
+        return _image_to_pdf(input_path, out_dir)
+    if is_image_in and fmt in IMAGE_TO_TEXT:
+        return _image_to_text(input_path, out_dir)
+    if is_image_in and fmt in IMAGE_TO_NOBG:
+        return _image_remove_bg(input_path, out_dir)
+    if is_image_in and fmt in IMAGE_TO_SVG:
+        return _image_to_svg(input_path, out_dir)
+    if is_pdf_in and fmt in PDF_TO_IMAGE:
+        return _pdf_to_images(input_path, fmt, out_dir)
+    if is_pdf_in and fmt in PDF_TO_TEXT:
+        return _pdf_to_text(input_path, out_dir)
+    if is_pdf_in and fmt in PDF_TO_DOCX:
+        return _pdf_to_docx(input_path, out_dir)
+    if is_pdf_in and fmt in PDF_OCR_OUTPUTS:
+        return _pdf_to_pdfa(input_path, out_dir)
+    if is_video_in and fmt in VIDEO_TO_GIF:
+        return _video_to_gif(input_path, out_dir)
+    if is_video_in and fmt in VIDEO_TO_VIDEO:
+        return _convert_video(input_path, fmt, out_dir, quality=quality)
+    if (is_audio_in or is_video_in) and fmt in WHISPER_OUTPUTS:
+        return _audio_video_to_transcript(input_path, fmt, out_dir, job=job)
+    if (is_audio_in or is_video_in) and fmt == "txt":
+        return _audio_video_to_transcript(input_path, "txt", out_dir, job=job)
+    if is_audio_in and fmt in AUDIO_DENOISE:
+        return _audio_denoise(input_path, out_dir)
+    if is_audio_in and fmt in AUDIO_STEMS:
+        return _audio_separate_stems(input_path, out_dir)
+    if is_audio_in and fmt in AUDIO_FORMATS:
+        return _convert_audio(input_path, fmt, out_dir)
+    if is_office_in and fmt in OFFICE_TO_PDF:
+        return _office_to_pdf(input_path, out_dir)
+    if suffix in TTS_INPUT_SUFFIXES and fmt in TTS_AUDIO_FORMATS:
+        return _text_to_audio(input_path, fmt, out_dir)
+    if is_doc_in and fmt in DOC_TO_PDF:
+        return _doc_to_pdf(input_path, out_dir)
+    if fmt in DOC_FORMATS and is_doc_in:
+        return _convert_doc(input_path, fmt, out_dir)
+    if is_spreadsheet_in and (fmt in SPREADSHEET_FORMATS or fmt in SPREADSHEET_TO_TEXT):
+        return _convert_spreadsheet(input_path, fmt, out_dir)
+    if is_subtitle_in and fmt in SUBTITLE_FORMATS:
+        return _convert_subtitle(input_path, fmt, out_dir)
+    if is_font_in and fmt in FONT_FORMATS:
+        return _convert_font(input_path, fmt, out_dir)
+    raise ValueError(f"no bridge: {suffix or '(no ext)'} → {fmt}")
+
+
+# Output formats that can be meaningfully merged into one file.
+# Text-like → concat with separator. PDF → pypdf merge. Audio/video → ffmpeg concat.
+# Subtitles → pysubs2 with timestamp shifting. xlsx → multi-sheet workbook.
+# Images → tile grid into one larger image.
+TEXT_MERGE_FORMATS = {"txt", "md", "markdown", "csv", "tsv", "json", "html", "htm",
+                      "rtf", "tex", "org", "rst", "notes"}
+SUBTITLE_MERGE_FORMATS = {"srt", "vtt", "ass", "ssa", "sub", "sbv"}
+AV_MERGE_FORMATS = {"mp3", "m4a", "wav", "flac", "ogg", "opus", "aac",
+                    "mp4", "mov", "webm", "mkv"}
+IMAGE_MERGE_FORMATS = {"jpeg", "jpg", "png", "webp", "avif", "tiff", "bmp"}
+SHEET_MERGE_FORMATS = {"xlsx"}
+MERGEABLE_FORMATS = (TEXT_MERGE_FORMATS | SUBTITLE_MERGE_FORMATS | AV_MERGE_FORMATS
+                     | IMAGE_MERGE_FORMATS | SHEET_MERGE_FORMATS | {"pdf"})
+
+
+def _merge_outputs(paths: list[Path], fmt: str, out_dir: Path) -> Path:
+    """Merge N converted outputs of the same format into a single file."""
+    if not paths:
+        raise RuntimeError("nothing to merge")
+    if fmt == "pdf":
+        return _pdf_merge(paths, out_dir)
+    if fmt == "json":
+        # Always produce a valid JSON array. If each file is itself an array,
+        # the natural merge is element-wise concat; otherwise wrap each as an
+        # element. Mixed shapes degrade to wrapping.
+        import json as json_mod
+        out_path = out_dir / "merged.json"
+        items: list = []
+        for p in paths:
+            obj = json_mod.loads(p.read_text(encoding="utf-8"))
+            if isinstance(obj, list):
+                items.extend(obj)
+            else:
+                items.append(obj)
+        out_path.write_text(json_mod.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+        return out_path
+    if fmt == "xlsx":
+        # Multi-sheet workbook: each input file becomes its own sheet.
+        # Sheet names use the input filename (truncated to xlsx's 31-char cap).
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)  # drop default empty sheet
+        seen: set[str] = set()
+        for p in paths:
+            src_wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+            for ws_idx, src_ws in enumerate(src_wb.worksheets):
+                base = p.stem.removeprefix("input_")
+                if len(src_wb.worksheets) > 1:
+                    base = f"{base}_{src_ws.title}"
+                # xlsx sheet names: ≤31 chars, no []:*?/\
+                name = "".join(c if c not in r"[]:*?/\\" else "_" for c in base)[:31] or "sheet"
+                # Dedupe: append _2, _3 if collision
+                final = name
+                n = 2
+                while final in seen:
+                    suffix = f"_{n}"
+                    final = name[:31 - len(suffix)] + suffix
+                    n += 1
+                seen.add(final)
+                new_ws = wb.create_sheet(final)
+                for row in src_ws.iter_rows(values_only=True):
+                    new_ws.append(list(row))
+        out_path = out_dir / "merged.xlsx"
+        wb.save(out_path)
+        return out_path
+    if fmt in SUBTITLE_MERGE_FORMATS:
+        # pysubs2 merge with cumulative time-shift so file 2's events start
+        # after file 1's last cue ends. Otherwise concatenated subtitles all
+        # collide at 00:00:00 and the last one wins.
+        import pysubs2
+        merged = pysubs2.SSAFile()
+        offset_ms = 0
+        for p in paths:
+            subs = pysubs2.load(str(p))
+            for ev in subs.events:
+                ev2 = ev.copy()
+                ev2.start += offset_ms
+                ev2.end += offset_ms
+                merged.events.append(ev2)
+            if subs.events:
+                offset_ms = max(offset_ms, max(ev.end for ev in merged.events))
+        out_path = out_dir / f"merged.{fmt}"
+        merged.save(str(out_path), format_=fmt)
+        return out_path
+    if fmt in IMAGE_MERGE_FORMATS:
+        # Tile N images in a roughly-square grid: cols = ceil(sqrt(N)).
+        # Each cell is sized to the max input dimension in each axis; smaller
+        # images are letterboxed (centered with padding) so nothing is cropped.
+        import math
+        n = len(paths)
+        cols = int(math.ceil(math.sqrt(n)))
+        rows = int(math.ceil(n / cols))
+        imgs = [ImageOps.exif_transpose(Image.open(p)) for p in paths]
+        for img in imgs:
+            img.load()
+        # Convert to RGB once so we have a consistent mode (alpha not preserved
+        # for jpeg/avif; png/webp keep transparency by switching to RGBA).
+        keep_alpha = fmt in {"png", "webp", "tiff"}
+        target_mode = "RGBA" if keep_alpha else "RGB"
+        normalized = []
+        for img in imgs:
+            if img.mode != target_mode:
+                if target_mode == "RGB" and img.mode in ("RGBA", "LA", "P"):
+                    bg = Image.new("RGB", img.size, (255, 255, 255))
+                    bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
+                    img = bg
+                else:
+                    img = img.convert(target_mode)
+            normalized.append(img)
+        cell_w = max(i.width for i in normalized)
+        cell_h = max(i.height for i in normalized)
+        bg_color = (0, 0, 0, 0) if keep_alpha else (255, 255, 255)
+        canvas = Image.new(target_mode, (cell_w * cols, cell_h * rows), bg_color)
+        for idx, img in enumerate(normalized):
+            r, c = divmod(idx, cols)
+            x = c * cell_w + (cell_w - img.width) // 2
+            y = r * cell_h + (cell_h - img.height) // 2
+            canvas.paste(img, (x, y))
+        save_fmt = "JPEG" if fmt in ("jpeg", "jpg") else fmt.upper()
+        out_path = out_dir / f"merged.{fmt}"
+        save_kwargs = {}
+        if fmt in ("jpeg", "jpg"):
+            save_kwargs.update({"quality": 92, "optimize": True, "progressive": True})
+        elif fmt == "webp":
+            save_kwargs.update({"quality": 92, "method": 6})
+        elif fmt == "avif":
+            save_kwargs.update({"quality": 80})
+        canvas.save(out_path, save_fmt, **save_kwargs)
+        return out_path
+    if fmt in {"csv", "tsv"}:
+        # Keep the header from file 1, drop the header (first row) from files 2..N
+        # if every file has the same column count — typical multi-export merge.
+        import csv as csv_mod
+        delim = "\t" if fmt == "tsv" else ","
+        loaded = []
+        for p in paths:
+            with p.open("r", encoding="utf-8-sig", newline="") as f:
+                loaded.append(list(csv_mod.reader(f, delimiter=delim)))
+        same_width = len({len(rs[0]) for rs in loaded if rs}) == 1
+        merged_rows: list[list] = []
+        for i, rs in enumerate(loaded):
+            if not rs:
+                continue
+            merged_rows.extend(rs if i == 0 or not same_width else rs[1:])
+        out_path = out_dir / f"merged.{fmt}"
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            csv_mod.writer(f, delimiter=delim).writerows(merged_rows)
+        return out_path
+    if fmt in TEXT_MERGE_FORMATS:
+        out_path = out_dir / f"merged.{fmt}"
+        chunks = []
+        for p in paths:
+            label = p.name
+            try:
+                body = p.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                body = p.read_text(encoding="utf-8", errors="replace")
+            chunks.append(f"--- {label} ---\n{body.rstrip()}\n")
+        out_path.write_text("\n".join(chunks), encoding="utf-8")
+        return out_path
+    if fmt in AV_MERGE_FORMATS:
+        # ffmpeg concat demuxer requires same codec/sample rate. Since these
+        # files just came from the same conversion target, that should hold.
+        list_path = out_dir / "_concat.txt"
+        list_path.write_text(
+            "\n".join(f"file '{p.as_posix()}'" for p in paths),
+            encoding="utf-8",
+        )
+        out_path = out_dir / f"merged.{fmt}"
+        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+               "-i", str(list_path), "-c", "copy", str(out_path)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        list_path.unlink(missing_ok=True)
+        if r.returncode != 0:
+            # Re-encode fallback for cases where -c copy fails (codec mismatch
+            # at container level — rare here but possible with VBR audio).
+            cmd_re = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                      "-i", str(list_path), str(out_path)]
+            list_path.write_text(
+                "\n".join(f"file '{p.as_posix()}'" for p in paths),
+                encoding="utf-8",
+            )
+            r = subprocess.run(cmd_re, capture_output=True, text=True)
+            list_path.unlink(missing_ok=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"ffmpeg concat failed: {r.stderr.strip()[-400:]}")
+        return out_path
+    raise ValueError(f"format not mergeable: {fmt}")
+
+
+def run_batch_convert_job(job_id: str, input_paths: list[Path], fmt: str,
+                          downloads_dir: Path, merge: bool = False,
+                          quality: int | None = None) -> None:
+    """Convert N homogeneous files to fmt. If merge=True, return one merged file;
+    otherwise zip the N outputs. Per-file errors abort the whole job."""
+    job = jobs[job_id]
+    out_dir = downloads_dir / job_id
+    try:
+        job["status"] = "converting"
+        outputs: list[Path] = []
+        total = len(input_paths)
+        for i, p in enumerate(input_paths, 1):
+            outputs.append(_convert_one(p, fmt, out_dir, quality=quality, job=job))
+            job["progress"] = max(1, min(99, int(100 * i / total)))
+        if merge:
+            merged = _merge_outputs(outputs, fmt, out_dir)
+            for o in outputs:
+                if o != merged:
+                    o.unlink(missing_ok=True)
+            target = merged
+        else:
+            zip_name = f"converted_{total}_{fmt}.zip"
+            target = out_dir / zip_name
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_STORED) as zf:
+                for o in outputs:
+                    zf.write(o, arcname=o.name)
+            for o in outputs:
+                o.unlink(missing_ok=True)
+        for p in input_paths:
+            p.unlink(missing_ok=True)
+        job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
+        job["progress"] = 100
+        job["status"] = "ready"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
 def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path, quality: int | None = None) -> None:
     job = jobs[job_id]
     out_dir = downloads_dir / job_id
     try:
         job["status"] = "converting"
-        suffix = input_path.suffix.lower()
-        is_image_in       = suffix in IMAGE_SUFFIXES
-        is_pdf_in         = suffix in PDF_SUFFIXES
-        is_video_in       = suffix in VIDEO_SUFFIXES
-        is_audio_in       = suffix in AUDIO_SUFFIXES
-        is_office_in      = suffix in OFFICE_SUFFIXES
-        is_doc_in         = suffix in DOC_INPUT_SUFFIXES
-        is_spreadsheet_in = suffix in SPREADSHEET_SUFFIXES
-        is_subtitle_in    = suffix in SUBTITLE_SUFFIXES
-        is_font_in        = suffix in FONT_SUFFIXES
-        if is_image_in and fmt in IMAGE_FORMATS:
-            target = _convert_image(input_path, fmt, out_dir, quality=quality)
-        elif is_image_in and fmt in IMAGE_TO_PDF:
-            target = _image_to_pdf(input_path, out_dir)
-        elif is_image_in and fmt in IMAGE_TO_TEXT:
-            target = _image_to_text(input_path, out_dir)
-        elif is_image_in and fmt in IMAGE_TO_NOBG:
-            target = _image_remove_bg(input_path, out_dir)
-        elif is_image_in and fmt in IMAGE_TO_SVG:
-            target = _image_to_svg(input_path, out_dir)
-        elif is_pdf_in and fmt in PDF_TO_IMAGE:
-            target = _pdf_to_images(input_path, fmt, out_dir)
-        elif is_pdf_in and fmt in PDF_TO_TEXT:
-            target = _pdf_to_text(input_path, out_dir)
-        elif is_pdf_in and fmt in PDF_TO_DOCX:
-            target = _pdf_to_docx(input_path, out_dir)
-        elif is_pdf_in and fmt in PDF_OCR_OUTPUTS:
-            target = _pdf_to_pdfa(input_path, out_dir)
-        elif is_video_in and fmt in VIDEO_TO_GIF:
-            target = _video_to_gif(input_path, out_dir)
-        elif is_video_in and fmt in VIDEO_TO_VIDEO:
-            target = _convert_video(input_path, fmt, out_dir, quality=quality)
-        elif (is_audio_in or is_video_in) and fmt in WHISPER_OUTPUTS:
-            target = _audio_video_to_transcript(input_path, fmt, out_dir)
-        elif (is_audio_in or is_video_in) and fmt == "txt":
-            target = _audio_video_to_transcript(input_path, "txt", out_dir)
-        elif is_audio_in and fmt in AUDIO_DENOISE:
-            target = _audio_denoise(input_path, out_dir)
-        elif is_audio_in and fmt in AUDIO_STEMS:
-            target = _audio_separate_stems(input_path, out_dir)
-        elif is_audio_in and fmt in AUDIO_FORMATS:
-            target = _convert_audio(input_path, fmt, out_dir)
-        elif is_office_in and fmt in OFFICE_TO_PDF:
-            target = _office_to_pdf(input_path, out_dir)
-        elif suffix in TTS_INPUT_SUFFIXES and fmt in TTS_AUDIO_FORMATS:
-            target = _text_to_audio(input_path, fmt, out_dir)
-        elif is_doc_in and fmt in DOC_TO_PDF:
-            target = _doc_to_pdf(input_path, out_dir)
-        elif fmt in DOC_FORMATS and is_doc_in:
-            target = _convert_doc(input_path, fmt, out_dir)
-        elif is_spreadsheet_in and fmt in SPREADSHEET_FORMATS:
-            target = _convert_spreadsheet(input_path, fmt, out_dir)
-        elif is_subtitle_in and fmt in SUBTITLE_FORMATS:
-            target = _convert_subtitle(input_path, fmt, out_dir)
-        elif is_font_in and fmt in FONT_FORMATS:
-            target = _convert_font(input_path, fmt, out_dir)
-        else:
-            raise ValueError(f"no bridge: {suffix or '(no ext)'} → {fmt}")
+        target = _convert_one(input_path, fmt, out_dir, quality=quality, job=job)
         input_path.unlink(missing_ok=True)
         job["filename"] = target.name
         job["progress"] = 100
@@ -1437,7 +1829,7 @@ def run_job(job_id: str, url: str, fmt: str, downloads_dir: Path) -> None:
             # Reset progress so the bar doesn't look "done" during the slow Whisper pass
             job["progress"] = 0
             job["status"] = "transcribing"
-            target = _audio_video_to_transcript(audio, fmt, out_dir)
+            target = _audio_video_to_transcript(audio, fmt, out_dir, job=job)
             audio.unlink(missing_ok=True)  # drop intermediate mp3
         else:
             title = _run_ytdlp(job, url, fmt, out_dir)

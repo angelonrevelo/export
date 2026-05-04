@@ -37,7 +37,7 @@ version.
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback for scanned), docx, pdfa (searchable PDF/A via OCRmyPDF)` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
 | **Office** (`.docx .doc .pptx .ppt .xlsx .xls .odp .ods .odt`) | `pdf` (via LibreOffice headless) | — |
-| **Spreadsheet** (`.csv .tsv .xlsx .json`) | `csv, tsv, xlsx, json` (cross-conversion via openpyxl + stdlib csv/json; tabular JSON only) | — |
+| **Spreadsheet** (`.csv .tsv .xlsx .json`) | `csv, tsv, xlsx, json, txt, md, html` (cross-conversion via openpyxl + stdlib csv/json). **Nested JSON is auto-tolerated** — walks 3 levels deep for an inner `list[dict]`; otherwise degrades to a 2-col `key/value` sheet with complex values JSON-encoded. `html` renders the JSON as a styled `<dl>` tree, with string values under fields keyed `html` / `body` / `content` / `rendered` / `markup` rendered as inline HTML rather than escaped. | — |
 | **Subtitle** (`.srt .vtt .ass .ssa .sub .sbv`) | `srt, vtt, ass, ssa, sub, sbv` (cross-conversion via pysubs2) | — |
 | **Font** (`.ttf .otf .woff .woff2`) | `ttf, otf, woff, woff2` (container conversion via fontTools — TTF↔OTF is a no-op, woff/woff2 wrap or unwrap) | — |
 
@@ -47,8 +47,9 @@ version.
 |---|---|---|
 | **archive** (multi-file) | any files | `zip`, `7z`, `tar.zst` (3.8× smaller than tar.gz at zstd level 10), `tar.gz`, `tar.bz2`, `tar.xz` |
 | **single-file compress** | one file | `gz`, `bz2`, `xz`, `zst` (raw stream compression — no tar wrapper) |
-| **PDF merge** | 2+ PDFs | single combined PDF |
-| **Image batch convert** | 2+ images | `pdf` (multi-page), `jpeg / png / webp / avif` (each converted, zipped), `gif` (animated slideshow, 2 s/frame), `mp4` (libx264 slideshow, 3 s/frame). EXIF rotation auto-applied; per-tile rotate (↺ / ↻) and remove (✕) controls in the UI. |
+| **PDF merge** | 2+ PDFs | single combined PDF (pypdf) |
+| **Image batch — multi-shape** | 2+ images | `pdf` (multi-page), `gif` (animated slideshow, 2 s/frame), `mp4` (libx264 slideshow, 3 s/frame). EXIF rotation auto-applied; per-tile rotate (↺ / ↻) and remove (✕) controls. Routes through `/api/images/batch`. |
+| **Generic batch convert** | 2+ files of the same type | Each file runs through the normal single-file convert pipeline. Output mode toggle: **1:1** (zip of N converted files) or **merge** (one combined file). Routes through `/api/batch`. **39 mergeable target formats**, smart per-family: PDF (pypdf merge); text-like `txt md csv json html rtf …` (concat with `--- filename ---` separators; JSON wraps as a real array; CSV/TSV de-dupes header rows); subtitles `srt vtt ass ssa sub sbv` (pysubs2 with cumulative time-shift so cues don't overlap); audio `mp3 m4a wav flac ogg opus aac` and video `mp4 mov webm mkv` (ffmpeg concat with `-c copy` fast path + re-encode fallback); images `jpeg png webp avif tiff bmp` (tile grid — `cols=⌈√N⌉` rows of max-cell-size, smaller images letterboxed); xlsx (multi-sheet workbook, one sheet per input file, names truncated to 31-char cap). Non-mergeable targets fall back to zip mode. |
 
 ### Lossy shrink levels
 
@@ -104,7 +105,7 @@ For a real deployment, see [scripts/export.service](scripts/export.service)
 
 Single-process FastAPI app. Job state lives in a Python dict; downloaded files
 in `$EXPORT_DOWNLOADS` (default `/tmp/export/`). A lifespan-managed cleanup loop
-deletes job dirs older than 1 h every 15 min.
+deletes job dirs older than 6 h every 15 min.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -118,8 +119,9 @@ deletes job dirs older than 1 h every 15 min.
 │   │   /api/shrink          → lossy size   │     │
 │   │   /api/pdf/merge       → multi-PDF    │     │
 │   │   /api/pdf/op          → split/rot/.. │     │
-│   │   /api/images/batch    → N img → 1    │     │
+│   │   /api/images/batch    → img→pdf/gif/mp4│   │
 │   │   /api/images/to-pdf   → legacy       │     │
+│   │   /api/batch           → N→zip or merge│    │
 │   │   /api/thumbnail       → server prev. │     │
 │   │   /api/jobs/:id        → poll status  │     │
 │   │   /api/files/:id       → download     │     │
@@ -151,10 +153,20 @@ To add one new bridge in [app/jobs.py](app/jobs.py):
 That's the whole pattern. ~30 lines per new conversion. No abstraction needed
 until you have ≥10 handlers in one input domain.
 
-For multi-file batch operations (like `/api/images/batch`), follow the
-existing pattern: dedicated endpoint that takes `list[UploadFile]`, dispatches
-into a `_batch_*` helper that handles each input then either zips them or
-combines into one output.
+For multi-file batch operations:
+
+- **Generic homogeneous batch** (`/api/batch`) handles "N files of the same
+  type → zip-of-N or one merged file" using the shared `_convert_one` dispatch
+  per file. To make a new target format **mergeable**, extend
+  [app/jobs.py](app/jobs.py)'s `_merge_outputs` with a new `if fmt in …:`
+  branch (mirror the existing PDF / xlsx / subtitle / image-tile / text-concat
+  / ffmpeg-concat branches), add the format to `MERGEABLE_FORMATS`, and add it
+  to `MERGEABLE_OUTPUT_FORMATS` in [static/index.html](static/index.html) so
+  the frontend's merge toggle appears.
+- **Special multi-shape batches** (like `/api/images/batch`'s pdf/gif/mp4
+  outputs) get their own dedicated endpoint: `list[UploadFile]` → a `_batch_*`
+  helper that produces an output shape that doesn't fit the "N → 1 of same fmt"
+  pattern (multi-page PDF, animated GIF, slideshow MP4).
 
 ### Tech stack
 
@@ -198,7 +210,7 @@ effect as not setting it.
 | `EXPORT_DOWNLOADS` | `/tmp/export` | Where job output lives. Mount as tmpfs for RAM-backed ephemeral storage on a VPS. |
 | `EXPORT_MAX_UPLOAD_MB` | `0` (unlimited) | Per-file upload cap in MB. Set to a positive integer only if exposing publicly. |
 | `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge / batch. |
-| `EXPORT_CLEANUP_AGE_SECONDS` | `3600` (1 h) | Age threshold for the lifespan cleanup loop. Lower for more-ephemeral storage. |
+| `EXPORT_CLEANUP_AGE_SECONDS` | `21600` (6 h) | Age threshold for the lifespan cleanup loop. Lower for more-ephemeral storage; raise if you process long files and download later. |
 | `EXPORT_CLEANUP_INTERVAL_SECONDS` | `900` (15 min) | How often the cleanup loop sweeps. |
 | `EXPORT_DOWNLOAD_AUTODELETE` | (off) | When `1` / `true` / `yes`, the output file + job dir are deleted the *instant* the download stream finishes. Maximum-ephemeral mode. |
 
@@ -271,7 +283,7 @@ The error messages surfaced in the UI are humanized — instead of a 200-line yt
 
 - Single file upload: **unlimited** by default (set `EXPORT_MAX_UPLOAD_MB=N` to cap)
 - Multi-file (compress / merge / batch): **unlimited** by default (set `EXPORT_MAX_COMPRESS_MB=N` to cap)
-- Job dirs auto-deleted after 1 hour (lifespan-managed cleanup loop)
+- Job dirs auto-deleted after 6 hours (lifespan-managed cleanup loop)
 - Single-process — concurrent jobs share CPU; not designed for multi-tenant load
 - Whisper is single-instance — concurrent transcriptions queue serially
 - LibreOffice cold-starts each office→PDF call (~3 s); could daemonize with
@@ -294,7 +306,7 @@ the **show what's supported** link in the UI renders it inline. Snapshot:
 | pdf | ✓ | OCR | ✓ | — | — | — | ✓+OCR | — | — | — | — | — | — | — | — | — |
 | document | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | TTS | — | — | — | — | — | — | — | — |
 | office | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| spreadsheet | — | — | — | — | — | — | — | — | — | ✓ | ✓ | ✓ | — | — | — | — |
+| spreadsheet | — | — | — | — | ✓ | ✓ | ✓ | — | — | ✓ | ✓ | ✓ | — | — | — | — |
 | subtitle | — | — | — | — | — | — | — | — | — | — | — | — | ✓ | ✓ | — | — |
 | font | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✓ | ✓ |
 | URL | — | — | — | — | — | — | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
@@ -310,11 +322,12 @@ outputs `nobg` (transparent PNG) and `svg` (vectorized) that don't fit the matri
 | `shrink` | image / video / pdf | Lossy size reduction with `low / medium / high` presets + advanced quality slider (1–100) |
 | `compress` (archive) | any files | `zip` / `7z` / `tar.zst` / `tar.gz` / `tar.bz2` / `tar.xz` |
 | `compress` (single-file) | one file | `gz` / `bz2` / `xz` / `zst` (raw stream, no tar) |
-| `merge` | 2+ PDFs | Single combined PDF |
+| `merge` | 2+ PDFs | Single combined PDF (pypdf) |
 | `split` | one PDF | Each page as a separate PDF, zipped |
 | `rotate` / `watermark` / `encrypt` / `decrypt` | one PDF | Per-PDF operations |
-| Image batch convert | 2+ images | PDF / batch zip / animated GIF / MP4 slideshow |
-- Job dirs auto-deleted after 1 hour
+| Image batch (multi-shape) | 2+ images | `pdf` (multi-page) / animated `gif` / `mp4` slideshow |
+| Generic batch convert | 2+ same-type files | Each file converted, then either zipped 1:1 or merged into one. **39 mergeable target formats** with format-aware mergers (PDF, text concat, JSON array, CSV/TSV header-dedupe, subtitle time-shift, audio/video ffmpeg concat, image tile grid, xlsx multi-sheet workbook). |
+- Job dirs auto-deleted after 6 hours (tunable via `EXPORT_CLEANUP_AGE_SECONDS`)
 - Single-process — concurrent jobs share CPU; not designed for multi-tenant load
   (deferred until needed; would migrate to `arq + Redis` per the research)
 - Whisper is single-instance — concurrent transcriptions queue serially

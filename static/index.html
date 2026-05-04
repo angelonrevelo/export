@@ -238,6 +238,9 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
       <select id="opt-select"></select>
       <input type="text" id="opt-input" style="display:none; flex:1;" placeholder="">
     </div>
+    <div id="merge-row" hidden style="margin: -0.25rem 0 0.5rem 6.5rem; color:#888; font-size:0.85em;">
+      <label style="cursor:pointer;"><input type="checkbox" id="merge-toggle"> merge into one file</label>
+    </div>
     <div id="adv-toggle" hidden>
       <a href="#" id="adv-link">advanced ▾</a>
     </div>
@@ -282,7 +285,7 @@ const TYPES = {
                  convertTo: ["pdf"], shrink: false },
   pdf:         { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","docx","pdfa"], shrink: true },
   spreadsheet: { exts: ["csv","tsv","xlsx","json"],
-                 convertTo: ["csv","tsv","xlsx","json"], shrink: false },
+                 convertTo: ["csv","tsv","xlsx","json","txt","md","html"], shrink: false },
   subtitle:    { exts: ["srt","vtt","ass","ssa","sub","sbv"],
                  convertTo: ["srt","vtt","ass","ssa","sub","sbv"], shrink: false },
   font:        { exts: ["ttf","otf","woff","woff2"],
@@ -320,6 +323,8 @@ $("caps-link").onclick = async (e) => {
   const d = await r.json();
   const fmt = (xs) => xs.map(x => `<code>${x}</code>`).join(" ");
   const mb = (b) => `${(b / 1024 / 1024).toFixed(0)} MB`;
+  const ttl = d.limits.job_ttl_seconds;
+  const ttlHuman = ttl >= 3600 ? `${Math.round(ttl/3600)} h` : `${Math.round(ttl/60)} min`;
   panel.innerHTML = `
     <h3>From URL (~${d.url_extraction.video_audio_sites.match(/\d+/)[0]} sites)</h3>
     <div>output: ${fmt(d.url_extraction.url_outputs)}</div>
@@ -335,12 +340,20 @@ $("caps-link").onclick = async (e) => {
     <div>convert to: ${fmt(d.convert_outputs.document)}</div>
     <h3>Office input ${fmt(d.file_inputs.office)}</h3>
     <div>convert to: ${fmt(d.convert_outputs.office)}</div>
+    <h3>Spreadsheet input ${fmt(d.file_inputs.spreadsheet)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.spreadsheet)}</div>
+    <h3>Subtitle input ${fmt(d.file_inputs.subtitle)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.subtitle)}</div>
+    <h3>Font input ${fmt(d.file_inputs.font)}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.font)}</div>
     <h3>Multi-file</h3>
     <div>archive formats: ${fmt(d.operations.compress_archive)}</div>
+    <div>batch convert: drop 2+ same-type files → zip of N or one merged file</div>
+    <div>mergeable target formats (${d.operations.batch_mergeable.length}): ${fmt(d.operations.batch_mergeable)}</div>
     <h3>Lossy shrink (image/video/pdf)</h3>
     <div>levels: ${fmt(d.operations.shrink_levels)}</div>
     <h3>Limits</h3>
-    <div>upload ${d.limits.max_upload_bytes ? `≤ ${mb(d.limits.max_upload_bytes)}` : "unlimited"} · multi-file total ${d.limits.max_compress_bytes ? `≤ ${mb(d.limits.max_compress_bytes)}` : "unlimited"} · jobs deleted after ${Math.round(d.limits.job_ttl_seconds/60)} min</div>`;
+    <div>upload ${d.limits.max_upload_bytes ? `≤ ${mb(d.limits.max_upload_bytes)}` : "unlimited"} · multi-file total ${d.limits.max_compress_bytes ? `≤ ${mb(d.limits.max_compress_bytes)}` : "unlimited"} · jobs deleted after ${ttlHuman}</div>`;
   panel.hidden = false;
   $("caps-link").textContent = "hide";
 };
@@ -430,20 +443,40 @@ function showPicked(files) {
     renderActions(acts, type);
   } else {
     const total = [...files].reduce((s, f) => s + f.size, 0);
-    const allPdf = [...files].every(f => detectType(f.name) === "pdf");
-    const allImages = [...files].every(f => detectType(f.name) === "image");
+    const types = new Set([...files].map(f => detectType(f.name)));
+    const allSameType = types.size === 1;
+    const sharedType = allSameType ? [...types][0] : null;
+    const allPdf = sharedType === "pdf";
+    const allImages = sharedType === "image";
     $("file-name").textContent = `${files.length} files`;
     $("file-meta").textContent = fmtBytes(total);
-    // For typical "I dropped a folder of photos" flows, convert→PDF is the
-    // headline action; PDF merge for multi-PDF; compress otherwise.
     const acts = [];
-    if (allImages) acts.push("convert");  // primary: stitch into one PDF
-    if (allPdf) acts.push("merge");       // primary: combine PDFs
-    acts.push("compress");                // always available as fallback
-    const ctx = allPdf ? "pdf-multi" : (allImages ? "image-multi" : "mixed");
+    // Any homogeneous batch with convert targets gets a convert action.
+    if (allSameType && sharedType !== "other" && TYPES[sharedType]?.convertTo.length) {
+      acts.push("convert");
+    }
+    if (allPdf) acts.push("merge");
+    acts.push("compress");
+    const ctx = allSameType ? `${sharedType}-multi` : "mixed";
     renderActions(acts, ctx);
   }
 }
+
+// Output formats that the backend's _merge_outputs can collapse into one file.
+// Keep in sync with MERGEABLE_FORMATS in jobs.py.
+const MERGEABLE_OUTPUT_FORMATS = new Set([
+  "txt","md","markdown","csv","tsv","json","html","htm","rtf","tex","org","rst","notes",
+  "srt","vtt","ass","ssa","sub","sbv",
+  "mp3","m4a","wav","flac","ogg","opus","aac",
+  "mp4","mov","webm","mkv",
+  "jpeg","jpg","png","webp","avif","tiff","bmp",
+  "xlsx",
+  "pdf",
+]);
+// Image output formats that go through the /api/images/batch shape-router.
+// pdf/gif/mp4 stay on /api/images/batch (their multi-shape semantics are
+// image-specific). The rest route through the generic /api/batch.
+const IMAGE_BATCH_DEDICATED = new Set(["pdf","gif","mp4"]);
 
 // Browsers can natively render only a subset of image formats in <img>.
 // HEIC/HEIF/AVIF/TIFF/ICO won't decode → show a labelled placeholder instead.
@@ -621,11 +654,14 @@ function updateOptForAction(type) {
   let opts = [], label = "", showSel = true, showTxt = false, txtPlaceholder = "", txtType = "text";
   if (action === "convert") {
     if (type === "image-multi") {
-      // pdf  = multi-page document
-      // jpeg/png/webp/avif = each converted, zipped
-      // gif  = animated slideshow GIF
-      // mp4  = slideshow video
-      opts = ["pdf", "jpeg", "png", "webp", "avif", "gif", "mp4"];
+      // pdf  = multi-page document (dedicated image endpoint)
+      // gif  = animated slideshow GIF (dedicated image endpoint)
+      // mp4  = slideshow video       (dedicated image endpoint)
+      // jpeg/png/webp/avif/tiff/bmp = each converted; merge toggle → tile grid
+      opts = ["pdf", "jpeg", "png", "webp", "avif", "tiff", "bmp", "gif", "mp4"];
+    } else if (type.endsWith("-multi")) {
+      // Generic homogeneous batch convert (doc-multi, audio-multi, pdf-multi, etc.)
+      opts = TYPES[type.slice(0, -"-multi".length)].convertTo;
     } else {
       opts = TYPES[type].convertTo;
     }
@@ -669,6 +705,14 @@ function updateOptForAction(type) {
   $("opt-label").textContent = label;
   if (action === "shrink") sel.value = "medium";
 
+  // Merge toggle: any multi-convert whose chosen format is mergeable. For
+  // image-multi this excludes pdf/gif/mp4 (those use dedicated multi-shapes).
+  let isMulti = action === "convert" && type.endsWith("-multi");
+  if (isMulti && type === "image-multi" && IMAGE_BATCH_DEDICATED.has(sel.value)) {
+    isMulti = false;
+  }
+  refreshMergeToggle(isMulti, sel.value);
+
   // Advanced knob: shrink (any type) + image/video convert (anything with a
   // quality dial in the underlying codec).
   const ADV_CONVERT_TYPES = new Set(["image", "video"]);
@@ -682,6 +726,30 @@ function updateOptForAction(type) {
     refreshEstimate();
   }
 }
+
+function refreshMergeToggle(isMultiConvert, fmt) {
+  const row = $("merge-row");
+  if (!isMultiConvert || !MERGEABLE_OUTPUT_FORMATS.has(fmt)) {
+    row.hidden = true;
+    $("merge-toggle").checked = false;
+    return;
+  }
+  row.hidden = false;
+}
+
+$("opt-select").addEventListener("change", () => {
+  const action = document.querySelector("input[name=action]:checked")?.value;
+  const files = $("drop-file").files;
+  if (!files || files.length < 2 || action !== "convert") return;
+  const types = new Set([...files].map(f => detectType(f.name)));
+  if (types.size !== 1) return;
+  const sharedType = [...types][0];
+  if (sharedType === "other") return;
+  const fmt = $("opt-select").value;
+  // Image-multi: merge toggle hidden for pdf/gif/mp4 (those are special multi-shapes).
+  const allowMerge = sharedType !== "image" || !IMAGE_BATCH_DEDICATED.has(fmt);
+  refreshMergeToggle(allowMerge, fmt);
+});
 
 const SHRINK_LEVEL_QUALITY = { low: 50, medium: 70, high: 85 };
 function qualityForLevel(action, levelOrFmt) {
@@ -753,12 +821,25 @@ $("process").onclick = async () => {
     const fd = new FormData();
     let pollHint = action;
     if (action === "convert" && files.length > 1) {
-      // Multi-image batch — output shape depends on chosen format
-      endpoint = "/api/images/batch";
-      for (const f of files) fd.append("files", f);
-      fd.append("format", selVal);
-      if (Object.keys(_rotations).length) {
-        fd.append("rotations", JSON.stringify(_rotations));
+      const types = new Set([...files].map(f => detectType(f.name)));
+      const sharedType = types.size === 1 ? [...types][0] : null;
+      if (sharedType === "image" && IMAGE_BATCH_DEDICATED.has(selVal)) {
+        // pdf/gif/mp4 use the dedicated image-shape endpoint (multi-page PDF,
+        // animated slideshow, slideshow video). EXIF + per-tile rotation only
+        // exist on this path.
+        endpoint = "/api/images/batch";
+        for (const f of files) fd.append("files", f);
+        fd.append("format", selVal);
+        if (Object.keys(_rotations).length) {
+          fd.append("rotations", JSON.stringify(_rotations));
+        }
+      } else {
+        // Generic homogeneous multi-convert: 1:1 zip OR merged single file.
+        // For images this covers jpeg/png/webp/avif/tiff/bmp with optional tile.
+        endpoint = "/api/batch";
+        for (const f of files) fd.append("files", f);
+        fd.append("format", selVal);
+        fd.append("merge", $("merge-toggle").checked ? "1" : "0");
       }
       pollHint = selVal;
     } else if (action === "convert") {
