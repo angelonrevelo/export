@@ -72,6 +72,7 @@ opportunistically. T5 is a research project we explicitly punt on.
 | Single-process FastAPI | ⚠️ | T3 | One CPU-bound job (Whisper, demucs) can stall API responses. |
 | No structured logging | ⚠️ | — | uvicorn logs only. No audit trail of who did what when. |
 | No metrics / health endpoint | ⚠️ | — | `/api/capabilities` works as a poor-man's liveness check. |
+| Optional Groq STT backend (cloud) | ⚙️ opt-in | — | When `EXPORT_GROQ_API_KEY` is set, audio for transcription is uploaded to api.groq.com. Per Groq's TOS, audio is not retained for training. Breaks the "data never leaves your machine" promise — only set the env var if you accept that. Without the env var, all STT runs locally. |
 
 ## Deployment scope phases
 

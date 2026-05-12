@@ -1,11 +1,12 @@
 # export
 
 A personal web tool that converts, extracts, compresses, and transforms files —
-from URLs (YouTube, Twitter, etc.) and from local uploads. ~110 conversion
+from URLs (YouTube, Twitter, etc.) and from local uploads. 140+ conversion
 paths across image / video / audio / document / PDF / spreadsheet / subtitle
-/ font / archive, all running locally with open-source libraries. Designed to
-replace the half-dozen freeconvert/ilovepdf/yt-mp3 sites you'd otherwise tab
-through, plus NoteGPT-style URL-to-transcript that those sites don't offer.
+/ font / archive, all running locally with open-source libraries (optional
+Groq cloud for fast transcription). Designed to replace the half-dozen
+freeconvert/ilovepdf/yt-mp3 sites you'd otherwise tab through, plus
+NoteGPT-style URL-to-transcript that those sites don't offer.
 
 ```
 http://localhost:8500   →   single password   →   paste a URL or drop a file
@@ -32,7 +33,7 @@ version.
 | Input type | Convert to | Other operations |
 |---|---|---|
 | **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns`) | `jpeg, png, webp, avif, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract), nobg (transparent PNG via rembg), svg (vectorize via vtracer)`. Also via OCR→pandoc chain: `docx, md, html, rtf, epub, odt, tex` (extracts text from image, wraps in editable doc format — useful for digitizing scanned pages). | `shrink` (with quality slider) |
-| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif`) | `mp4, mov, webm, mkv, gif, mp3, m4a, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram` (1080×1080 mp4 with waveform + sweeping playhead), `txt, srt, vtt, notes` (Whisper transcript). Note: `.gif` is recognized as both image and video; `gif → mp4/mov/webm/mkv` works via the video branch. | `shrink` (SVT-AV1 re-encode with quality slider) |
+| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif`) | `mp4, mov, webm, mkv, gif, mp3, m4a, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram` (1080×1080 mp4 with waveform + sweeping playhead), `txt, srt, vtt, notes` (Whisper transcript — local CPU or Groq cloud). Note: `.gif` is recognized as both image and video; `gif → mp4/mov/webm/mkv` works via the video branch. | `shrink` (libx264 re-encode with quality slider — universal playback) |
 | **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt, notes (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split), audiogram (1080×1080 mp4 with full-clip waveform + sweeping playhead — useful for sharing podcast clips on platforms that need video)` | — |
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback for scanned), md (txt + title heading), notes (NoteGPT-style paragraphs grouped at blank-line boundaries), docx, pdfa (searchable PDF/A via OCRmyPDF), mp3/m4a/wav (audiobook via TTS chain), audiogram (waveform mp4 of the TTS render)` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
@@ -61,8 +62,13 @@ version.
 
 The **advanced disclosure** under shrink and image/video convert exposes a
 1–100 quality slider that overrides these presets. The slider's "estimated
-output size" is type-aware (image curve, h.264 floor for video, Ghostscript
-preset bands for PDF). After processing, the actual `original → output (n%)`
+output size" is shown as a **range** rather than a single fake-precise number,
+because output size depends heavily on source bitrate and content complexity.
+For video specifically, the frontend probes the source's duration + resolution
+locally via the HTML5 `<video>` element (no upload, no server roundtrip) and
+feeds that into an x264 CRF target-bitrate model — so a 25 Mbps phone video
+and an already-tight 1.5 Mbps web clip get different predictions even at the
+same slider position. After processing, the actual `original → output (n%)`
 delta is shown next to the download link, with a green badge if smaller.
 
 Video shrink defaults to **libx264 (h.264)** for universal playback —
@@ -191,7 +197,7 @@ For multi-file batch operations:
 | Subtitle | pysubs2 |
 | Font | fontTools + brotli (for woff2) |
 | OCR | Tesseract (via pytesseract); applied as auto-fallback when scanned PDFs return empty pdfplumber output |
-| STT | faster-whisper (default `distil-large-v3`, multilingual, ~6× faster than whisper-large-v3) |
+| STT | faster-whisper local (default `distil-large-v3`, multilingual, ~6× faster than whisper-large-v3) — or Groq cloud `whisper-large-v3-turbo` when `EXPORT_GROQ_API_KEY` is set (~200× realtime, $0.04/h paid) |
 | TTS | macOS `say` / `piper-tts` (Linux fallback) |
 | Audio AI | Demucs (htdemucs) for vocal/drum/bass/other stem separation, noisereduce for spectral denoise |
 | Image AI | rembg (u2net) for background removal, vtracer for raster→SVG |
@@ -227,12 +233,26 @@ effect as not setting it.
 |---|---|---|
 | `EXPORT_WATCH_DIR` | (none) | Folder watch mode (Clop-style). Anything image/video/PDF dropped in this folder is auto-shrunk into `<dir>/_optimized/`. |
 
-### Whisper STT
+### Whisper STT (local CPU)
 
 | Env var | Default | Notes |
 |---|---|---|
-| `EXPORT_WHISPER_MODEL` | `distil-large-v3` | Any faster-whisper model name. Smaller = less disk + faster but lower quality. |
+| `EXPORT_WHISPER_MODEL` | `distil-large-v3` | Any faster-whisper model name. Smaller = less disk + faster but lower quality. `tiny.en / base.en / small.en` give ~10-40× realtime on CPU for English content. |
 | `EXPORT_WHISPER_MODEL_DIR` | (auto) | Override model cache dir (defaults to `~/.cache/huggingface`). |
+
+### Whisper STT (Groq cloud, optional)
+
+When `EXPORT_GROQ_API_KEY` is set, all transcription (audio/video → txt / srt /
+vtt / notes) routes to Groq's hosted Whisper API instead of local CPU. ~200×
+realtime on `whisper-large-v3-turbo` vs ~3–4× for local `distil-large-v3` — so
+an 11 h podcast transcribes in ~5 minutes instead of ~3 hours. Free tier covers
+8 h/day of audio; paid tier is $0.04/h.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_GROQ_API_KEY` | (unset = local Whisper) | Get a key at https://console.groq.com/keys. Presence is the only switch — falls back to local Whisper when unset. |
+| `EXPORT_GROQ_MODEL` | `whisper-large-v3-turbo` | Other valid: `whisper-large-v3`. |
+| `EXPORT_GROQ_CHUNK_SECONDS` | `1200` (20 min) | Audio is pre-encoded to mp3 mono 16 kHz @ 64 kbps then segmented at this interval (keeps each chunk well under Groq's 25 MB free-tier upload cap). Per-chunk timestamps are offset on stitch so srt/vtt timecodes stay correct across the join. |
 
 ### Piper TTS
 
@@ -247,6 +267,12 @@ effect as not setting it.
 | `EXPORT_YTDLP_BROWSER` | (none) | Easiest cookie source — name of an installed browser (`chrome`, `firefox`, `safari`, `edge`, `brave`, `opera`, `vivaldi`). yt-dlp reads cookies live. |
 | `EXPORT_YTDLP_COOKIES` | (none) | Headless alternative — Netscape-format `cookies.txt` path. |
 | `EXPORT_HTTP_PROXY` | (none) | Routes URL extraction through a proxy. Beats IP blocks (TikTok, Rumble) and geo-restrictions. Format: `http://user:pw@host:port` or `socks5://127.0.0.1:9050` (Tor). |
+
+### Video shrink
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_SHRINK_VIDEO_CODEC` | `x264` | Video shrink codec. Default `x264` (libx264 high@4.0 yuv420p faststart) plays everywhere — QuickTime, Preview, iMovie, iOS Safari, Discord, web `<video>`, every NLE. Set `av1` to use SVT-AV1 for ~20-30% smaller files at matched quality, but only when your playback chain supports it (recent Chrome/Firefox, VLC, mpv); AV1-in-MP4 breaks on macOS Preview seek, Discord embeds, old Safari, and many other consumer players. |
 
 ### Platform
 
