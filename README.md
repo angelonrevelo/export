@@ -56,14 +56,21 @@ version.
 | Input | `low` | `medium` | `high` |
 |---|---|---|---|
 | Image (any) | quality 50 | quality 70 | quality 85 |
-| Video | SVT-AV1 CRF 45, preset 8 | CRF 35, preset 6 | CRF 28, preset 4 |
+| Video | libx264 CRF 30, preset fast | CRF 26, preset medium | CRF 22, preset slow |
 | PDF | Ghostscript `/screen` | `/ebook` | `/printer` |
 
 The **advanced disclosure** under shrink and image/video convert exposes a
 1–100 quality slider that overrides these presets. The slider's "estimated
-output size" is type-aware (image curve, AV1 floor for video, Ghostscript
+output size" is type-aware (image curve, h.264 floor for video, Ghostscript
 preset bands for PDF). After processing, the actual `original → output (n%)`
 delta is shown next to the download link, with a green badge if smaller.
+
+Video shrink defaults to **libx264 (h.264)** for universal playback —
+QuickTime/Preview/iOS Safari/Discord/messaging apps all accept it natively.
+Set `EXPORT_SHRINK_VIDEO_CODEC=av1` to use SVT-AV1 (~20–30% smaller files
+at matched quality, but breaks on some consumer players like Preview seeks
+and Discord embeds — use only when your playback chain explicitly supports
+AV1: recent Chrome/Firefox, VLC, mpv).
 
 A **shrink more ↓** button appears after a successful shrink — clicks step
 quality down by 10 (floor 10), Clop-style, with cumulative size displayed

@@ -51,7 +51,9 @@ def _humanize_extraction_error(err_text: str) -> str:
     if "geographically restricted" in e or "geo-restricted" in e or "not available in your country" in e:
         return ("Geo-restricted. Set EXPORT_HTTP_PROXY to a server in an allowed "
                 "region.")
-    if "http error 404" in e or "not found" in e:
+    # "not found" is too broad — was catching ffmpeg's "moov atom not found"
+    # in shrink/convert paths. Match only phrases that genuinely scope to URL extraction.
+    if "http error 404" in e or "page not found" in e or "video not found" in e:
         return "Page not found — the URL may be wrong, expired, or deleted."
     if "http error 403" in e or "forbidden" in e:
         return ("Access forbidden — try setting EXPORT_YTDLP_BROWSER=chrome (login) "
@@ -749,30 +751,51 @@ def _shrink_image(input_path: Path, level: str, out_dir: Path, quality: int | No
 
 
 def _shrink_video(input_path: Path, level: str, out_dir: Path, quality: int | None = None) -> Path:
-    # SVT-AV1 yields ~30-40% smaller files than x264 at matched quality.
-    # CRF: lower = higher quality. AV1 needs slightly higher CRF than x264 for
-    # equivalent perceived quality.
-    if quality is not None:
-        # Map UI's 1-100 quality slider to SVT-AV1's CRF (0-63, lower = better).
-        # quality=100 → CRF 18 (visually lossless), quality=1 → CRF 60.
-        q = max(1, min(100, quality))
-        crf = str(int(round(60 - (q / 100) * 42)))
-        settings = {"crf": crf, "preset": "6"}
-    else:
-        settings = {
-            "low":    {"crf": "45", "preset": "8"},   # smallest, fastest encode
-            "medium": {"crf": "35", "preset": "6"},   # SVT-AV1's recommended balance
-            "high":   {"crf": "28", "preset": "4"},   # best quality, slower encode
-        }[level]
+    """Video shrink. Default codec: libx264 (h.264) for universal playback —
+    QuickTime, Preview, every browser, every messaging app, every NLE. About
+    20-30% larger than SVT-AV1 at matched quality, but AV1-in-MP4 breaks on
+    plenty of consumer players (Preview seeks, Discord embeds, older Safari),
+    which is the failure pattern users actually hit.
+
+    Set EXPORT_SHRINK_VIDEO_CODEC=av1 for the maximum-shrink path when you
+    know the playback chain supports AV1 (recent Chrome/Firefox, VLC, mpv)."""
+    codec = os.environ.get("EXPORT_SHRINK_VIDEO_CODEC", "x264").lower()
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}_small.mp4"
-    cmd = [
-        "ffmpeg", "-y", "-i", str(input_path),
-        "-c:v", "libsvtav1", "-crf", settings["crf"], "-preset", settings["preset"],
-        "-c:a", "aac", "-b:a", "96k",
-        "-movflags", "+faststart",
-        str(out_path),
-    ]
+
+    if codec == "av1":
+        # SVT-AV1: CRF 0-63 (lower = better). preset 0=slow/best, 13=fast/worst.
+        if quality is not None:
+            q = max(1, min(100, quality))
+            crf = str(int(round(60 - (q / 100) * 42)))
+            settings = {"crf": crf, "preset": "6"}
+        else:
+            settings = {"low":    {"crf": "45", "preset": "8"},
+                        "medium": {"crf": "35", "preset": "6"},
+                        "high":   {"crf": "28", "preset": "4"}}[level]
+        cmd = ["ffmpeg", "-y", "-i", str(input_path),
+               "-c:v", "libsvtav1", "-crf", settings["crf"], "-preset", settings["preset"],
+               "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "96k",
+               "-movflags", "+faststart", str(out_path)]
+    else:
+        # libx264: CRF 0-51 (18-28 is the typical range; 23 default). yuv420p
+        # + high@4.0 profile + faststart = plays everywhere including iOS
+        # Safari and old Smart TVs. Preset balances size vs encode time.
+        if quality is not None:
+            q = max(1, min(100, quality))
+            # quality 100 → CRF 18 (visually lossless), quality 1 → CRF 35.
+            crf = str(int(round(35 - (q / 100) * 17)))
+            settings = {"crf": crf, "preset": "medium"}
+        else:
+            settings = {"low":    {"crf": "30", "preset": "fast"},
+                        "medium": {"crf": "26", "preset": "medium"},
+                        "high":   {"crf": "22", "preset": "slow"}}[level]
+        cmd = ["ffmpeg", "-y", "-i", str(input_path),
+               "-c:v", "libx264", "-crf", settings["crf"], "-preset", settings["preset"],
+               "-profile:v", "high", "-level:v", "4.0", "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out_path)]
+
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {r.stderr.strip()[-500:]}")

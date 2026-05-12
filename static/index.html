@@ -789,23 +789,37 @@ function refreshEstimate() {
   if (!files || !files.length) { $("adv-estimate").textContent = ""; return; }
   const inputBytes = [...files].reduce((s, f) => s + f.size, 0);
   const q = +$("adv-quality").value;
-  // Type-aware heuristic. Each format has a different quality→size curve and
-  // a content-dependent floor. JPEG can shrink very low; video can't escape
-  // its codec/audio overhead; PDF uses 4 discrete Ghostscript presets.
+  // The midpoint curve below assumes a "typical" source for each type. Actual
+  // output varies wildly with source bitrate, resolution and content, so we
+  // show a RANGE (±50% of midpoint) instead of a fake-precise single number.
+  // Calibrated against observed CRF behavior on real footage rather than a
+  // theoretical curve.
   const t = files.length === 1 ? detectType(files[0].name) : "image";
-  let ratio;
+  let mid;
   if (t === "video") {
-    // SVT-AV1 has a ~4% practical floor (audio + headers + min bitrate).
-    ratio = Math.max(0.04, Math.pow(q / 100, 0.7));
+    // libx264 shrink. Quality slider → CRF 18 (q=100) ↔ CRF 35 (q=1).
+    // At CRF 26 (q=50) typical phone/camera 1080p lands ~25-35% of source.
+    // Floor ~8% accounts for audio + headers + min-bitrate at low quality.
+    mid = 0.08 + Math.pow(q / 100, 2.4) * 1.05;
   } else if (t === "pdf") {
-    // Ghostscript /screen typically lands ~10-30% of original.
-    ratio = Math.max(0.10, Math.pow(q / 100, 1.0));
+    // Ghostscript shrink. /screen ~10-30%, /ebook ~30-50%, /printer ~70-90%.
+    // The curve is bumpier than a smooth power, but quadratic with a 10% floor
+    // is close enough for a midpoint.
+    mid = 0.10 + Math.pow(q / 100, 2.0) * 0.85;
   } else {
-    // Image (or default).
-    ratio = Math.pow(q / 100, 1.4);
+    // Image. JPEG quality 70 → ~25-50% of a PNG source, but ~60-90% of a JPEG
+    // source. Slightly steeper curve, no hard floor (very low quality on a
+    // simple image can land at 2-3% of source).
+    mid = Math.pow(q / 100, 1.6);
   }
-  const estBytes = inputBytes * ratio;
-  $("adv-estimate").textContent = `≈ ${fmtBytes(estBytes)} (${Math.round(ratio*100)}% of input, rough)`;
+  const lo = Math.max(0.02, mid * 0.5);
+  const hi = Math.min(1.10, mid * 1.5);
+  const loBytes = inputBytes * lo;
+  const hiBytes = inputBytes * hi;
+  const pctLo = Math.round(lo * 100);
+  const pctHi = Math.round(hi * 100);
+  $("adv-estimate").textContent =
+    `≈ ${fmtBytes(loBytes)}–${fmtBytes(hiBytes)} (${pctLo}–${pctHi}% of input; actual depends on source)`;
 }
 
 $("process").onclick = async () => {
