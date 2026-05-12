@@ -25,7 +25,15 @@ from .jobs import (
     IMAGE_TO_PDF,
     IMAGE_TO_SVG,
     IMAGE_TO_TEXT,
+    FONT_TO_IMAGE,
+    IMAGE_TO_DOC,
+    OFFICE_TO_IMAGE,
     OFFICE_TO_PDF,
+    OFFICE_TO_TEXT,
+    PDF_TO_MD,
+    PDF_TO_NOTES,
+    SUBTITLE_TO_DOC,
+    SUBTITLE_TO_TEXT,
     PDF_OCR_OUTPUTS,
     PDF_OPS,
     PDF_TO_DOCX,
@@ -55,12 +63,16 @@ from .jobs import (
 
 ALLOWED_UPLOAD_FORMATS = (
     IMAGE_FORMATS | DOC_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT
-    | IMAGE_TO_NOBG | IMAGE_TO_SVG
+    | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC
     | PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS
+    | PDF_TO_MD | PDF_TO_NOTES
     | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
     | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO
-    | OFFICE_TO_PDF | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
-    | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT | SUBTITLE_FORMATS | FONT_FORMATS
+    | OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT
+    | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
+    | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT
+    | SUBTITLE_FORMATS | SUBTITLE_TO_TEXT | SUBTITLE_TO_DOC
+    | FONT_FORMATS | FONT_TO_IMAGE
 )
 # Upload caps — default UNLIMITED for local/personal use. Set
 # EXPORT_MAX_UPLOAD_MB or EXPORT_MAX_COMPRESS_MB to a positive integer to
@@ -664,15 +676,15 @@ def capabilities():
             "font":        sorted([".ttf",".otf",".woff",".woff2"]),
         },
         "convert_outputs": {
-            "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG),
+            "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC),
             "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | {"txt"}),
             "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | {"txt"}),
-            "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS),
+            "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS | PDF_TO_MD | PDF_TO_NOTES | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO),
             "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
-            "office":      sorted(OFFICE_TO_PDF),
+            "office":      sorted(OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT | DOC_FORMATS | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO),
             "spreadsheet": sorted(SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT),
-            "subtitle":    sorted(SUBTITLE_FORMATS),
-            "font":        sorted(FONT_FORMATS),
+            "subtitle":    sorted(SUBTITLE_FORMATS | SUBTITLE_TO_TEXT | SUBTITLE_TO_DOC | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO),
+            "font":        sorted(FONT_FORMATS | FONT_TO_IMAGE),
         },
         "operations": {
             "compress_archive":     sorted(ARCHIVE_FORMATS),

@@ -114,10 +114,23 @@ _JSON_HTML_KEYS = {"html", "body", "content", "rendered", "markup"}
 # Subtitles via pysubs2
 SUBTITLE_FORMATS = {"srt", "vtt", "ass", "ssa", "sub", "sbv"}
 SUBTITLE_SUFFIXES = {f".{f}" for f in SUBTITLE_FORMATS}
+# Subtitle → readable transcript outputs. pysubs2 already loads the events;
+# we just dump events[].text in different shapes (plain / markdown / NoteGPT).
+SUBTITLE_TO_TEXT = {"txt", "md", "notes"}
+# Subtitle → printable transcript via pandoc (loads our markdown intermediate).
+SUBTITLE_TO_DOC = {"docx", "rtf", "epub", "odt", "tex", "html", "pdf"}
 
 # Fonts via fonttools (TTF/OTF ↔ WOFF/WOFF2; TTF↔OTF is a no-op container swap)
 FONT_FORMATS = {"ttf", "otf", "woff", "woff2"}
 FONT_SUFFIXES = {f".{f}" for f in FONT_FORMATS}
+# Font → specimen image (sample text rendered in the font). Useful when picking
+# from a folder of fonts without opening each one in a viewer.
+FONT_TO_IMAGE = {"png", "jpeg", "webp"}
+# PDF → markdown / NoteGPT-style notes (paragraph-grouped from extracted text).
+PDF_TO_MD = {"md"}
+PDF_TO_NOTES = {"notes"}
+# image → editable doc via OCR + pandoc wrap (digitize a scanned page).
+IMAGE_TO_DOC = {"docx", "md", "html", "rtf", "epub", "odt", "tex"}
 
 ARCHIVE_FORMATS = {"zip", "7z", "tar.gz", "tar.zst", "tar.bz2", "tar.xz"}
 
@@ -146,8 +159,12 @@ IMAGE_SUFFIXES = {
     ".tiff", ".bmp", ".gif", ".ico", ".jp2",
     ".psd", ".tga", ".pcx", ".eps", ".icns",
 }
+# .gif is also in IMAGE_SUFFIXES, but ffmpeg reads it fine as a video source —
+# included here so gif → mp4/mov/webm/mkv works. The dispatch checks image
+# bridges first (so gif → png is still an image op), and only falls through to
+# the video branch when the target is a video format.
 VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v",
-                  ".flv", ".wmv", ".3gp", ".ts", ".mts", ".m2ts", ".ogv"}
+                  ".flv", ".wmv", ".3gp", ".ts", ".mts", ".m2ts", ".ogv", ".gif"}
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac",
                   ".aiff", ".aif", ".wma"}
 PDF_SUFFIXES = {".pdf"}
@@ -167,6 +184,18 @@ AUDIO_FFMPEG_OPTS: dict[str, list[str]] = {
 
 # Office to PDF via LibreOffice headless
 OFFICE_TO_PDF = {"pdf"}
+# Office (pptx/docx/odp/etc.) → raster images: each page/slide rendered.
+# Implemented as office→pdf→images (reuses LibreOffice + pdf2image),
+# so the rasterization quality matches PDF_TO_IMAGE.
+OFFICE_TO_IMAGE = {"png", "jpeg", "webp"}
+# Office formats pandoc can read directly. For these, we route through
+# _convert_doc (pandoc) for doc-format outputs — much higher fidelity than
+# office→pdf→text. For other office formats (doc, ppt, xls/xlsx, ods, odp)
+# pandoc doesn't have native readers, so we chain through pdf instead.
+OFFICE_PANDOC_SOURCES = {".docx", ".odt", ".pptx"}
+# Universal office → txt fallback via pdf. Works for ALL office formats,
+# including the ones pandoc can't read. Composes _office_to_pdf + _pdf_to_text.
+OFFICE_TO_TEXT = {"txt"}
 
 # OCR: image → text via Tesseract
 IMAGE_TO_TEXT = {"txt"}
@@ -548,6 +577,57 @@ def _convert_subtitle(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     out_path = out_dir / f"{stem}.{target_fmt}"
     subs = pysubs2.load(str(input_path))
     subs.save(str(out_path), format_=target_fmt)
+    return out_path
+
+
+def _subtitle_to_text(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """Dump a subtitle file's text as plain/markdown/NoteGPT-style transcript.
+    txt   → one line per event
+    md    → '# title' + blank-line-separated events
+    notes → paragraphs grouped by ≥1.5 s gap between adjacent events (mirrors
+            the local Whisper notes formatter for consistency)"""
+    import pysubs2
+    stem = input_path.stem.removeprefix("input_")
+    title = stem.replace("_", " ").replace("-", " ").strip()
+    subs = pysubs2.load(str(input_path))
+    events = sorted(subs.events, key=lambda e: e.start)
+    lines = [e.plaintext or e.text for e in events]
+    if target_fmt == "txt":
+        out_path = out_dir / f"{stem}.txt"
+        out_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    elif target_fmt == "md":
+        out_path = out_dir / f"{stem}.md"
+        out_path.write_text(f"# {title}\n\n" + "\n\n".join(lines).strip() + "\n", encoding="utf-8")
+    elif target_fmt == "notes":
+        paragraphs: list[list[str]] = [[]]
+        last_end = 0
+        for e, line in zip(events, lines):
+            # pysubs2 timestamps are in milliseconds; 1500 ms ≈ paragraph break.
+            if e.start - last_end > 1500 and paragraphs[-1]:
+                paragraphs.append([])
+            paragraphs[-1].append(line.strip())
+            last_end = e.end
+        body = "\n\n".join(" ".join(p) for p in paragraphs if p)
+        out_path = out_dir / f"{stem}_notes.md"
+        out_path.write_text(f"# {title}\n\n## Transcript\n\n{body}\n", encoding="utf-8")
+    else:
+        raise ValueError(f"unsupported subtitle→text target: {target_fmt}")
+    return out_path
+
+
+def _subtitle_to_doc(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """Subtitle → printable transcript via the markdown intermediate.
+    subtitle → md (our own dumper) → pandoc → {docx, rtf, epub, odt, tex, html, pdf}.
+    Reuses _convert_doc + _doc_to_pdf so the output styling matches what
+    a normal markdown document conversion would produce."""
+    md_path = _subtitle_to_text(input_path, "md", out_dir)
+    try:
+        if target_fmt == "pdf":
+            out_path = _doc_to_pdf(md_path, out_dir)
+        else:
+            out_path = _convert_doc(md_path, target_fmt, out_dir)
+    finally:
+        md_path.unlink(missing_ok=True)
     return out_path
 
 
@@ -1285,6 +1365,126 @@ def _pdf_to_docx(input_path: Path, out_dir: Path) -> Path:
     return out_path
 
 
+def _pdf_to_markdown(input_path: Path, out_dir: Path) -> Path:
+    """pdf → md: extract text (pdfplumber + OCR fallback) then prepend a title."""
+    txt_path = _pdf_to_text(input_path, out_dir)
+    text = txt_path.read_text(encoding="utf-8", errors="replace")
+    txt_path.unlink(missing_ok=True)
+    stem = input_path.stem.removeprefix("input_")
+    title = stem.replace("_", " ").replace("-", " ").strip()
+    out_path = out_dir / f"{stem}.md"
+    out_path.write_text(f"# {title}\n\n{text}", encoding="utf-8")
+    return out_path
+
+
+def _pdf_to_notes(input_path: Path, out_dir: Path) -> Path:
+    """pdf → NoteGPT-style notes. Groups extracted text into paragraphs at
+    blank-line boundaries (one of the few structural signals that survives
+    pdfplumber extraction). For scanned PDFs the OCR fallback in _pdf_to_text
+    preserves enough whitespace for this to work."""
+    import re
+    txt_path = _pdf_to_text(input_path, out_dir)
+    text = txt_path.read_text(encoding="utf-8", errors="replace")
+    txt_path.unlink(missing_ok=True)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+    stem = input_path.stem.removeprefix("input_")
+    title = stem.replace("_", " ").replace("-", " ").strip()
+    body = "\n\n".join(paragraphs)
+    out_path = out_dir / f"{stem}_notes.md"
+    out_path.write_text(f"# {title}\n\n## Notes\n\n{body}\n", encoding="utf-8")
+    return out_path
+
+
+def _image_to_doc(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """image → docx/md/html/rtf/epub/odt/tex: OCR the image (Tesseract via
+    _image_to_text) then wrap the extracted text in the requested doc format
+    via pandoc. Useful for digitizing scanned pages where you want an editable
+    file, not a flat .txt."""
+    txt_path = _image_to_text(input_path, out_dir)
+    try:
+        return _convert_doc(txt_path, target_fmt, out_dir)
+    finally:
+        txt_path.unlink(missing_ok=True)
+
+
+def _font_to_image(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """font → png/jpeg/webp: render a sample specimen of the font (name at top,
+    then a large AaBbCc preview, then two pangrams). Falls back to a fontTools
+    TTF intermediate for woff/woff2 since some Pillow builds can't decode them."""
+    from PIL import Image, ImageDraw, ImageFont
+    stem = input_path.stem.removeprefix("input_")
+    work_font = input_path
+    intermediate: Path | None = None
+    if input_path.suffix.lower() in (".woff", ".woff2"):
+        from fontTools.ttLib import TTFont
+        intermediate = out_dir / "_font_preview.ttf"
+        f = TTFont(str(input_path))
+        f.flavor = None
+        f.save(str(intermediate))
+        work_font = intermediate
+    try:
+        canvas = Image.new("RGB", (1200, 540), "white")
+        d = ImageDraw.Draw(canvas)
+        d.text((40, 30), stem, fill="#111", font=ImageFont.truetype(str(work_font), 28))
+        d.text((40, 90), "AaBbCcDd 0123 !?", fill="#000",
+               font=ImageFont.truetype(str(work_font), 92))
+        d.text((40, 240), "The quick brown fox jumps over the lazy dog.",
+               fill="#222", font=ImageFont.truetype(str(work_font), 32))
+        d.text((40, 320), "Pack my box with five dozen liquor jugs.",
+               fill="#444", font=ImageFont.truetype(str(work_font), 22))
+        d.text((40, 370), "Sphinx of black quartz, judge my vow.",
+               fill="#444", font=ImageFont.truetype(str(work_font), 22))
+        d.text((40, 470), "0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+               fill="#666", font=ImageFont.truetype(str(work_font), 18))
+        ext = IMAGE_EXT_OVERRIDE.get(target_fmt, target_fmt)
+        save_kwargs = {"jpeg": {"quality": 92, "optimize": True},
+                       "webp": {"quality": 92}}.get(target_fmt, {})
+        out_path = out_dir / f"{stem}_specimen.{ext}"
+        canvas.save(out_path, format=target_fmt.upper(), **save_kwargs)
+        return out_path
+    finally:
+        if intermediate:
+            intermediate.unlink(missing_ok=True)
+
+
+def _office_to_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """office (any) → mp3/m4a/wav audiobook via office → pdf → text → TTS."""
+    txt_path = _office_to_text(input_path, out_dir)
+    try:
+        return _text_to_audio(txt_path, target_fmt, out_dir)
+    finally:
+        txt_path.unlink(missing_ok=True)
+
+
+def _pdf_to_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """pdf → mp3/m4a/wav audiobook via pdf → text → TTS."""
+    txt_path = _pdf_to_text(input_path, out_dir)
+    try:
+        return _text_to_audio(txt_path, target_fmt, out_dir)
+    finally:
+        txt_path.unlink(missing_ok=True)
+
+
+def _subtitle_to_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """subtitle → mp3/m4a/wav via subtitle → text → TTS. Useful when you want
+    the caption text read aloud (e.g. accessibility, dub-overs)."""
+    txt_path = _subtitle_to_text(input_path, "txt", out_dir)
+    try:
+        return _text_to_audio(txt_path, target_fmt, out_dir)
+    finally:
+        txt_path.unlink(missing_ok=True)
+
+
+def _text_source_to_audiogram(input_path: Path, out_dir: Path, make_audio) -> Path:
+    """Compose: text-source → mp3 (via TTS) → audiogram (waveform mp4).
+    `make_audio` is whichever wrapper produces the mp3 (office/pdf/subtitle)."""
+    mp3_path = make_audio(input_path, "mp3", out_dir)
+    try:
+        return _audio_to_audiogram(mp3_path, out_dir)
+    finally:
+        mp3_path.unlink(missing_ok=True)
+
+
 def _text_to_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     suffix = input_path.suffix.lower()
     if suffix == ".txt":
@@ -1345,7 +1545,123 @@ def _format_ts(seconds: float, comma: bool) -> str:
     return out.replace(".", ",") if comma else out
 
 
-def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path, job: dict | None = None) -> Path:
+def _write_transcript(segments: list, target_fmt: str, stem: str, out_dir: Path) -> Path:
+    """Write a transcript in the requested format from a list of segments.
+    Each segment is a dict-like with .start, .end, .text (or ['start'], ['end'], ['text']).
+    Shared by both the local Whisper path and the Groq cloud path."""
+    def g(s, k):
+        return s[k] if isinstance(s, dict) else getattr(s, k)
+    out_path = out_dir / f"{stem}.{target_fmt}"
+    if target_fmt == "txt":
+        out_path.write_text("\n".join(g(s, "text").strip() for s in segments) + "\n", encoding="utf-8")
+    elif target_fmt == "notes":
+        # NoteGPT-style: paragraphs at >1.5s pause gap, no timestamp clutter.
+        paragraphs: list[list[str]] = [[]]
+        last_end = 0.0
+        for s in segments:
+            if g(s, "start") - last_end > 1.5 and paragraphs[-1]:
+                paragraphs.append([])
+            paragraphs[-1].append(g(s, "text").strip())
+            last_end = g(s, "end")
+        body = "\n\n".join(" ".join(p) for p in paragraphs if p)
+        title = stem.replace("_", " ").replace("-", " ").strip()
+        out_path = out_dir / f"{stem}_notes.md"
+        out_path.write_text(f"# {title}\n\n## Transcript\n\n{body}\n", encoding="utf-8")
+    elif target_fmt == "srt":
+        lines: list[str] = []
+        for i, s in enumerate(segments, 1):
+            lines += [str(i),
+                      f"{_format_ts(g(s, 'start'), True)} --> {_format_ts(g(s, 'end'), True)}",
+                      g(s, "text").strip(), ""]
+        out_path.write_text("\n".join(lines), encoding="utf-8")
+    elif target_fmt == "vtt":
+        lines = ["WEBVTT", ""]
+        for s in segments:
+            lines += [f"{_format_ts(g(s, 'start'), False)} --> {_format_ts(g(s, 'end'), False)}",
+                      g(s, "text").strip(), ""]
+        out_path.write_text("\n".join(lines), encoding="utf-8")
+    else:
+        raise ValueError(f"unsupported transcript format: {target_fmt}")
+    return out_path
+
+
+def _audio_video_to_transcript_groq(input_path: Path, target_fmt: str, out_dir: Path,
+                                     job: dict | None = None) -> Path:
+    """Transcribe via Groq's Whisper API. Free tier: 25 MB upload limit, dev tier: 100 MB.
+    We pre-process to flac mono 16 kHz (Whisper's native format) for max compression,
+    then segment into ~20-min chunks (well under both limits even for music). Each
+    chunk's segment timestamps are offset so the final transcript stitches cleanly."""
+    import requests
+    api_key = os.environ["EXPORT_GROQ_API_KEY"]
+    model_id = os.environ.get("EXPORT_GROQ_MODEL", "whisper-large-v3-turbo")
+    chunk_seconds = int(os.environ.get("EXPORT_GROQ_CHUNK_SECONDS", "1200"))  # 20 min default
+
+    # Pass 1: re-encode to mp3 mono 16 kHz @ 64 kbps. mp3 is plenty for Whisper
+    # speech recognition (it's downsampled to 16 kHz internally anyway), and
+    # segments cleanly with -c copy because mp3 has independent frames.
+    # 20 min @ 64 kbps mono ≈ 9.6 MB — safely under Groq's 25 MB free-tier cap.
+    pre_path = out_dir / "_groq_input.mp3"
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path), "-vn", "-ac", "1", "-ar", "16000",
+         "-c:a", "libmp3lame", "-b:a", "64k", str(pre_path)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg preprocess for groq failed: {r.stderr.strip()[-500:]}")
+
+    # Pass 2: segment into N chunks of `chunk_seconds` each. mp3 segments cleanly.
+    chunk_dir = out_dir / "_groq_chunks"
+    chunk_dir.mkdir(exist_ok=True)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(pre_path),
+         "-f", "segment", "-segment_time", str(chunk_seconds),
+         "-c", "copy", str(chunk_dir / "chunk_%03d.mp3")],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg segment for groq failed: {r.stderr.strip()[-500:]}")
+    chunks = sorted(chunk_dir.glob("chunk_*.mp3"))
+    if not chunks:
+        raise RuntimeError("groq: no chunks produced")
+
+    # Transcribe each chunk, shifting timestamps by the cumulative offset.
+    all_segments: list[dict] = []
+    for i, chunk in enumerate(chunks):
+        offset = i * chunk_seconds
+        with chunk.open("rb") as f:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                files={"file": (chunk.name, f, "audio/mpeg")},
+                data={"model": model_id, "response_format": "verbose_json"},
+                timeout=300,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"groq API error {resp.status_code}: {resp.text[:300]}")
+        result = resp.json()
+        for seg in result.get("segments", []):
+            all_segments.append({
+                "start": seg["start"] + offset,
+                "end":   seg["end"]   + offset,
+                "text":  seg["text"],
+            })
+        if job is not None:
+            job["progress"] = max(1, min(99, int(100 * (i + 1) / len(chunks))))
+
+    pre_path.unlink(missing_ok=True)
+    shutil.rmtree(chunk_dir, ignore_errors=True)
+
+    stem = input_path.stem.removeprefix("input_")
+    return _write_transcript(all_segments, target_fmt, stem, out_dir)
+
+
+def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path,
+                                job: dict | None = None) -> Path:
+    """Route to Groq cloud Whisper if EXPORT_GROQ_API_KEY is set; otherwise local
+    faster-whisper on CPU. Same output format either way (txt/notes/srt/vtt)."""
+    if os.environ.get("EXPORT_GROQ_API_KEY"):
+        return _audio_video_to_transcript_groq(input_path, target_fmt, out_dir, job)
+
     from faster_whisper import WhisperModel
     name = os.environ.get("EXPORT_WHISPER_MODEL", "distil-large-v3")
     if _whisper_state["model"] is None or _whisper_state["name"] != name:
@@ -1356,11 +1672,7 @@ def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path,
         _whisper_state["name"] = name
     model = _whisper_state["model"]
 
-    stem = input_path.stem.removeprefix("input_")
-    out_path = out_dir / f"{stem}.{target_fmt}"
     segments_iter, info = model.transcribe(str(input_path), beam_size=1)
-    # Drain the generator ourselves so we can publish per-segment progress.
-    # info.duration is the audio length in seconds; s.end advances toward it.
     duration = max(float(getattr(info, "duration", 0.0) or 0.0), 0.001)
     segments = []
     for s in segments_iter:
@@ -1368,45 +1680,8 @@ def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path,
         if job is not None:
             job["progress"] = max(1, min(99, int(100 * s.end / duration)))
 
-    if target_fmt == "txt":
-        out_path.write_text(
-            "\n".join(s.text.strip() for s in segments) + "\n",
-            encoding="utf-8",
-        )
-    elif target_fmt == "notes":
-        # Group segments into paragraphs by pause length (>1.5s gap = new paragraph).
-        # NoteGPT-style: clean readable markdown, no timestamps cluttering the text.
-        paragraphs: list[list[str]] = [[]]
-        last_end = 0.0
-        for s in segments:
-            if s.start - last_end > 1.5 and paragraphs[-1]:
-                paragraphs.append([])
-            paragraphs[-1].append(s.text.strip())
-            last_end = s.end
-        body = "\n\n".join(" ".join(p) for p in paragraphs if p)
-        title = stem.replace("_", " ").replace("-", " ").strip()
-        # Out path uses .md extension since it's clean markdown.
-        out_path = out_dir / f"{stem}_notes.md"
-        out_path.write_text(
-            f"# {title}\n\n## Transcript\n\n{body}\n",
-            encoding="utf-8",
-        )
-    elif target_fmt == "srt":
-        lines: list[str] = []
-        for i, s in enumerate(segments, 1):
-            lines += [str(i),
-                      f"{_format_ts(s.start, True)} --> {_format_ts(s.end, True)}",
-                      s.text.strip(), ""]
-        out_path.write_text("\n".join(lines), encoding="utf-8")
-    elif target_fmt == "vtt":
-        lines = ["WEBVTT", ""]
-        for s in segments:
-            lines += [f"{_format_ts(s.start, False)} --> {_format_ts(s.end, False)}",
-                      s.text.strip(), ""]
-        out_path.write_text("\n".join(lines), encoding="utf-8")
-    else:
-        raise ValueError(f"unsupported transcript format: {target_fmt}")
-    return out_path
+    stem = input_path.stem.removeprefix("input_")
+    return _write_transcript(segments, target_fmt, stem, out_dir)
 
 
 def _audio_denoise(input_path: Path, out_dir: Path) -> Path:
@@ -1528,6 +1803,31 @@ def _convert_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     return out_path
 
 
+def _office_to_text(input_path: Path, out_dir: Path) -> Path:
+    """Universal office → txt via the office→pdf→text chain. Works for any
+    office input (docx/pptx/xlsx/doc/ppt/xls/ods/odp/odt). Lower fidelity than
+    direct pandoc for docx/odt/pptx but works on the formats pandoc can't read."""
+    pdf_path = _office_to_pdf(input_path, out_dir)
+    try:
+        out_path = _pdf_to_text(pdf_path, out_dir)
+    finally:
+        pdf_path.unlink(missing_ok=True)
+    return out_path
+
+
+def _office_to_images(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """Render each slide/page of an office document as an image.
+    Path: office → pdf (LibreOffice headless) → image(s) (pdf2image at 200 DPI).
+    Single-page docs → one image; multi-page → zip. Intermediate pdf is deleted.
+    Killer use case: pptx slide deck → png per slide for embedding in docs/web."""
+    pdf_path = _office_to_pdf(input_path, out_dir)
+    try:
+        out_path = _pdf_to_images(pdf_path, target_fmt, out_dir)
+    finally:
+        pdf_path.unlink(missing_ok=True)
+    return out_path
+
+
 def _office_to_pdf(input_path: Path, out_dir: Path) -> Path:
     # Each conversion uses an isolated profile dir so concurrent jobs don't
     # collide on LibreOffice's user profile.
@@ -1594,6 +1894,8 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _image_remove_bg(input_path, out_dir)
     if is_image_in and fmt in IMAGE_TO_SVG:
         return _image_to_svg(input_path, out_dir)
+    if is_image_in and fmt in IMAGE_TO_DOC:
+        return _image_to_doc(input_path, fmt, out_dir)
     if is_pdf_in and fmt in PDF_TO_IMAGE:
         return _pdf_to_images(input_path, fmt, out_dir)
     if is_pdf_in and fmt in PDF_TO_TEXT:
@@ -1602,6 +1904,10 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _pdf_to_docx(input_path, out_dir)
     if is_pdf_in and fmt in PDF_OCR_OUTPUTS:
         return _pdf_to_pdfa(input_path, out_dir)
+    if is_pdf_in and fmt in PDF_TO_MD:
+        return _pdf_to_markdown(input_path, out_dir)
+    if is_pdf_in and fmt in PDF_TO_NOTES:
+        return _pdf_to_notes(input_path, out_dir)
     if is_video_in and fmt in VIDEO_TO_GIF:
         return _video_to_gif(input_path, out_dir)
     if is_video_in and fmt in VIDEO_TO_VIDEO:
@@ -1622,6 +1928,30 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _convert_audio(input_path, fmt, out_dir)
     if is_office_in and fmt in OFFICE_TO_PDF:
         return _office_to_pdf(input_path, out_dir)
+    if is_office_in and fmt in OFFICE_TO_IMAGE:
+        return _office_to_images(input_path, fmt, out_dir)
+    # docx/odt/pptx → md/html/rtf/epub/txt/odt/tex/etc. — pandoc reads these natively.
+    if is_office_in and suffix in OFFICE_PANDOC_SOURCES and fmt in DOC_FORMATS:
+        return _convert_doc(input_path, fmt, out_dir)
+    # Any office (incl. xlsx/ppt/doc) → txt: chain office → pdf → text.
+    if is_office_in and fmt in OFFICE_TO_TEXT:
+        return _office_to_text(input_path, out_dir)
+    # office → audiobook: chain office → pdf → text → TTS.
+    if is_office_in and fmt in TTS_AUDIO_FORMATS:
+        return _office_to_audio(input_path, fmt, out_dir)
+    # pdf → audiobook: chain pdf → text → TTS.
+    if is_pdf_in and fmt in TTS_AUDIO_FORMATS:
+        return _pdf_to_audio(input_path, fmt, out_dir)
+    # subtitle → audiobook: chain subtitle → text → TTS.
+    if is_subtitle_in and fmt in TTS_AUDIO_FORMATS:
+        return _subtitle_to_audio(input_path, fmt, out_dir)
+    # office/pdf/subtitle → audiogram: chain through TTS, then waveform render.
+    if is_office_in and fmt in AUDIO_TO_VIDEO:
+        return _text_source_to_audiogram(input_path, out_dir, _office_to_audio)
+    if is_pdf_in and fmt in AUDIO_TO_VIDEO:
+        return _text_source_to_audiogram(input_path, out_dir, _pdf_to_audio)
+    if is_subtitle_in and fmt in AUDIO_TO_VIDEO:
+        return _text_source_to_audiogram(input_path, out_dir, _subtitle_to_audio)
     if suffix in TTS_INPUT_SUFFIXES and fmt in TTS_AUDIO_FORMATS:
         return _text_to_audio(input_path, fmt, out_dir)
     if is_doc_in and fmt in DOC_TO_PDF:
@@ -1632,8 +1962,14 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _convert_spreadsheet(input_path, fmt, out_dir)
     if is_subtitle_in and fmt in SUBTITLE_FORMATS:
         return _convert_subtitle(input_path, fmt, out_dir)
+    if is_subtitle_in and fmt in SUBTITLE_TO_TEXT:
+        return _subtitle_to_text(input_path, fmt, out_dir)
+    if is_subtitle_in and fmt in SUBTITLE_TO_DOC:
+        return _subtitle_to_doc(input_path, fmt, out_dir)
     if is_font_in and fmt in FONT_FORMATS:
         return _convert_font(input_path, fmt, out_dir)
+    if is_font_in and fmt in FONT_TO_IMAGE:
+        return _font_to_image(input_path, fmt, out_dir)
     raise ValueError(f"no bridge: {suffix or '(no ext)'} → {fmt}")
 
 

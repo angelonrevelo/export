@@ -274,22 +274,24 @@ const getPw = () => localStorage.getItem(PW_KEY) || "";
 
 const TYPES = {
   image:       { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico","jp2","psd","tga","pcx","eps","icns"],
-                 convertTo: ["jpeg","png","webp","avif","tiff","bmp","gif","ico","icns","jp2","pdf","txt","nobg","svg"], shrink: true },
-  video:       { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv"],
+                 // mp4 is here mostly for gif→mp4 (animated gif → video); for non-animated
+                 // image inputs picking mp4 will return a clear "no bridge" error.
+                 convertTo: ["jpeg","png","webp","avif","tiff","bmp","gif","ico","icns","jp2","pdf","txt","nobg","svg","docx","md","html","rtf","epub","odt","tex","mp4"], shrink: true },
+  video:       { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv","gif"],
                  convertTo: ["mp4","mov","webm","mkv","gif","mp3","m4a","wav","flac","ogg","opus","aac","audiogram","txt","srt","vtt","notes"], shrink: true },
   audio:       { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma"],
                  convertTo: ["mp3","m4a","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","denoise","stems","audiogram"], shrink: false },
   doc:         { exts: ["md","markdown","html","htm","rtf","epub","txt","tex","org","rst","ipynb","adoc","asciidoc","textile","docbook","fb2"],
                  convertTo: ["md","html","docx","rtf","epub","txt","odt","tex","pptx","pdf","mp3","m4a","wav"], shrink: false },
   office:      { exts: ["docx","doc","pptx","ppt","xlsx","xls","odp","ods","odt"],
-                 convertTo: ["pdf"], shrink: false },
-  pdf:         { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","docx","pdfa"], shrink: true },
+                 convertTo: ["pdf","png","jpeg","webp","txt","md","html","rtf","epub","odt","tex","mp3","m4a","wav","audiogram"], shrink: false },
+  pdf:         { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","md","notes","docx","pdfa","mp3","m4a","wav","audiogram"], shrink: true },
   spreadsheet: { exts: ["csv","tsv","xlsx","json"],
                  convertTo: ["csv","tsv","xlsx","json","txt","md","html"], shrink: false },
   subtitle:    { exts: ["srt","vtt","ass","ssa","sub","sbv"],
-                 convertTo: ["srt","vtt","ass","ssa","sub","sbv"], shrink: false },
+                 convertTo: ["srt","vtt","ass","ssa","sub","sbv","txt","md","notes","docx","rtf","epub","odt","tex","html","pdf","mp3","m4a","wav","audiogram"], shrink: false },
   font:        { exts: ["ttf","otf","woff","woff2"],
-                 convertTo: ["ttf","otf","woff","woff2"], shrink: false },
+                 convertTo: ["ttf","otf","woff","woff2","png","jpeg","webp"], shrink: false },
   other: { exts: [], convertTo: [], shrink: false },
 };
 
