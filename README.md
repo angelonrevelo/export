@@ -355,10 +355,10 @@ The `image` row also covers special outputs `nobg` (transparent PNG) and `svg`
 
 | Action | Input | Notes |
 |---|---|---|
-| `shrink` | image / video / pdf | Lossy size reduction with `low / medium / high` presets + advanced quality slider (1–100). For image/video the advanced panel also exposes a **max longest side (px)** input with preset chips (`source / 4K / 1080p / 720p / 480p`); when set, downscales preserving aspect ratio (Pillow `thumbnail()` for images, ffmpeg `-vf scale` for video, both rounded to even dimensions). |
+| `shrink` | image / video / pdf | Lossy size reduction with `low / medium / high` presets + advanced quality slider (1–100). For image/video the advanced panel also exposes **two mutually-exclusive resize knobs**: a **max longest side (px)** input (presets `source / 4K / 1080p / 720p / 480p`) and a **scale by (%)** input (presets `off / 75% / 50% / 25%`). When set, downscales preserving aspect ratio (Pillow `resize`/`thumbnail` for images, ffmpeg `-vf scale` for video, both rounded to even dimensions). |
 | `compress` (archive) | any files | `zip` / `7z` / `tar.zst` / `tar.gz` / `tar.bz2` / `tar.xz` |
 | `compress` (single-file) | one file | `gz` / `bz2` / `xz` / `zst` (raw stream, no tar) |
-| `resize` | one image / video | Downscale longest side to a target pixel count (preserves aspect, even dimensions). Presets in the advanced panel: `source / 4K / 1080p / 720p / 480p`, or type any value. Internally `/api/shrink?level=resize&max_dim=N` with implicit high-quality CRF. The biggest single compression lever for high-res sources — 4K → 1080p alone is ~4× smaller. |
+| `resize` | one image / video | Downscale by either absolute longest-side (`max_dim=N` px, presets `source / 4K / 1080p / 720p / 480p`) OR relative percentage (`scale_percent=N`, presets `off / 75% / 50% / 25%`). The two are mutually exclusive in the UI — picking one clears the other. Aspect ratio preserved, output dimensions rounded to even. Internally `/api/shrink?level=resize` with implicit high-quality CRF. Biggest single compression lever for high-res sources — 4K → 1080p alone is ~4× smaller. |
 | `merge` | 2+ PDFs | Single combined PDF (pypdf) |
 | `split` | one PDF | Each page as a separate PDF, zipped |
 | `rotate` / `watermark` / `encrypt` / `decrypt` | one PDF | Per-PDF operations |

@@ -261,6 +261,16 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
           <a href="#" data-px="854" class="px-preset">480p</a>
         </span>
       </div>
+      <div id="adv-scale-row" style="margin-top: 0.4rem;">
+        <span style="color:#888; font-size:0.85em;">or scale by (%):</span>
+        <input type="number" id="adv-scale" min="1" max="200" step="1" placeholder="(off)" style="width:7rem; margin-left:0.4rem;">
+        <span id="adv-scale-presets" style="margin-left:0.5rem; font-size:0.85em;">
+          <a href="#" data-pct="" class="pct-preset">off</a> ·
+          <a href="#" data-pct="75" class="pct-preset">75%</a> ·
+          <a href="#" data-pct="50" class="pct-preset">50%</a> ·
+          <a href="#" data-pct="25" class="pct-preset">25%</a>
+        </span>
+      </div>
       <div style="color:#666; font-size:0.8em; margin-top:0.5rem;">
         Lower quality = smaller file, more visible compression. Max-dim
         downscales the longest side (preserves aspect) — biggest single lever
@@ -790,13 +800,14 @@ function updateOptForAction(type) {
   $("adv-link").textContent = action === "resize" ? "advanced ▴" : "advanced ▾";
   // Hide the quality row for resize — it's a pure-dimensions op.
   $("adv-quality-row").style.display = action === "resize" ? "none" : "";
-  // Max-dim row is meaningful for image/video shrink + resize, single OR
-  // multi (bulk shrink applies same max-dim to every file). Not for PDF
-  // shrink (Ghostscript doesn't honor it) and not for convert.
+  // Resize knobs (max-dim + scale%) are meaningful for image/video shrink or
+  // resize, single OR multi. Not for PDF shrink (Ghostscript doesn't honor
+  // them) and not for convert.
   const baseType = type.replace(/-multi$/, "");
-  const showMaxDim = (action === "shrink" || action === "resize") &&
+  const showResize = (action === "shrink" || action === "resize") &&
                      (baseType === "image" || baseType === "video");
-  $("adv-maxdim-row").style.display = showMaxDim ? "" : "none";
+  $("adv-maxdim-row").style.display = showResize ? "" : "none";
+  $("adv-scale-row").style.display = showResize ? "" : "none";
   if (showAdv) {
     $("adv-quality").value = qualityForLevel(action, sel.value);
     $("adv-quality-val").textContent = $("adv-quality").value;
@@ -828,17 +839,37 @@ $("opt-select").addEventListener("change", () => {
   refreshMergeToggle(allowMerge, fmt);
 });
 
-// Max-dim preset chips → write into the number input + refresh estimate.
+// Resize knobs are mutually exclusive: setting one clears the other so the
+// estimator + backend always know exactly which mode is active. max-dim is
+// "longest side ≤ N px"; scale is "N% on both axes".
 document.querySelectorAll(".px-preset").forEach((a) => {
   a.style.color = "#4d8eff";
   a.style.textDecoration = "none";
   a.onclick = (e) => {
     e.preventDefault();
     $("adv-maxdim").value = a.dataset.px || "";
+    if (a.dataset.px) $("adv-scale").value = "";
     refreshEstimate();
   };
 });
-$("adv-maxdim").addEventListener("input", refreshEstimate);
+document.querySelectorAll(".pct-preset").forEach((a) => {
+  a.style.color = "#4d8eff";
+  a.style.textDecoration = "none";
+  a.onclick = (e) => {
+    e.preventDefault();
+    $("adv-scale").value = a.dataset.pct || "";
+    if (a.dataset.pct) $("adv-maxdim").value = "";
+    refreshEstimate();
+  };
+});
+$("adv-maxdim").addEventListener("input", () => {
+  if ($("adv-maxdim").value) $("adv-scale").value = "";
+  refreshEstimate();
+});
+$("adv-scale").addEventListener("input", () => {
+  if ($("adv-scale").value) $("adv-maxdim").value = "";
+  refreshEstimate();
+});
 
 const SHRINK_LEVEL_QUALITY = { low: 50, medium: 70, high: 85 };
 function qualityForLevel(action, levelOrFmt) {
@@ -878,18 +909,27 @@ function refreshEstimate() {
   const q = +$("adv-quality").value;
   const t = files.length === 1 ? detectType(files[0].name) : "image";
 
-  // Read max-dim from the advanced panel (if set + meaningful).
+  // Read max-dim AND scale% from the advanced panel. The two are mutually
+  // exclusive in the UI but if both somehow ended up set, scale% wins to
+  // match backend precedence.
   const maxDimRaw = +$("adv-maxdim").value;
   const maxDim = (maxDimRaw >= 16 && maxDimRaw <= 16384) ? maxDimRaw : null;
+  const scaleRaw = +$("adv-scale").value;
+  const scalePct = (scaleRaw > 0 && scaleRaw <= 200) ? scaleRaw : null;
 
   // Source-aware path: if we successfully probed video metadata (duration,
   // resolution, source bitrate), predict the post-shrink size from x264's
   // known target-bitrate-per-resolution curve at the chosen CRF. Much tighter
   // than the blind curve below — typical bracket is ±25% instead of ±50%.
   if (t === "video" && _probe && _probe.duration > 0 && _probe.width > 0) {
-    // Apply max-dim downscale to the prediction (server does it via -vf scale).
+    // Apply downscale to the prediction. scale% wins over max-dim (matches
+    // the server). max-dim only kicks in when the source is larger than the cap.
     let outW = _probe.width, outH = _probe.height;
-    if (maxDim && Math.max(outW, outH) > maxDim) {
+    if (scalePct && scalePct !== 100) {
+      const f = scalePct / 100;
+      outW = Math.max(2, Math.round(outW * f / 2) * 2);
+      outH = Math.max(2, Math.round(outH * f / 2) * 2);
+    } else if (maxDim && Math.max(outW, outH) > maxDim) {
       const f = maxDim / Math.max(outW, outH);
       outW = Math.round(outW * f / 2) * 2;
       outH = Math.round(outH * f / 2) * 2;
@@ -1007,7 +1047,12 @@ $("process").onclick = async () => {
         fd.append("quality", $("adv-quality").value);
       }
       const maxDimVal = +$("adv-maxdim").value;
-      if (maxDimVal >= 16 && maxDimVal <= 16384) {
+      const scaleVal = +$("adv-scale").value;
+      // Backend treats scale_percent as winning when both are present, but the
+      // UI keeps them mutually exclusive — only send the one that's actually set.
+      if (scaleVal > 0 && scaleVal <= 200) {
+        fd.append("scale_percent", String(scaleVal));
+      } else if (maxDimVal >= 16 && maxDimVal <= 16384) {
         fd.append("max_dim", String(maxDimVal));
       }
       // Shrink-chain only applies to single-file (chain tracks cumulative
