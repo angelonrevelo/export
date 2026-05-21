@@ -153,7 +153,7 @@ AUDIO_STEMS = {"stems"}
 # sharing on platforms that need a video (Twitter/IG/LinkedIn/etc).
 AUDIO_TO_VIDEO = {"audiogram"}
 
-SHRINK_LEVELS = {"low", "medium", "high"}
+SHRINK_LEVELS = {"low", "medium", "high", "resize"}
 # Pillow-readable image inputs. PSD/TGA/PCX/EPS/ICNS rely on Pillow's broader
 # format support; they get the same dispatch path as JPEG/PNG.
 IMAGE_SUFFIXES = {
@@ -722,14 +722,27 @@ def _compress_single(input_path: Path, fmt: str, out_dir: Path) -> Path:
     return out_path
 
 
-def _shrink_image(input_path: Path, level: str, out_dir: Path, quality: int | None = None) -> Path:
-    if quality is None:
+def _shrink_image(input_path: Path, level: str, out_dir: Path,
+                  quality: int | None = None, max_dim: int | None = None) -> Path:
+    """Image shrink. Quality slider tunes JPEG/WebP/AVIF encoder quality.
+    Optional max_dim bounds the longest side in pixels (aspect ratio
+    preserved via Pillow's thumbnail()) — the single biggest size lever
+    for high-megapixel sources like 48 MP phone photos. Level "resize"
+    uses high quality and *requires* max_dim (standalone resize)."""
+    if level == "resize":
+        if max_dim is None:
+            raise RuntimeError("level=resize requires max_dim")
+        quality = quality if quality is not None else 95
+    elif quality is None:
         quality = {"low": 50, "medium": 70, "high": 85}[level]
     quality = max(1, min(100, quality))
     img = Image.open(input_path)
     src_fmt = (img.format or "JPEG").lower()  # capture before exif_transpose strips it
     img = ImageOps.exif_transpose(img)
     img.load()
+    if max_dim and max(img.size) > max_dim:
+        # thumbnail() is in-place, preserves aspect, uses LANCZOS by default.
+        img.thumbnail((max_dim, max_dim))
     # PNG quality is meaningless; route lossless inputs through webp for actual savings.
     out_fmt = "webp" if src_fmt in ("png", "tiff", "bmp") else src_fmt
     if out_fmt not in ("jpeg", "webp", "avif"):
@@ -750,7 +763,40 @@ def _shrink_image(input_path: Path, level: str, out_dir: Path, quality: int | No
     return out_path
 
 
-def _shrink_video(input_path: Path, level: str, out_dir: Path, quality: int | None = None) -> Path:
+def _video_scale_filter(input_path: Path, max_dim: int) -> str | None:
+    """Build an ffmpeg `-vf scale=...` filter that limits the longest side to
+    max_dim, preserves aspect ratio, ensures both output dimensions are
+    divisible by 2 (x264/SVT-AV1 requirement). Probes the source via ffprobe
+    so concrete W:H can be passed instead of dealing with ffmpeg's filter-
+    expression escaping. Returns None when no scaling is needed (source
+    already at or below max_dim)."""
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height",
+         "-of", "csv=p=0:s=x", str(input_path)],
+        capture_output=True, text=True, timeout=10,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        # Fallback: trust ffmpeg to figure it out. force_original_aspect_ratio
+        # preserves aspect; the second scale rounds dimensions to multiples of 2.
+        return (f"scale={max_dim}:{max_dim}:force_original_aspect_ratio=decrease,"
+                f"scale=trunc(iw/2)*2:trunc(ih/2)*2")
+    try:
+        w_str, h_str = r.stdout.strip().split("x", 1)
+        w, h = int(w_str), int(h_str)
+    except ValueError:
+        return None
+    longest = max(w, h)
+    if longest <= max_dim:
+        return None
+    scale_factor = max_dim / longest
+    new_w = max(2, int(round(w * scale_factor / 2)) * 2)
+    new_h = max(2, int(round(h * scale_factor / 2)) * 2)
+    return f"scale={new_w}:{new_h}:flags=lanczos"
+
+
+def _shrink_video(input_path: Path, level: str, out_dir: Path,
+                  quality: int | None = None, max_dim: int | None = None) -> Path:
     """Video shrink. Default codec: libx264 (h.264) for universal playback —
     QuickTime, Preview, every browser, every messaging app, every NLE. About
     20-30% larger than SVT-AV1 at matched quality, but AV1-in-MP4 breaks on
@@ -758,10 +804,28 @@ def _shrink_video(input_path: Path, level: str, out_dir: Path, quality: int | No
     which is the failure pattern users actually hit.
 
     Set EXPORT_SHRINK_VIDEO_CODEC=av1 for the maximum-shrink path when you
-    know the playback chain supports AV1 (recent Chrome/Firefox, VLC, mpv)."""
+    know the playback chain supports AV1 (recent Chrome/Firefox, VLC, mpv).
+
+    If max_dim is set, the longest side of the output is bounded to that pixel
+    count (aspect ratio preserved). Resolution downscale is the single biggest
+    compression lever — a 4K → 1080p downscale alone gives ~4× smaller file at
+    matched CRF. Level "resize" uses high-quality CRF and *requires* max_dim
+    (standalone resize without re-compression)."""
     codec = os.environ.get("EXPORT_SHRINK_VIDEO_CODEC", "x264").lower()
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}_small.mp4"
+
+    # Pure-resize mode: keep visual quality high, only scale dimensions.
+    if level == "resize":
+        if max_dim is None:
+            raise RuntimeError("level=resize requires max_dim")
+        quality = quality if quality is not None else 95
+        level = "high"  # fall through to high-quality CRF mapping below
+
+    scale_filter = _video_scale_filter(input_path, max_dim) if max_dim else None
+
+    # Build the optional -vf scale=... arg pair once (empty list = no scaling).
+    vf_args = ["-vf", scale_filter] if scale_filter else []
 
     if codec == "av1":
         # SVT-AV1: CRF 0-63 (lower = better). preset 0=slow/best, 13=fast/worst.
@@ -774,6 +838,7 @@ def _shrink_video(input_path: Path, level: str, out_dir: Path, quality: int | No
                         "medium": {"crf": "35", "preset": "6"},
                         "high":   {"crf": "28", "preset": "4"}}[level]
         cmd = ["ffmpeg", "-y", "-i", str(input_path),
+               *vf_args,
                "-c:v", "libsvtav1", "-crf", settings["crf"], "-preset", settings["preset"],
                "-pix_fmt", "yuv420p",
                "-c:a", "aac", "-b:a", "96k",
@@ -792,6 +857,7 @@ def _shrink_video(input_path: Path, level: str, out_dir: Path, quality: int | No
                         "medium": {"crf": "26", "preset": "medium"},
                         "high":   {"crf": "22", "preset": "slow"}}[level]
         cmd = ["ffmpeg", "-y", "-i", str(input_path),
+               *vf_args,
                "-c:v", "libx264", "-crf", settings["crf"], "-preset", settings["preset"],
                "-profile:v", "high", "-level:v", "4.0", "-pix_fmt", "yuv420p",
                "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out_path)]
@@ -827,17 +893,20 @@ def _shrink_pdf(input_path: Path, level: str, out_dir: Path, quality: int | None
     return out_path
 
 
-def run_shrink_job(job_id: str, input_path: Path, level: str, downloads_dir: Path, quality: int | None = None) -> None:
+def run_shrink_job(job_id: str, input_path: Path, level: str, downloads_dir: Path,
+                   quality: int | None = None, max_dim: int | None = None) -> None:
     job = jobs[job_id]
     out_dir = downloads_dir / job_id
     try:
         job["status"] = "shrinking"
         suffix = input_path.suffix.lower()
         if suffix in IMAGE_SUFFIXES:
-            target = _shrink_image(input_path, level, out_dir, quality=quality)
+            target = _shrink_image(input_path, level, out_dir, quality=quality, max_dim=max_dim)
         elif suffix in VIDEO_SUFFIXES:
-            target = _shrink_video(input_path, level, out_dir, quality=quality)
+            target = _shrink_video(input_path, level, out_dir, quality=quality, max_dim=max_dim)
         elif suffix in PDF_SUFFIXES:
+            # PDF doesn't currently honor max_dim (would need Ghostscript -dColorImageResolution
+            # tuning, separate concern). Silently ignored for now.
             target = _shrink_pdf(input_path, level, out_dir, quality=quality)
         else:
             raise ValueError(f"unsupported file type for shrink: {suffix or '(no extension)'}")

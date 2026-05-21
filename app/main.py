@@ -265,11 +265,16 @@ async def shrink_file(
     file: UploadFile = File(...),
     level: str = Form("medium"),
     quality: int | None = Form(None),
+    max_dim: int | None = Form(None),
     x_password: str | None = Header(None),
 ):
     check(x_password)
     if level not in SHRINK_LEVELS:
         raise HTTPException(status_code=400, detail=f"invalid level: {level}")
+    if level == "resize" and not max_dim:
+        raise HTTPException(status_code=400, detail="level=resize requires max_dim")
+    if max_dim is not None and (max_dim < 16 or max_dim > 16384):
+        raise HTTPException(status_code=400, detail="max_dim must be 16-16384 px")
     job_id = uuid.uuid4().hex[:12]
     job_dir = DOWNLOADS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -294,7 +299,7 @@ async def shrink_file(
         "original_size": written,
         "output_size": None,
     }
-    bg.add_task(run_shrink_job, job_id, input_path, level, DOWNLOADS_DIR, quality)
+    bg.add_task(run_shrink_job, job_id, input_path, level, DOWNLOADS_DIR, quality, max_dim)
     return {"job_id": job_id}
 
 
