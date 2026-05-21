@@ -50,6 +50,7 @@ from .jobs import (
     WHISPER_OUTPUTS,
     jobs,
     run_batch_convert_job,
+    run_batch_shrink_job,
     run_compress_job,
     run_convert_job,
     run_job,
@@ -508,6 +509,61 @@ async def batch_convert(
         "output_size": None,
     }
     bg.add_task(run_batch_convert_job, job_id, saved, format, DOWNLOADS_DIR, do_merge, quality)
+    return {"job_id": job_id}
+
+
+@app.post("/api/batch/shrink")
+async def batch_shrink(
+    bg: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    level: str = Form("medium"),
+    quality: int | None = Form(None),
+    max_dim: int | None = Form(None),
+    x_password: str | None = Header(None),
+):
+    """Apply the same shrink/resize params to N homogeneous files. Returns a
+    zip of the N shrunk outputs. Mirrors /api/shrink but for batches.
+    level=resize requires max_dim (standalone downscale without recompression)."""
+    check(x_password)
+    if not files or len(files) < 2:
+        raise HTTPException(status_code=400, detail="batch shrink needs at least 2 files")
+    if level not in SHRINK_LEVELS:
+        raise HTTPException(status_code=400, detail=f"invalid level: {level}")
+    if level == "resize" and not max_dim:
+        raise HTTPException(status_code=400, detail="level=resize requires max_dim")
+    if max_dim is not None and (max_dim < 16 or max_dim > 16384):
+        raise HTTPException(status_code=400, detail="max_dim must be 16-16384 px")
+
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = DOWNLOADS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: list[Path] = []
+    total = 0
+    for f in files:
+        target = job_dir / f"input_{f.filename}"
+        with target.open("wb") as out:
+            while chunk := await f.read(1024 * 1024):
+                total += len(chunk)
+                if MAX_COMPRESS_TOTAL_BYTES and total > MAX_COMPRESS_TOTAL_BYTES:
+                    out.close()
+                    for p in saved + [target]:
+                        p.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="upload too large")
+                out.write(chunk)
+        saved.append(target)
+
+    label = "resized" if level == "resize" else f"shrunk ({level})"
+    jobs[job_id] = {
+        "status": "pending",
+        "progress": 0,
+        "title": f"{len(saved)} files → {label}",
+        "error": None,
+        "filename": None,
+        "original_size": total,
+        "output_size": None,
+    }
+    bg.add_task(run_batch_shrink_job, job_id, saved, level, DOWNLOADS_DIR, quality, max_dim)
     return {"job_id": job_id}
 
 

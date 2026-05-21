@@ -2255,6 +2255,54 @@ def _merge_outputs(paths: list[Path], fmt: str, out_dir: Path) -> Path:
     raise ValueError(f"format not mergeable: {fmt}")
 
 
+def _shrink_one(input_path: Path, level: str, out_dir: Path,
+                quality: int | None = None, max_dim: int | None = None) -> Path:
+    """Single-file shrink dispatch. Mirrors _convert_one's role for the
+    batch-shrink endpoint. PDF currently ignores max_dim (Ghostscript image-
+    DPI tuning is a separate concern)."""
+    suffix = input_path.suffix.lower()
+    if suffix in IMAGE_SUFFIXES:
+        return _shrink_image(input_path, level, out_dir, quality=quality, max_dim=max_dim)
+    if suffix in VIDEO_SUFFIXES:
+        return _shrink_video(input_path, level, out_dir, quality=quality, max_dim=max_dim)
+    if suffix in PDF_SUFFIXES:
+        return _shrink_pdf(input_path, level, out_dir, quality=quality)
+    raise ValueError(f"unsupported file type for shrink: {suffix or '(no extension)'}")
+
+
+def run_batch_shrink_job(job_id: str, input_paths: list[Path], level: str,
+                         downloads_dir: Path, quality: int | None = None,
+                         max_dim: int | None = None) -> None:
+    """Apply the same shrink/resize params to N homogeneous files. Zips the
+    outputs (no merge mode — combining N shrunk images/videos doesn't make
+    sense). Per-file errors abort the whole job."""
+    job = jobs[job_id]
+    out_dir = downloads_dir / job_id
+    try:
+        job["status"] = "shrinking"
+        outputs: list[Path] = []
+        total = len(input_paths)
+        for i, p in enumerate(input_paths, 1):
+            outputs.append(_shrink_one(p, level, out_dir, quality=quality, max_dim=max_dim))
+            job["progress"] = max(1, min(99, int(100 * i / total)))
+        zip_name = f"{'resized' if level == 'resize' else 'shrunk'}_{total}.zip"
+        target = out_dir / zip_name
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_STORED) as zf:
+            for o in outputs:
+                zf.write(o, arcname=o.name)
+        for o in outputs:
+            o.unlink(missing_ok=True)
+        for p in input_paths:
+            p.unlink(missing_ok=True)
+        job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
+        job["progress"] = 100
+        job["status"] = "ready"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
 def run_batch_convert_job(job_id: str, input_paths: list[Path], fmt: str,
                           downloads_dir: Path, merge: bool = False,
                           quality: int | None = None) -> None:

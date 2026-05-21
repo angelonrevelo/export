@@ -513,6 +513,11 @@ function showPicked(files) {
     }
     if (allPdf) acts.push("merge");
     acts.push("compress");
+    // Bulk shrink/resize for homogeneous image-or-video batches. Same per-file
+    // params (level, quality, max-dim) applied to all N files, returns a zip.
+    if (allImages || sharedType === "video") {
+      acts.push("shrink", "resize");
+    }
     const ctx = allSameType ? `${sharedType}-multi` : "mixed";
     renderActions(acts, ctx);
   }
@@ -785,10 +790,12 @@ function updateOptForAction(type) {
   $("adv-link").textContent = action === "resize" ? "advanced ▴" : "advanced ▾";
   // Hide the quality row for resize — it's a pure-dimensions op.
   $("adv-quality-row").style.display = action === "resize" ? "none" : "";
-  // Max-dim row is meaningful for image/video shrink + resize (not for PDF
-  // shrink which doesn't honor it, not for convert which doesn't use it).
+  // Max-dim row is meaningful for image/video shrink + resize, single OR
+  // multi (bulk shrink applies same max-dim to every file). Not for PDF
+  // shrink (Ghostscript doesn't honor it) and not for convert.
+  const baseType = type.replace(/-multi$/, "");
   const showMaxDim = (action === "shrink" || action === "resize") &&
-                     (type === "image" || type === "video");
+                     (baseType === "image" || baseType === "video");
   $("adv-maxdim-row").style.display = showMaxDim ? "" : "none";
   if (showAdv) {
     $("adv-quality").value = qualityForLevel(action, sel.value);
@@ -986,10 +993,15 @@ $("process").onclick = async () => {
       if (!$("adv-panel").hidden) fd.append("quality", $("adv-quality").value);
       pollHint = selVal;
     } else if (action === "shrink" || action === "resize") {
-      endpoint = "/api/shrink";
-      fd.append("file", files[0]);
-      // Resize is a level on the same endpoint; it implies high-quality CRF
-      // and requires max_dim. Shrink uses the dropdown's level (low/med/high).
+      // Single-file → /api/shrink; multi-file (image/video) → /api/batch/shrink
+      // which applies the same params to every file and returns a zip.
+      const isBatch = files.length > 1;
+      endpoint = isBatch ? "/api/batch/shrink" : "/api/shrink";
+      if (isBatch) {
+        for (const f of files) fd.append("files", f);
+      } else {
+        fd.append("file", files[0]);
+      }
       fd.append("level", action === "resize" ? "resize" : selVal);
       if (action !== "resize" && !$("adv-panel").hidden) {
         fd.append("quality", $("adv-quality").value);
@@ -998,8 +1010,9 @@ $("process").onclick = async () => {
       if (maxDimVal >= 16 && maxDimVal <= 16384) {
         fd.append("max_dim", String(maxDimVal));
       }
-      // Begin a new shrink chain rooted at this upload (resize counts too).
-      _shrinkChain = {
+      // Shrink-chain only applies to single-file (chain tracks cumulative
+      // ratio against an original; doesn't make sense for a zip of N).
+      _shrinkChain = isBatch ? null : {
         originalSize: files[0].size,
         currentQuality: $("adv-panel").hidden ? null : +$("adv-quality").value,
         level: action === "resize" ? "resize" : selVal,
