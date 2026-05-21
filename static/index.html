@@ -292,21 +292,21 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
         <span style="color:#888; font-size:0.85em; min-width:9rem;">max longest side (px):</span>
         <input type="number" id="adv-maxdim" min="16" max="16384" step="2" placeholder="(source)" style="width:6.5rem;">
         <span id="adv-maxdim-presets" style="display:inline-flex; gap:0.25rem; flex-wrap:wrap;">
-          <button type="button" class="chip-sm px-preset" data-px="">source</button>
-          <button type="button" class="chip-sm px-preset" data-px="3840">4K</button>
-          <button type="button" class="chip-sm px-preset" data-px="1920">1080p</button>
-          <button type="button" class="chip-sm px-preset" data-px="1280">720p</button>
-          <button type="button" class="chip-sm px-preset" data-px="854">480p</button>
+          <button type="button" class="chip chip-sm px-preset" data-px="">source</button>
+          <button type="button" class="chip chip-sm px-preset" data-px="3840">4K</button>
+          <button type="button" class="chip chip-sm px-preset" data-px="1920">1080p</button>
+          <button type="button" class="chip chip-sm px-preset" data-px="1280">720p</button>
+          <button type="button" class="chip chip-sm px-preset" data-px="854">480p</button>
         </span>
       </div>
       <div id="adv-scale-row" style="margin-top: 0.4rem; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
         <span style="color:#888; font-size:0.85em; min-width:9rem;">or scale by (%):</span>
         <input type="number" id="adv-scale" min="1" max="200" step="1" placeholder="(off)" style="width:6.5rem;">
         <span id="adv-scale-presets" style="display:inline-flex; gap:0.25rem; flex-wrap:wrap;">
-          <button type="button" class="chip-sm pct-preset" data-pct="">off</button>
-          <button type="button" class="chip-sm pct-preset" data-pct="75">75%</button>
-          <button type="button" class="chip-sm pct-preset" data-pct="50">50%</button>
-          <button type="button" class="chip-sm pct-preset" data-pct="25">25%</button>
+          <button type="button" class="chip chip-sm pct-preset" data-pct="">off</button>
+          <button type="button" class="chip chip-sm pct-preset" data-pct="75">75%</button>
+          <button type="button" class="chip chip-sm pct-preset" data-pct="50">50%</button>
+          <button type="button" class="chip chip-sm pct-preset" data-pct="25">25%</button>
         </span>
       </div>
       <div style="color:#666; font-size:0.8em; margin-top:0.5rem;">
@@ -864,6 +864,9 @@ function updateOptForAction(type) {
   txt.type = txtType;
   txt.value = "";
   $("opt-label").textContent = label;
+  // For resize the whole opt-row is redundant — controls live in the advanced
+  // panel below. Hide the row entirely instead of showing "(use max-dim below)".
+  $("opt-row").style.display = action === "resize" ? "none" : "";
   if (action === "shrink") sel.value = "medium";
 
   // Merge toggle: any multi-convert whose chosen format is mergeable. For
@@ -1274,7 +1277,7 @@ async function poll(jobId) {
       if (_shrinkChain && j.filename && j.output_size) {
         const cq = _shrinkChain.currentQuality ?? 70;
         if (cq > 10) {
-          moreBtn = ` <button id="shrink-more" type="button">shrink more ↓</button>`;
+          moreBtn = ` <button id="shrink-more" type="button" class="chip chip-sm">shrink more ↓</button>`;
         }
       }
       $("status").innerHTML = `<a href="${url}" download>download "${name}"</a>${sizeNote}${moreBtn}`;
