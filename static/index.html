@@ -54,6 +54,32 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 #drop small { display: block; margin-top: 0.5rem; color: #555; font-size: 0.8em; }
 #drop-file { display: none; }
 
+/* Full-viewport drop overlay. Pointer-events:none everywhere except when
+   visible — otherwise it would block clicks on the page below. The dim
+   layer + centered prompt activate any time a drag enters the window. */
+#drop-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(13, 18, 30, 0.86);
+  backdrop-filter: blur(4px);
+  display: none;
+  align-items: center; justify-content: center;
+  pointer-events: none;
+}
+#drop-overlay.show { display: flex; pointer-events: auto; }
+#drop-overlay > div {
+  border: 3px dashed #4d8eff;
+  border-radius: 12px;
+  padding: 3rem 4rem;
+  color: #4d8eff;
+  font-size: 1.2rem;
+  background: rgba(77, 142, 255, 0.06);
+  text-align: center;
+}
+#drop-overlay small {
+  display: block; margin-top: 0.5rem; color: #888;
+  font-size: 0.85rem; font-weight: normal;
+}
+
 #picked { display: none; margin-top: 0.75rem; }
 #picked.show { display: block; }
 #file-card {
@@ -66,22 +92,34 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 }
 #file-card .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #file-card .meta { color: #666; font-size: 0.85em; white-space: nowrap; }
+/* Clear button shares the chip look but recolors to danger on hover.
+   Same padding as .chip-sm so it visually aligns with preset chips. */
 #clear-btn {
   background: transparent; color: #888; border: 1px solid #2a2a2a;
-  padding: 0.3rem 0.6rem; font-size: 0.85em; cursor: pointer;
+  padding: 0.25rem 0.6rem; font-size: 0.82em; border-radius: 5px;
+  cursor: pointer; transition: all 0.1s;
 }
 #clear-btn:hover { color: #ff6b6b; border-color: #ff6b6b; }
 
-#actions { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
-#actions label {
+/* Shared "chip" pattern used by action picker labels + preset chips. One
+   visual language for tappable secondary controls — same border, same hover,
+   same selected/active tint. Only the size varies (chip vs chip-sm). */
+.chip, #actions label {
   padding: 0.4rem 0.9rem; border-radius: 6px; background: #181818;
-  border: 1px solid #2a2a2a; cursor: pointer; transition: all 0.1s;
+  border: 1px solid #2a2a2a; color: #ccc; cursor: pointer;
+  transition: all 0.1s; user-select: none;
+  font: inherit; line-height: 1.2;
+  display: inline-flex; align-items: center;
 }
-#actions label:hover { border-color: #444; }
-#actions label.selected {
+.chip:hover, #actions label:hover { border-color: #444; color: #fff; }
+.chip-sm {
+  padding: 0.25rem 0.6rem; font-size: 0.82em; border-radius: 5px;
+}
+.chip.active, .chip-sm.active, #actions label.selected {
   background: rgba(77, 142, 255, 0.12);
   border-color: #4d8eff; color: #4d8eff;
 }
+#actions { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
 #actions input { display: none; }
 
 #opt-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
@@ -250,25 +288,25 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
         <input type="range" id="adv-quality" min="1" max="100" step="1" value="70">
         <span class="est" id="adv-quality-val">70</span>
       </label>
-      <div id="adv-maxdim-row" style="margin-top: 0.6rem;">
-        <span style="color:#888; font-size:0.85em;">max longest side (px):</span>
-        <input type="number" id="adv-maxdim" min="16" max="16384" step="2" placeholder="(source)" style="width:7rem; margin-left:0.4rem;">
-        <span id="adv-maxdim-presets" style="margin-left:0.5rem; font-size:0.85em;">
-          <a href="#" data-px="" class="px-preset">source</a> ·
-          <a href="#" data-px="3840" class="px-preset">4K</a> ·
-          <a href="#" data-px="1920" class="px-preset">1080p</a> ·
-          <a href="#" data-px="1280" class="px-preset">720p</a> ·
-          <a href="#" data-px="854" class="px-preset">480p</a>
+      <div id="adv-maxdim-row" style="margin-top: 0.6rem; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+        <span style="color:#888; font-size:0.85em; min-width:9rem;">max longest side (px):</span>
+        <input type="number" id="adv-maxdim" min="16" max="16384" step="2" placeholder="(source)" style="width:6.5rem;">
+        <span id="adv-maxdim-presets" style="display:inline-flex; gap:0.25rem; flex-wrap:wrap;">
+          <button type="button" class="chip-sm px-preset" data-px="">source</button>
+          <button type="button" class="chip-sm px-preset" data-px="3840">4K</button>
+          <button type="button" class="chip-sm px-preset" data-px="1920">1080p</button>
+          <button type="button" class="chip-sm px-preset" data-px="1280">720p</button>
+          <button type="button" class="chip-sm px-preset" data-px="854">480p</button>
         </span>
       </div>
-      <div id="adv-scale-row" style="margin-top: 0.4rem;">
-        <span style="color:#888; font-size:0.85em;">or scale by (%):</span>
-        <input type="number" id="adv-scale" min="1" max="200" step="1" placeholder="(off)" style="width:7rem; margin-left:0.4rem;">
-        <span id="adv-scale-presets" style="margin-left:0.5rem; font-size:0.85em;">
-          <a href="#" data-pct="" class="pct-preset">off</a> ·
-          <a href="#" data-pct="75" class="pct-preset">75%</a> ·
-          <a href="#" data-pct="50" class="pct-preset">50%</a> ·
-          <a href="#" data-pct="25" class="pct-preset">25%</a>
+      <div id="adv-scale-row" style="margin-top: 0.4rem; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+        <span style="color:#888; font-size:0.85em; min-width:9rem;">or scale by (%):</span>
+        <input type="number" id="adv-scale" min="1" max="200" step="1" placeholder="(off)" style="width:6.5rem;">
+        <span id="adv-scale-presets" style="display:inline-flex; gap:0.25rem; flex-wrap:wrap;">
+          <button type="button" class="chip-sm pct-preset" data-pct="">off</button>
+          <button type="button" class="chip-sm pct-preset" data-pct="75">75%</button>
+          <button type="button" class="chip-sm pct-preset" data-pct="50">50%</button>
+          <button type="button" class="chip-sm pct-preset" data-pct="25">25%</button>
         </span>
       </div>
       <div style="color:#666; font-size:0.8em; margin-top:0.5rem;">
@@ -288,6 +326,15 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
     <a href="#" id="caps-link">show what's supported</a>
   </div>
   <div id="caps-panel" hidden></div>
+</div>
+
+<!-- Full-viewport drop target. Wakes up only while a file is being dragged
+     anywhere over the window — see the dragenter handler below. -->
+<div id="drop-overlay">
+  <div>
+    drop anywhere to upload
+    <small>files go to the upload pipeline just like dropping in the box</small>
+  </div>
 </div>
 
 <script>
@@ -431,11 +478,48 @@ drop.onclick = () => $("drop-file").click();
 drop.addEventListener("drop", (e) => {
   e.preventDefault();
   drop.classList.remove("dragging");
+  acceptDroppedFiles(e.dataTransfer.files);
+});
+
+// ─── Global viewport drop zone ───────────────────────────────────────
+// Drop a file ANYWHERE on the page (not just in the box) and we route it to
+// the same upload pipeline. dragenter/dragleave fire when crossing into
+// child elements, so we count enter/leave events instead of toggling state
+// directly — overlay shows when depth > 0, hides when back to 0. dragover
+// must be cancelled or browser opens the file as a new page.
+let _dragDepth = 0;
+const overlay = $("drop-overlay");
+function hasFiles(dt) {
+  return dt && Array.from(dt.types || []).includes("Files");
+}
+window.addEventListener("dragenter", (e) => {
+  if (!hasFiles(e.dataTransfer)) return;
+  _dragDepth++;
+  overlay.classList.add("show");
+});
+window.addEventListener("dragleave", (e) => {
+  if (!hasFiles(e.dataTransfer)) return;
+  _dragDepth = Math.max(0, _dragDepth - 1);
+  if (_dragDepth === 0) overlay.classList.remove("show");
+});
+window.addEventListener("dragover", (e) => {
+  if (hasFiles(e.dataTransfer)) e.preventDefault();
+});
+window.addEventListener("drop", (e) => {
+  if (!hasFiles(e.dataTransfer)) return;
+  e.preventDefault();
+  _dragDepth = 0;
+  overlay.classList.remove("show");
+  acceptDroppedFiles(e.dataTransfer.files);
+});
+
+function acceptDroppedFiles(files) {
+  if (!files || !files.length) return;
   const dt = new DataTransfer();
-  for (const f of e.dataTransfer.files) dt.items.add(f);
+  for (const f of files) dt.items.add(f);
   $("drop-file").files = dt.files;
   showPicked(dt.files);
-});
+}
 
 $("drop-file").onchange = (e) => showPicked(e.target.files);
 
@@ -842,32 +926,44 @@ $("opt-select").addEventListener("change", () => {
 // Resize knobs are mutually exclusive: setting one clears the other so the
 // estimator + backend always know exactly which mode is active. max-dim is
 // "longest side ≤ N px"; scale is "N% on both axes".
-document.querySelectorAll(".px-preset").forEach((a) => {
-  a.style.color = "#4d8eff";
-  a.style.textDecoration = "none";
-  a.onclick = (e) => {
+//
+// Active-state painting (.active class) is derived from the input values so
+// typing a custom number in either input also drops the chip's selected look
+// — keeps "what's selected" honest no matter how the value got set.
+function paintPresetActiveStates() {
+  const md = $("adv-maxdim").value.trim();
+  const sc = $("adv-scale").value.trim();
+  document.querySelectorAll(".px-preset").forEach((b) =>
+    b.classList.toggle("active", (b.dataset.px || "") === md));
+  document.querySelectorAll(".pct-preset").forEach((b) =>
+    b.classList.toggle("active", (b.dataset.pct || "") === sc));
+}
+document.querySelectorAll(".px-preset").forEach((b) => {
+  b.onclick = (e) => {
     e.preventDefault();
-    $("adv-maxdim").value = a.dataset.px || "";
-    if (a.dataset.px) $("adv-scale").value = "";
+    $("adv-maxdim").value = b.dataset.px || "";
+    if (b.dataset.px) $("adv-scale").value = "";
+    paintPresetActiveStates();
     refreshEstimate();
   };
 });
-document.querySelectorAll(".pct-preset").forEach((a) => {
-  a.style.color = "#4d8eff";
-  a.style.textDecoration = "none";
-  a.onclick = (e) => {
+document.querySelectorAll(".pct-preset").forEach((b) => {
+  b.onclick = (e) => {
     e.preventDefault();
-    $("adv-scale").value = a.dataset.pct || "";
-    if (a.dataset.pct) $("adv-maxdim").value = "";
+    $("adv-scale").value = b.dataset.pct || "";
+    if (b.dataset.pct) $("adv-maxdim").value = "";
+    paintPresetActiveStates();
     refreshEstimate();
   };
 });
 $("adv-maxdim").addEventListener("input", () => {
   if ($("adv-maxdim").value) $("adv-scale").value = "";
+  paintPresetActiveStates();
   refreshEstimate();
 });
 $("adv-scale").addEventListener("input", () => {
   if ($("adv-scale").value) $("adv-maxdim").value = "";
+  paintPresetActiveStates();
   refreshEstimate();
 });
 
