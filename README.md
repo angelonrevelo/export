@@ -55,11 +55,11 @@ version.
 
 ### Lossy shrink levels
 
-| Input | `low` | `medium` | `high` |
-|---|---|---|---|
-| Image (any) | quality 50 | quality 70 | quality 85 |
-| Video | libx264 CRF 30, preset fast | CRF 26, preset medium | CRF 22, preset slow |
-| PDF | Ghostscript `/screen` | `/ebook` | `/printer` |
+| Input | `low` | `medium` | `high` | `resize` |
+|---|---|---|---|---|
+| Image (any) | quality 50 | quality 70 | quality 85 | quality 95 (near-lossless), max-dim or scale% **required** |
+| Video | libx264 CRF 30, preset fast | CRF 26, preset medium | CRF 22, preset slow | CRF 18, preset medium, max-dim or scale% **required** |
+| PDF | Ghostscript `/screen` | `/ebook` | `/printer` | — (resize n/a for PDF) |
 
 The **advanced disclosure** under shrink and image/video convert exposes a
 1–100 quality slider that overrides these presets. The slider's "estimated
@@ -136,6 +136,7 @@ deletes job dirs older than 6 h every 15 min.
 │   │   /api/images/batch    → img→pdf/gif/mp4│   │
 │   │   /api/images/to-pdf   → legacy       │     │
 │   │   /api/batch           → N→zip or merge│    │
+│   │   /api/batch/shrink    → N→zip of N shr│    │
 │   │   /api/thumbnail       → server prev. │     │
 │   │   /api/jobs/:id        → poll status  │     │
 │   │   /api/files/:id       → download     │     │
