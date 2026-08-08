@@ -41,6 +41,14 @@ esac
 : "${PORT:=8500}"
 : "${HOST:=127.0.0.1}"
 
+# Auto-bootstrap venv so `npm run dev` works before install-macos/linux.
+if [ ! -x ./.venv/bin/uvicorn ]; then
+  echo ">>> creating .venv and installing Python deps (first run)"
+  python3 -m venv .venv
+  ./.venv/bin/pip install --upgrade pip
+  ./.venv/bin/pip install -e .
+fi
+
 mkdir -p "$EXPORT_DOWNLOADS"
 
 exec ./.venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT"
