@@ -1,12 +1,14 @@
 # export
 
 A personal web tool that converts, extracts, compresses, and transforms files —
-from URLs (YouTube, Twitter, etc.) and from local uploads. 140+ conversion
+from URLs (YouTube, Twitter, etc.) and from local uploads. 180+ conversion
 paths across image / video / audio / document / PDF / spreadsheet / subtitle
-/ font / archive, all running locally with open-source libraries (optional
-Groq cloud for fast transcription). Designed to replace the half-dozen
-freeconvert/ilovepdf/yt-mp3 sites you'd otherwise tab through, plus
-NoteGPT-style URL-to-transcript that those sites don't offer.
+/ font / comic / archive, all running locally with open-source libraries
+(optional Groq cloud for fast transcription). Multi-language OCR / STT / TTS
+with auto-detect, chain outputs (kit / captioned / frames), and an explicit
+offline mode. Designed to replace the half-dozen freeconvert/ilovepdf/yt-mp3
+sites you'd otherwise tab through, plus NoteGPT-style URL-to-transcript that
+those sites don't offer.
 
 ```
 http://localhost:8500   →   single password   →   paste a URL or drop a file
@@ -23,7 +25,7 @@ version.
 
 | Source | Outputs |
 |---|---|
-| YouTube, Facebook (public), Vimeo, SoundCloud, Bandcamp, Twitch, Reddit, TED, Dailymotion, PeerTube, Mixcloud, +~1800 more sites via [yt-dlp](https://github.com/yt-dlp/yt-dlp) | `mp3`, `mp4`, **`notes`** (NoteGPT-style markdown), `txt` (transcript), `srt` / `vtt` (subtitles) |
+| YouTube, Facebook (public), Vimeo, SoundCloud, Bandcamp, Twitch, Reddit, TED, Dailymotion, PeerTube, Mixcloud, +~1800 more sites via [yt-dlp](https://github.com/yt-dlp/yt-dlp) | `mp3`, `mp4`, **`notes`** (NoteGPT-style markdown), `kit` (zip of txt+srt+vtt+notes), `txt` / `srt` / `vtt`, `pdf` / `docx` / `epub` (transcript as a document), `captioned` (burned-in subs), `frames`, `subs` |
 | Image-rich URLs (Wikimedia Commons, Reddit galleries, Pinterest, etc.) via [gallery-dl](https://github.com/mikf/gallery-dl) | `images` (single file or zip) |
 | **Login-walled** (Instagram, locked X, private FB groups) | Set `EXPORT_YTDLP_BROWSER=chrome` to read cookies from your logged-in browser |
 | **IP-blocked** (TikTok, Rumble) | Set `EXPORT_HTTP_PROXY=socks5://127.0.0.1:9050` (Tor) or any residential proxy |
@@ -32,13 +34,14 @@ version.
 
 | Input type | Convert to | Other operations |
 |---|---|---|
-| **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns`) | `jpeg, png, webp, avif, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract), nobg (transparent PNG via rembg), svg (vectorize via vtracer)`. Also via OCR→pandoc chain: `docx, md, html, rtf, epub, odt, tex` (extracts text from image, wraps in editable doc format — useful for digitizing scanned pages). | `shrink` (with quality slider) |
-| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif`) | `mp4, mov, webm, mkv, gif, mp3, m4a, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram` (1080×1080 mp4 with waveform + sweeping playhead), `txt, srt, vtt, notes` (Whisper transcript — local CPU or Groq cloud). Note: `.gif` is recognized as both image and video; `gif → mp4/mov/webm/mkv` works via the video branch. | `shrink` (libx264 re-encode with quality slider — universal playback) |
-| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma`) | `mp3, m4a, wav, flac, ogg, opus, aac, txt, srt, vtt, notes (Whisper), denoise (noisereduce), stems (Demucs vocal/drum/bass/other split), audiogram (1080×1080 mp4 with full-clip waveform + sweeping playhead — useful for sharing podcast clips on platforms that need video)` | — |
-| **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback for scanned), md (txt + title heading), notes (NoteGPT-style paragraphs grouped at blank-line boundaries), docx, pdfa (searchable PDF/A via OCRmyPDF), mp3/m4a/wav (audiobook via TTS chain), audiogram (waveform mp4 of the TTS render)` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
+| **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns .jxl .svg` + camera RAW `.dng .cr2 .cr3 .nef .arw .raf .orf .rw2 .pef .srw`) | `jpeg, png, webp, avif, jxl, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract, auto language), nobg (transparent PNG via rembg), svg (vectorize via vtracer)`. Also via OCR→pandoc chain: `docx, md, html, rtf, epub, odt, tex`. JXL and RAW need the optional `.[media]` extra. | `shrink` (with quality slider) |
+| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif .mpg .mpeg .vob .asf .mxf`) | `mp4, mov, webm, mkv, gif, mp3, m4a, m4b, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram`, `txt, srt, vtt, notes, kit` (Whisper — local multilingual `large-v3-turbo` or Groq), `captioned` (burn-in subs), `frames` (zip of 1 fps PNGs, cap 120), `subs` (embedded stream or Whisper fallback), `pdf / docx / epub` (transcript as a document). `.gif` is both image and video. | `shrink` (libx264 re-encode with quality slider — universal playback) |
+| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma .amr .3ga .m4b .ac3 .caf`) | `mp3, m4a, m4b, wav, flac, ogg, opus, aac, txt, srt, vtt, notes, kit (Whisper), denoise (noisereduce), stems (Demucs), audiogram, pdf / docx / epub` (transcript as a document) | — |
+| **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback, auto language), md, notes, docx, html, epub, rtf, odt, tex, pdfa (searchable PDF/A via OCRmyPDF with the detected language pack), mp3/m4a/wav (audiobook via TTS, voice matched to detected language), audiogram` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
 | **Office** (`.docx .doc .pptx .ppt .xlsx .xls .odp .ods .odt`) | `pdf` (LibreOffice headless), `png/jpeg/webp` (each page/slide rasterized at 200 DPI via office→pdf→image, multi-page → zip). For `.docx / .odt / .pptx` (pandoc-readable): `md, html, rtf, epub, txt, odt, tex` direct via pandoc. For all office formats: `txt` via office→pdf→text chain, plus `mp3/m4a/wav` (audiobook via TTS), `audiogram` (waveform mp4 of the TTS render). | — |
-| **Spreadsheet** (`.csv .tsv .xlsx .json`) | `csv, tsv, xlsx, json, txt, md, html` (cross-conversion via openpyxl + stdlib csv/json). **Nested JSON is auto-tolerated** — walks 3 levels deep for an inner `list[dict]`; otherwise degrades to a 2-col `key/value` sheet with complex values JSON-encoded. `html` renders the JSON as a styled `<dl>` tree, with string values under fields keyed `html` / `body` / `content` / `rendered` / `markup` rendered as inline HTML rather than escaped. | — |
+| **Spreadsheet** (`.csv .tsv .xlsx .json .yaml .yml .toml .xml`) | `csv, tsv, xlsx, json, yaml, toml, txt, md, html, pdf`. Nested JSON/YAML is auto-tolerated — walks 3 levels deep for an inner `list[dict]`; otherwise degrades to a 2-col `key/value` sheet. `html` renders JSON as a styled `<dl>` tree (`html`/`body`/`content`/`rendered`/`markup` keys render raw). `pdf` is HTML → WeasyPrint. | — |
+| **Comic** (`.cbz`) | `pdf` (zip of images → multi-page PDF, page order = zip order) | — |
 | **Subtitle** (`.srt .vtt .ass .ssa .sub .sbv`) | `srt, vtt, ass, ssa, sub, sbv` (cross-conversion via pysubs2). Also: `txt / md / notes` (transcript dumps; notes groups paragraphs by ≥1.5 s gap between cues), `docx / rtf / epub / odt / tex / html / pdf` (printable transcript via pandoc), `mp3 / m4a / wav` (TTS read-aloud), `audiogram` (waveform mp4 of the TTS render). | — |
 | **Font** (`.ttf .otf .woff .woff2`) | `ttf, otf, woff, woff2` (container conversion via fontTools — TTF↔OTF is a no-op, woff/woff2 wrap or unwrap). Also: `png / jpeg / webp` specimen — renders the font name + a large AaBbCc preview + two pangrams as an image (woff/woff2 routed through a fontTools TTF intermediate so older Pillow builds still work). | — |
 
@@ -93,7 +96,7 @@ bash scripts/install-macos.sh
 npm run dev    # or: bash scripts/run.sh
 ```
 
-`run.sh` auto-creates `.env` with a random password on first launch.
+`run.sh` auto-creates `.env` with password `1234` on first launch.
 For muscle-memory comfort, the project ships a `package.json` with `dev`,
 `start`, and `watch` scripts that all wrap `scripts/run.sh` — no actual Node
 deps, just the one-line shim.
@@ -199,8 +202,11 @@ For multi-file batch operations:
 | Subtitle | pysubs2 |
 | Font | fontTools + brotli (for woff2) |
 | OCR | Tesseract (via pytesseract); applied as auto-fallback when scanned PDFs return empty pdfplumber output |
-| STT | faster-whisper local (default `distil-large-v3`, multilingual, ~6× faster than whisper-large-v3) — or Groq cloud `whisper-large-v3-turbo` when `EXPORT_GROQ_API_KEY` is set (~200× realtime, $0.04/h paid) |
-| TTS | macOS `say` / `piper-tts` (Linux fallback) |
+| STT | faster-whisper local (default `large-v3-turbo`, multilingual) — or Groq cloud `whisper-large-v3-turbo` when `EXPORT_GROQ_API_KEY` is set and `EXPORT_OFFLINE` is unset. `distil-large-v3` is English-only and is no longer the default. |
+| TTS | macOS `say` (voice picked from detected language) / `piper-tts` (Linux; `{lang}_*.onnx` in `voices/` or `EXPORT_PIPER_VOICE`) |
+| Language | `langdetect` + Unicode script ranges + Tesseract OSD. UI language dropdown pins OCR/STT/TTS per job. |
+| Translate | NLLB-200 distilled 600M via CTranslate2 int8 (200 languages including Filipino `tgl_Latn`). UI **to** dropdown; format `translate` dumps translated txt. Applies to OCR / STT / subtitles / TTS / notes / kit / captioned. |
+| Offline | `EXPORT_OFFLINE=1` refuses URL extraction and Groq, and blocks HuggingFace model downloads. Prefetch with `bash scripts/prefetch.sh`. |
 | Audio AI | Demucs (htdemucs) for vocal/drum/bass/other stem separation, noisereduce for spectral denoise |
 | Image AI | rembg (u2net) for background removal, vtracer for raster→SVG |
 | Compression | zstandard (`tar.zst` + single-file `.zst`), py7zr (`.7z`), stdlib zipfile + tarfile (gzip/bzip2/xz) |
@@ -209,14 +215,14 @@ For multi-file batch operations:
 ## Configuration
 
 Every knob is set via env var (read from `.env` if present — auto-created on
-first run with a random password). Setting one to its default has the same
+first run with password `1234`). Setting one to its default has the same
 effect as not setting it.
 
 ### Required
 
 | Env var | Default | Notes |
 |---|---|---|
-| `EXPORT_PASSWORD` | `changeme` | Required. Sent as `X-Password` header. `run.sh` auto-generates a random one if `.env` is missing. Use `openssl rand -base64 24` for production. |
+| `EXPORT_PASSWORD` | `1234` | Required. Sent as `X-Password` header. Always `1234` unless you override it. |
 
 ### Storage & limits
 
@@ -239,16 +245,19 @@ effect as not setting it.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `EXPORT_WHISPER_MODEL` | `distil-large-v3` | Any faster-whisper model name. Smaller = less disk + faster but lower quality. `tiny.en / base.en / small.en` give ~10-40× realtime on CPU for English content. |
+| `EXPORT_WHISPER_MODEL` | `large-v3-turbo` | Any faster-whisper model name. Default is multilingual. `distil-large-v3` and `*.en` are English-only. Smaller = less disk + faster but lower quality. |
 | `EXPORT_WHISPER_MODEL_DIR` | (auto) | Override model cache dir (defaults to `~/.cache/huggingface`). |
+| `EXPORT_LANGUAGE` | (auto) | Pin OCR / STT / TTS to an ISO 639-1 code (`en`, `tl`, `es`, `zh`, …). The UI dropdown sends the same value per job. |
+| `EXPORT_OCR_LANG` | (auto) | Force a Tesseract `-l` string (`eng+fil`). Overrides pack picking. |
+| `EXPORT_OFFLINE` | (off) | When `1`, URL extraction and Groq are refused and Whisper/rembg/demucs/NLLB will not download models. Prefetch first: `bash scripts/prefetch.sh`. |
+| `EXPORT_TRANSLATE_TO` | (off) | Process-wide NLLB target (ISO 639-1). The UI **to** dropdown sends the same value per job. |
 
 ### Whisper STT (Groq cloud, optional)
 
-When `EXPORT_GROQ_API_KEY` is set, all transcription (audio/video → txt / srt /
-vtt / notes) routes to Groq's hosted Whisper API instead of local CPU. ~200×
-realtime on `whisper-large-v3-turbo` vs ~3–4× for local `distil-large-v3` — so
-an 11 h podcast transcribes in ~5 minutes instead of ~3 hours. Free tier covers
-8 h/day of audio; paid tier is $0.04/h.
+When `EXPORT_GROQ_API_KEY` is set and `EXPORT_OFFLINE` is unset, all transcription
+(audio/video → txt / srt / vtt / notes / kit) routes to Groq's hosted Whisper
+API instead of local CPU. ~200× realtime on `whisper-large-v3-turbo`. Free tier
+covers 8 h/day of audio; paid tier is $0.04/h. Offline mode ignores the key.
 
 | Env var | Default | Notes |
 |---|---|---|
@@ -269,6 +278,7 @@ an 11 h podcast transcribes in ~5 minutes instead of ~3 hours. Free tier covers
 | `EXPORT_YTDLP_BROWSER` | (none) | Easiest cookie source — name of an installed browser (`chrome`, `firefox`, `safari`, `edge`, `brave`, `opera`, `vivaldi`). yt-dlp reads cookies live. |
 | `EXPORT_YTDLP_COOKIES` | (none) | Headless alternative — Netscape-format `cookies.txt` path. |
 | `EXPORT_HTTP_PROXY` | (none) | Routes URL extraction through a proxy. Beats IP blocks (TikTok, Rumble) and geo-restrictions. Format: `http://user:pw@host:port` or `socks5://127.0.0.1:9050` (Tor). |
+| `EXPORT_YTDLP_IMPERSONATE` | `auto` | Browser impersonation mode for yt-dlp's curl-cffi transport. `auto` uses Chrome impersonation only for TikTok / Instagram / Threads; public YouTube stays on yt-dlp's default transport to avoid curl-cffi cleanup crashes on Python 3.14. Set `always` to force it or `never` to disable it everywhere. |
 
 ### Video shrink
 
@@ -335,22 +345,24 @@ the **show what's supported** link in the UI renders it inline. Snapshot:
 
 | Input → | image | pdf | docx | epub | html | md | txt | mp3 | mp4 | csv | xlsx | json | srt | vtt | ttf | woff2 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| image | ✓ | ✓ | — | — | — | — | OCR | — | — | — | — | — | — | — | — | — |
-| video | — | — | — | — | — | — | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
-| audio | — | — | — | — | — | — | STT | ✓ | AG | — | — | — | STT | STT | — | — |
-| pdf | ✓ | OCR | ✓ | — | — | — | ✓+OCR | — | — | — | — | — | — | — | — | — |
+| image | ✓ | ✓ | OCR | — | OCR | OCR | OCR | — | — | — | — | — | — | — | — | — |
+| video | — | STT | STT | STT | — | notes | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
+| audio | — | STT | STT | STT | — | notes | STT | ✓ | AG | — | — | — | STT | STT | — | — |
+| pdf | ✓ | OCR | ✓ | ✓ | ✓ | ✓ | ✓+OCR | TTS | AG | — | — | — | — | — | — | — |
 | document | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | TTS | — | — | — | — | — | — | — | — |
-| office | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| spreadsheet | — | — | — | — | ✓ | ✓ | ✓ | — | — | ✓ | ✓ | ✓ | — | — | — | — |
-| subtitle | — | — | — | — | — | — | — | — | — | — | — | — | ✓ | ✓ | — | — |
+| office | — | ✓ | — | — | — | — | — | TTS | AG | — | — | — | — | — | — | — |
+| spreadsheet | — | ✓ | — | — | ✓ | ✓ | ✓ | — | — | ✓ | ✓ | ✓ | — | — | — | — |
+| subtitle | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | TTS | AG | — | — | — | ✓ | ✓ | — | — |
 | font | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✓ | ✓ |
-| URL | — | — | — | — | — | — | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
+| comic | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| URL | — | STT | STT | STT | — | notes | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
 
 (`✓` = direct conversion, `OCR` = via Tesseract, `STT` = via Whisper, `TTS` =
 via `say`/piper, `AG` = audiogram (mp4 with waveform + playhead), `—` = not exposed.
-The `image` row also covers special outputs `nobg` (transparent PNG) and `svg`
-(vectorized) that don't fit the matrix; the `audio` row also produces `denoise`
-(noisereduce wav) and `stems` (Demucs zip).)
+The `image` row also covers special outputs `nobg` (transparent PNG), `svg`
+(vectorized) and `jxl`; the `audio`/`video` rows also produce `denoise`, `stems`,
+`kit` (zip of txt+srt+vtt+notes), `captioned`, `frames`, `subs`. Spreadsheet also
+cross-converts `yaml`/`toml`/`xml`.)
 
 ### Operations (not format conversions)
 
@@ -389,10 +401,12 @@ instead of the raw 200-line yt-dlp stack trace. Examples:
 
 | Command | What it does |
 |---|---|
-| `npm run dev` / `npm start` / `npm run watch` | Wraps `bash scripts/run.sh`. Auto-creates `.env` with a random password on first run. No actual Node deps — pure muscle-memory shim. |
+| `npm run dev` / `npm start` / `npm run watch` | Wraps `bash scripts/run.sh`. Auto-creates `.env` with password `1234` on first run. No actual Node deps — pure muscle-memory shim. |
 | `bash scripts/run.sh` | Same. Loads `.env`, sets `DYLD_FALLBACK_LIBRARY_PATH` on macOS, execs uvicorn on port 8500. |
-| `npm run install:macos` / `bash scripts/install-macos.sh` | One-shot macOS setup: brew installs (ffmpeg, pandoc, ghostscript, poppler, tesseract, pango, deno), LibreOffice cask, venv + `pip install -e .`. |
-| `npm run install:linux` / `bash scripts/install-linux.sh` | One-shot Debian/Ubuntu setup: apt installs, deno via official installer, venv + pip, downloads piper voice. Prints tmpfs guidance for ephemeral storage. |
+| `npm run install:macos` / `bash scripts/install-macos.sh` | One-shot macOS setup: brew installs (ffmpeg, pandoc, ghostscript, poppler, tesseract, pango, deno, libraw), LibreOffice cask, venv + `pip install -e ".[media]"`, curated tessdata packs. |
+| `npm run install:linux` / `bash scripts/install-linux.sh` | One-shot Debian/Ubuntu setup: apt installs, deno via official installer, venv + pip, tessdata packs, piper voice. Prints tmpfs guidance for ephemeral storage. |
+| `bash scripts/install-tessdata.sh` | Download Filipino/CJK/Arabic/… Tesseract packs into the system tessdata dir. Idempotent. |
+| `bash scripts/prefetch.sh` | Cache Whisper + rembg models so `EXPORT_OFFLINE=1` jobs don't hit the network. |
 
 The first job that needs a downloaded model (Whisper, rembg, demucs, Piper)
 pauses ~30 s while it fetches and caches. Subsequent jobs reuse the cached

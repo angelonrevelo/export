@@ -33,6 +33,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 button:hover:not(:disabled) { background: #3a7ce8; }
 .row { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
 .row > input[type="text"], .row > input[type="password"] { flex: 1; }
+/* Author .row { display:flex } otherwise beats the UA [hidden] { display:none }
+   rule (same specificity) and the password row stays visible after unlock. */
+[hidden] { display: none !important; }
 hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 .subtle { color: #666; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
 
@@ -175,6 +178,13 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 #adv-panel .est { color: #4d8eff; font-variant-numeric: tabular-nums; min-width: 5rem; text-align: right; }
 .size-badge { color: #666; font-size: 0.8em; margin-left: 0.4rem; }
 .size-badge.win { color: #5fc28e; }
+#offline-badge {
+  color: #f0c674; border: 1px solid #5a4a20; background: rgba(240,198,116,0.08);
+  padding: 0.2rem 0.55rem; border-radius: 5px; font-size: 0.75em;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+#language { min-width: 9rem; }
+#url-block.offline-disabled { opacity: 0.45; pointer-events: none; }
 
 #previews {
   display: flex; flex-wrap: wrap; gap: 0.6rem;
@@ -239,6 +249,19 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 
 <div id="app" hidden>
 
+  <div class="row" style="align-items:center; margin-bottom:1rem; flex-wrap:wrap;">
+    <span class="subtle" style="margin:0">language</span>
+    <select id="language" title="OCR / transcript / TTS source language">
+      <option value="">auto-detect</option>
+    </select>
+    <span class="subtle" style="margin:0">to</span>
+    <select id="translate-to" title="translate text outputs into this language (NLLB, offline after first download)">
+      <option value="">no translation</option>
+    </select>
+    <span id="offline-badge" hidden>offline</span>
+  </div>
+
+  <div id="url-block">
   <div class="subtle">from a URL</div>
   <div class="row">
     <input type="text" id="url" placeholder="https://youtube.com/watch?v=..." autofocus>
@@ -247,11 +270,20 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
       <option value="mp4">mp4</option>
       <option value="images">images</option>
       <option value="notes" title="NoteGPT-style markdown — pause-grouped paragraphs, no timestamps">notes</option>
+      <option value="kit" title="zip of txt + srt + vtt + notes from one transcript pass">kit</option>
       <option value="txt"   title="plain-text transcript">txt</option>
       <option value="srt"   title="SubRip subtitle file with timestamps">srt</option>
       <option value="vtt"   title="WebVTT subtitle file">vtt</option>
+      <option value="pdf" title="transcript as PDF">pdf</option>
+      <option value="docx" title="transcript as Word">docx</option>
+      <option value="epub" title="transcript as ebook">epub</option>
+      <option value="captioned" title="download video and burn-in captions">captioned</option>
+      <option value="frames" title="zip of sampled PNG frames">frames</option>
+      <option value="subs" title="embedded subs, or Whisper srt if none">subs</option>
+      <option value="translate" title="transcript, then NLLB-translate (uses the 'to' dropdown; defaults to English)">translate</option>
     </select>
     <button id="go">extract</button>
+  </div>
   </div>
 
   <hr class="sep">
@@ -340,28 +372,29 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
 <script>
 const PW_KEY = "export_pw";
 const $ = (id) => document.getElementById(id);
-const getPw = () => localStorage.getItem(PW_KEY) || "";
+const getPw = () => localStorage.getItem(PW_KEY) || "1234";
 
 const TYPES = {
-  image:       { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico","jp2","psd","tga","pcx","eps","icns"],
+  image:       { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico","jp2","psd","tga","pcx","eps","icns","jxl","svg","dng","cr2","cr3","nef","arw","raf","orf","rw2","pef","srw"],
                  // mp4 is here mostly for gif→mp4 (animated gif → video); for non-animated
                  // image inputs picking mp4 will return a clear "no bridge" error.
-                 convertTo: ["jpeg","png","webp","avif","tiff","bmp","gif","ico","icns","jp2","pdf","txt","nobg","svg","docx","md","html","rtf","epub","odt","tex","mp4"], shrink: true },
-  video:       { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv","gif"],
-                 convertTo: ["mp4","mov","webm","mkv","gif","mp3","m4a","wav","flac","ogg","opus","aac","audiogram","txt","srt","vtt","notes"], shrink: true },
-  audio:       { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma"],
-                 convertTo: ["mp3","m4a","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","denoise","stems","audiogram"], shrink: false },
+                 convertTo: ["jpeg","png","webp","avif","jxl","tiff","bmp","gif","ico","icns","jp2","pdf","txt","translate","nobg","svg","docx","md","html","rtf","epub","odt","tex","mp4"], shrink: true },
+  video:       { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv","gif","mpg","mpeg","m2v","vob","asf","mxf"],
+                 convertTo: ["mp4","mov","webm","mkv","gif","mp3","m4a","m4b","wav","flac","ogg","opus","aac","audiogram","txt","srt","vtt","notes","kit","translate","captioned","frames","subs","pdf","docx","epub"], shrink: true },
+  audio:       { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma","amr","3ga","m4b","ac3","caf"],
+                 convertTo: ["mp3","m4a","m4b","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","kit","translate","denoise","stems","audiogram","pdf","docx","epub"], shrink: false },
   doc:         { exts: ["md","markdown","html","htm","rtf","epub","txt","tex","org","rst","ipynb","adoc","asciidoc","textile","docbook","fb2"],
-                 convertTo: ["md","html","docx","rtf","epub","txt","odt","tex","pptx","pdf","mp3","m4a","wav"], shrink: false },
+                 convertTo: ["md","html","docx","rtf","epub","txt","translate","odt","tex","pptx","pdf","mp3","m4a","wav"], shrink: false },
   office:      { exts: ["docx","doc","pptx","ppt","xlsx","xls","odp","ods","odt"],
-                 convertTo: ["pdf","png","jpeg","webp","txt","md","html","rtf","epub","odt","tex","mp3","m4a","wav","audiogram"], shrink: false },
-  pdf:         { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","md","notes","docx","pdfa","mp3","m4a","wav","audiogram"], shrink: true },
-  spreadsheet: { exts: ["csv","tsv","xlsx","json"],
-                 convertTo: ["csv","tsv","xlsx","json","txt","md","html"], shrink: false },
+                 convertTo: ["pdf","png","jpeg","webp","txt","translate","md","html","rtf","epub","odt","tex","mp3","m4a","wav","audiogram"], shrink: false },
+  pdf:         { exts: ["pdf"], convertTo: ["png","jpeg","webp","txt","translate","md","notes","docx","html","epub","rtf","odt","tex","pdfa","mp3","m4a","wav","audiogram"], shrink: true },
+  spreadsheet: { exts: ["csv","tsv","xlsx","json","yaml","yml","toml","xml"],
+                 convertTo: ["csv","tsv","xlsx","json","yaml","toml","txt","translate","md","html","pdf"], shrink: false },
   subtitle:    { exts: ["srt","vtt","ass","ssa","sub","sbv"],
-                 convertTo: ["srt","vtt","ass","ssa","sub","sbv","txt","md","notes","docx","rtf","epub","odt","tex","html","pdf","mp3","m4a","wav","audiogram"], shrink: false },
+                 convertTo: ["srt","vtt","ass","ssa","sub","sbv","txt","translate","md","notes","docx","rtf","epub","odt","tex","html","pdf","mp3","m4a","wav","audiogram"], shrink: false },
   font:        { exts: ["ttf","otf","woff","woff2"],
                  convertTo: ["ttf","otf","woff","woff2","png","jpeg","webp"], shrink: false },
+  comic:       { exts: ["cbz"], convertTo: ["pdf"], shrink: false },
   other: { exts: [], convertTo: [], shrink: false },
 };
 
@@ -381,6 +414,35 @@ function showApp() {
   $("auth").hidden = true;
   $("app").hidden = false;
   $("url").focus();
+  applyRuntime();
+}
+
+async function applyRuntime() {
+  try {
+    const r = await fetch("/api/capabilities");
+    if (!r.ok) return;
+    const d = await r.json();
+    const fillLang = (sel, blankLabel, current) => {
+      sel.innerHTML = `<option value="">${blankLabel}</option>`;
+      for (const row of (d.language?.ui || [])) {
+        const opt = document.createElement("option");
+        opt.value = row.code;
+        opt.textContent = row.name;
+        sel.appendChild(opt);
+      }
+      if ([...sel.options].some(o => o.value === current)) sel.value = current;
+    };
+    fillLang($("language"), "auto-detect", $("language").value);
+    fillLang($("translate-to"), "no translation", $("translate-to").value);
+    const offline = !!d.offline?.is_offline;
+    $("offline-badge").hidden = !offline;
+    $("url-block").classList.toggle("offline-disabled", offline);
+    if (offline) {
+      $("url").disabled = true;
+      $("go").disabled = true;
+      $("url").placeholder = "offline — drop a local file instead";
+    }
+  } catch (_) { /* capabilities are advisory */ }
 }
 
 if (getPw()) showApp();
@@ -418,6 +480,12 @@ $("caps-link").onclick = async (e) => {
     <div>convert to: ${fmt(d.convert_outputs.subtitle)}</div>
     <h3>Font input ${fmt(d.file_inputs.font)}</h3>
     <div>convert to: ${fmt(d.convert_outputs.font)}</div>
+    <h3>Comic input ${fmt(d.file_inputs.comic || [])}</h3>
+    <div>convert to: ${fmt(d.convert_outputs.comic || [])}</div>
+    <h3>Language</h3>
+    <div>OCR packs: ${fmt(d.language?.ocr_pack || [])} · whisper ${d.language?.whisper_model || "?"} ${d.language?.is_whisper_multilingual ? "(multilingual)" : "(English-only)"} · TTS ${d.language?.tts_backend || "?"} · translate ${d.language?.translate || "nllb"}</div>
+    <h3>Offline</h3>
+    <div>${d.offline?.is_offline ? "EXPORT_OFFLINE=1 — URL extraction and cloud STT disabled; local conversions only" : "online — URL extraction and optional Groq STT available"}</div>
     <h3>Multi-file</h3>
     <div>archive formats: ${fmt(d.operations.compress_archive)}</div>
     <div>batch convert: drop 2+ same-type files → zip of N or one merged file</div>
@@ -451,7 +519,11 @@ $("go").onclick = async () => {
     const r = await fetch("/api/jobs", {
       method: "POST",
       headers: { "X-Password": getPw(), "Content-Type": "application/json" },
-      body: JSON.stringify({ url, format }),
+      body: JSON.stringify({
+        url, format,
+        language: $("language").value || null,
+        translate_to: $("translate-to").value || null,
+      }),
     });
     if (r.status === 401) { localStorage.removeItem(PW_KEY); location.reload(); return; }
     if (!r.ok) throw new Error(await r.text() || "failed");
@@ -625,7 +697,7 @@ const MERGEABLE_OUTPUT_FORMATS = new Set([
   "mp3","m4a","wav","flac","ogg","opus","aac",
   "mp4","mov","webm","mkv",
   "jpeg","jpg","png","webp","avif","tiff","bmp",
-  "xlsx",
+  "xlsx","yaml","toml",
   "pdf",
 ]);
 // Image output formats that go through the /api/images/batch shape-router.
@@ -1123,12 +1195,16 @@ $("process").onclick = async () => {
         for (const f of files) fd.append("files", f);
         fd.append("format", selVal);
         fd.append("merge", $("merge-toggle").checked ? "1" : "0");
+        if ($("language").value) fd.append("language", $("language").value);
+        if ($("translate-to").value) fd.append("translate_to", $("translate-to").value);
       }
       pollHint = selVal;
     } else if (action === "convert") {
       endpoint = "/api/upload";
       fd.append("file", files[0]);
       fd.append("format", selVal);
+      if ($("language").value) fd.append("language", $("language").value);
+      if ($("translate-to").value) fd.append("translate_to", $("translate-to").value);
       if (!$("adv-panel").hidden) fd.append("quality", $("adv-quality").value);
       pollHint = selVal;
     } else if (action === "shrink" || action === "resize") {
@@ -1269,6 +1345,9 @@ async function poll(jobId) {
         sizeNote = ` <span class="size-badge ${cls}">${fmtBytes(baseline)} → ${fmtBytes(j.output_size)} (${pct}%)</span>`;
       } else if (j.output_size) {
         sizeNote = ` <span class="size-badge">${fmtBytes(j.output_size)}</span>`;
+      }
+      if (j.language_name) {
+        sizeNote += ` <span class="size-badge">${j.language_name}</span>`;
       }
       // "shrink more" button — Clop-style incremental downscale by stepping
       // quality down 10 each click (floor 10). Only shows if this was a

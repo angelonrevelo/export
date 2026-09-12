@@ -8,6 +8,7 @@ sudo apt-get update
 sudo apt-get install -y \
   python3 python3-venv python3-pip curl unzip \
   ffmpeg pandoc ghostscript poppler-utils tesseract-ocr \
+  libraw-dev \
   libreoffice \
   libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
   libffi-dev shared-mime-info
@@ -20,7 +21,10 @@ fi
 echo ">>> creating venv"
 python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
-./.venv/bin/pip install -e .
+./.venv/bin/pip install -e ".[media]" || ./.venv/bin/pip install -e .
+
+echo ">>> tesseract language packs (fil/spa/cjk/ara/…)"
+bash scripts/install-tessdata.sh || echo "WARN: tessdata download failed — OCR stays English until you re-run scripts/install-tessdata.sh"
 
 echo ">>> downloading piper voice (en_US-lessac-medium, ~60MB)"
 mkdir -p voices

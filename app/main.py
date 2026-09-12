@@ -17,10 +17,12 @@ from .jobs import (
     AUDIO_FORMATS,
     AUDIO_STEMS,
     AUDIO_TO_VIDEO,
+    COMIC_TO_PDF,
     DOC_FORMATS,
     DOC_TO_PDF,
     FONT_FORMATS,
     IMAGE_FORMATS,
+    IMAGE_SUFFIXES,
     IMAGE_TO_NOBG,
     IMAGE_TO_PDF,
     IMAGE_TO_SVG,
@@ -30,6 +32,7 @@ from .jobs import (
     OFFICE_TO_IMAGE,
     OFFICE_TO_PDF,
     OFFICE_TO_TEXT,
+    PDF_TO_DOC,
     PDF_TO_MD,
     PDF_TO_NOTES,
     SUBTITLE_TO_DOC,
@@ -40,11 +43,18 @@ from .jobs import (
     SINGLE_FILE_COMPRESS,
     PDF_TO_IMAGE,
     PDF_TO_TEXT,
+    RAW_SUFFIXES,
     SHRINK_LEVELS,
     SPREADSHEET_FORMATS,
+    SPREADSHEET_TO_PDF,
     SPREADSHEET_TO_TEXT,
     SUBTITLE_FORMATS,
+    TRANSCRIPT_KIT,
+    TRANSLATE_OUTPUT,
     TTS_AUDIO_FORMATS,
+    VIDEO_CAPTIONED,
+    VIDEO_FRAMES,
+    VIDEO_SUBS,
     VIDEO_TO_GIF,
     VIDEO_TO_VIDEO,
     WHISPER_OUTPUTS,
@@ -60,20 +70,33 @@ from .jobs import (
     run_pdf_op_job,
     run_shrink_job,
     MERGEABLE_FORMATS,
+    _open_raster,
+)
+from .language import (
+    UI_LANGUAGE,
+    default_whisper_model,
+    installed_tess_lang,
+    is_offline,
+    is_whisper_english_only,
+    language_name,
+    tts_backend,
 )
 
 ALLOWED_UPLOAD_FORMATS = (
     IMAGE_FORMATS | DOC_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT
     | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC
     | PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS
-    | PDF_TO_MD | PDF_TO_NOTES
+    | PDF_TO_MD | PDF_TO_NOTES | PDF_TO_DOC
     | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
     | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO
     | OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT
     | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
-    | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT
+    | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT | SPREADSHEET_TO_PDF
     | SUBTITLE_FORMATS | SUBTITLE_TO_TEXT | SUBTITLE_TO_DOC
     | FONT_FORMATS | FONT_TO_IMAGE
+    | TRANSCRIPT_KIT | VIDEO_CAPTIONED | VIDEO_FRAMES | VIDEO_SUBS
+    | COMIC_TO_PDF | TRANSLATE_OUTPUT
+    | {"pdf", "docx", "epub"}  # audio/video → notes-as-doc chains
 )
 # Upload caps — default UNLIMITED for local/personal use. Set
 # EXPORT_MAX_UPLOAD_MB or EXPORT_MAX_COMPRESS_MB to a positive integer to
@@ -100,7 +123,7 @@ CLEANUP_INTERVAL_SECONDS = _env_int("EXPORT_CLEANUP_INTERVAL_SECONDS", 900)  # 1
 # user finishes their download. Maximum-ephemeral mode for VPS deployments.
 DOWNLOAD_AUTODELETE = os.environ.get("EXPORT_DOWNLOAD_AUTODELETE", "").lower() in ("1", "true", "yes", "on")
 
-PASSWORD = os.environ.get("EXPORT_PASSWORD", "changeme")
+PASSWORD = os.environ.get("EXPORT_PASSWORD", "1234")
 DOWNLOADS_DIR = Path(os.environ.get("EXPORT_DOWNLOADS", "/tmp/export"))
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -154,11 +177,18 @@ def check(pw: str | None) -> None:
 class CreateJob(BaseModel):
     url: str
     format: str = "mp3"
+    language: str | None = None
+    translate_to: str | None = None
 
 
 @app.post("/api/jobs")
 def create_job(body: CreateJob, bg: BackgroundTasks, x_password: str | None = Header(None)):
     check(x_password)
+    if is_offline():
+        raise HTTPException(
+            status_code=503,
+            detail="Offline mode — URL extraction needs a network. Unset EXPORT_OFFLINE or drop a local file.",
+        )
     job_id = uuid.uuid4().hex[:12]
     jobs[job_id] = {
         "status": "pending",
@@ -168,8 +198,11 @@ def create_job(body: CreateJob, bg: BackgroundTasks, x_password: str | None = He
         "filename": None,
         "original_size": None,
         "output_size": None,
+        "language": None,
+        "language_name": None,
+        "translate_to": None,
     }
-    bg.add_task(run_job, job_id, body.url, body.format, DOWNLOADS_DIR)
+    bg.add_task(run_job, job_id, body.url, body.format, DOWNLOADS_DIR, body.language, body.translate_to)
     return {"job_id": job_id}
 
 
@@ -179,6 +212,8 @@ async def upload_file(
     file: UploadFile = File(...),
     format: str = Form(...),
     quality: int | None = Form(None),
+    language: str | None = Form(None),
+    translate_to: str | None = Form(None),
     x_password: str | None = Header(None),
 ):
     check(x_password)
@@ -207,8 +242,11 @@ async def upload_file(
         "filename": None,
         "original_size": written,
         "output_size": None,
+        "language": None,
+        "language_name": None,
+        "translate_to": None,
     }
-    bg.add_task(run_convert_job, job_id, input_path, format, DOWNLOADS_DIR, quality)
+    bg.add_task(run_convert_job, job_id, input_path, format, DOWNLOADS_DIR, quality, language, translate_to)
     return {"job_id": job_id}
 
 
@@ -309,7 +347,7 @@ async def shrink_file(
 
 
 _IMAGE_EXT_FOR_BATCH = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic",
-                        ".heif", ".tiff", ".bmp", ".gif"}
+                        ".heif", ".tiff", ".bmp", ".gif"} | IMAGE_SUFFIXES
 BATCH_IMAGE_OUT_FORMATS = {"pdf", "jpeg", "png", "webp", "avif", "gif", "mp4"}
 
 
@@ -458,6 +496,8 @@ async def batch_convert(
     format: str = Form(...),
     merge: str = Form("0"),
     quality: int | None = Form(None),
+    language: str | None = Form(None),
+    translate_to: str | None = Form(None),
     x_password: str | None = Header(None),
 ):
     """Mass convert N homogeneous files to `format`. With merge=1, returns one
@@ -512,7 +552,7 @@ async def batch_convert(
         "original_size": total,
         "output_size": None,
     }
-    bg.add_task(run_batch_convert_job, job_id, saved, format, DOWNLOADS_DIR, do_merge, quality)
+    bg.add_task(run_batch_convert_job, job_id, saved, format, DOWNLOADS_DIR, do_merge, quality, language, translate_to)
     return {"job_id": job_id}
 
 
@@ -711,8 +751,20 @@ async def thumbnail(
     # Cap to keep one user's giant photo from blowing memory on this preview path.
     data = await file.read(50 * 1024 * 1024)
     try:
-        img = Image.open(io.BytesIO(data))
-        img = ImageOps.exif_transpose(img)
+        name = file.filename or ""
+        suffix = Path(name).suffix.lower()
+        if suffix in {".svg"} | RAW_SUFFIXES | {".jxl"}:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = Path(tmp.name)
+            try:
+                img = _open_raster(tmp_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        else:
+            img = Image.open(io.BytesIO(data))
+            img = ImageOps.exif_transpose(img)
         img.thumbnail((220, 220))  # max edge 220 px
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -727,33 +779,40 @@ async def thumbnail(
 @app.get("/api/capabilities")
 def capabilities():
     """Public — no auth — so the frontend can render a "what's supported" panel."""
+    whisper_model = default_whisper_model()
+    offline = is_offline()
+    groq_key = bool(os.environ.get("EXPORT_GROQ_API_KEY"))
     return {
         "url_extraction": {
             "video_audio_sites": "~1800 (yt-dlp)",
             "image_sites": "~300 (gallery-dl)",
-            "url_outputs": ["mp3", "mp4", "images", "txt", "srt", "vtt"],
+            "url_outputs": ["mp3", "mp4", "images", "txt", "srt", "vtt", "notes",
+                            "kit", "pdf", "docx", "epub", "captioned", "frames", "subs",
+                            "translate"],
         },
         "file_inputs": {
-            "image":       sorted([".jpg",".jpeg",".png",".webp",".avif",".heic",".heif",".tiff",".bmp",".gif",".ico",".jp2",".psd",".tga",".pcx",".eps",".icns"]),
-            "video":       sorted([".mp4",".mov",".webm",".mkv",".avi",".m4v",".flv",".wmv",".3gp",".ts",".mts",".m2ts",".ogv"]),
-            "audio":       sorted([".mp3",".m4a",".wav",".flac",".ogg",".aac",".opus",".aiff",".aif",".wma"]),
+            "image":       sorted(IMAGE_SUFFIXES),
+            "video":       sorted([".mp4",".mov",".webm",".mkv",".avi",".m4v",".flv",".wmv",".3gp",".ts",".mts",".m2ts",".ogv",".mpg",".mpeg",".vob",".asf",".mxf"]),
+            "audio":       sorted([".mp3",".m4a",".wav",".flac",".ogg",".aac",".opus",".aiff",".aif",".wma",".amr",".3ga",".m4b",".ac3",".caf"]),
             "pdf":         [".pdf"],
             "document":    sorted([".md",".markdown",".html",".htm",".rtf",".epub",".txt",".tex",".org",".rst",".ipynb",".adoc",".asciidoc",".textile",".docbook",".fb2"]),
             "office":      sorted([".docx",".doc",".pptx",".ppt",".xlsx",".xls",".odp",".ods",".odt"]),
-            "spreadsheet": sorted([".csv",".tsv",".xlsx",".json"]),
+            "spreadsheet": sorted([".csv",".tsv",".xlsx",".json",".yaml",".yml",".toml",".xml"]),
             "subtitle":    sorted([".srt",".vtt",".ass",".ssa",".sub",".sbv"]),
             "font":        sorted([".ttf",".otf",".woff",".woff2"]),
+            "comic":       [".cbz"],
         },
         "convert_outputs": {
-            "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC),
-            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | {"txt"}),
-            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | {"txt"}),
-            "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS | PDF_TO_MD | PDF_TO_NOTES | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO),
-            "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS),
-            "office":      sorted(OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT | DOC_FORMATS | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO),
-            "spreadsheet": sorted(SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT),
-            "subtitle":    sorted(SUBTITLE_FORMATS | SUBTITLE_TO_TEXT | SUBTITLE_TO_DOC | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO),
+            "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC | TRANSLATE_OUTPUT),
+            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | TRANSCRIPT_KIT | VIDEO_CAPTIONED | VIDEO_FRAMES | VIDEO_SUBS | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub"}),
+            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | TRANSCRIPT_KIT | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub"}),
+            "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS | PDF_TO_MD | PDF_TO_NOTES | PDF_TO_DOC | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO | TRANSLATE_OUTPUT),
+            "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS | TRANSLATE_OUTPUT),
+            "office":      sorted(OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT | DOC_FORMATS | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO | TRANSLATE_OUTPUT),
+            "spreadsheet": sorted(SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT | SPREADSHEET_TO_PDF | TRANSLATE_OUTPUT),
+            "subtitle":    sorted(SUBTITLE_FORMATS | SUBTITLE_TO_TEXT | SUBTITLE_TO_DOC | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO | TRANSLATE_OUTPUT),
             "font":        sorted(FONT_FORMATS | FONT_TO_IMAGE),
+            "comic":       sorted(COMIC_TO_PDF),
         },
         "operations": {
             "compress_archive":     sorted(ARCHIVE_FORMATS),
@@ -761,6 +820,20 @@ def capabilities():
             "shrink_levels":        sorted(SHRINK_LEVELS),
             "pdf_ops":              sorted(list(PDF_OPS) + ["merge"]),
             "batch_mergeable":      sorted(MERGEABLE_FORMATS),
+        },
+        "language": {
+            "ui": [{"code": c, "name": language_name(c)} for c in UI_LANGUAGE],
+            "ocr_pack": list(installed_tess_lang()),
+            "whisper_model": whisper_model,
+            "is_whisper_multilingual": not is_whisper_english_only(whisper_model),
+            "tts_backend": tts_backend(),
+            "translate": "nllb-200-distilled-600M (CTranslate2 int8, 200 languages incl. Filipino)",
+        },
+        "offline": {
+            "is_offline": offline,
+            "is_url_enabled": not offline,
+            "is_groq_enabled": groq_key and not offline,
+            "is_model_download_enabled": not offline,
         },
         "limits": {
             "max_upload_bytes":   MAX_UPLOAD_BYTES,        # 0 = unlimited

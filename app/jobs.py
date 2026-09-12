@@ -5,6 +5,7 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pdf2image
 import pillow_heif
@@ -14,7 +15,44 @@ import zstandard as zstd
 from gallery_dl import config as gdl_config, job as gdl_job
 from PIL import Image, ImageOps
 
+from .language import (
+    default_whisper_model,
+    detect_language_code,
+    is_offline,
+    is_whisper_english_only,
+    language_name,
+    osd_script_from_image,
+    pick_piper_voice,
+    pick_say_voice,
+    pick_tess_lang,
+    record_on_job,
+    requested_language_code,
+    requested_translate_to,
+    use_language,
+    use_translate_to,
+    whisper_language_arg,
+)
+from .translate import maybe_translate_segment, maybe_translate_text
+
 pillow_heif.register_heif_opener()
+
+try:
+    import pillow_jxl  # noqa: F401  # registers JPEG XL with Pillow on import
+    _HAS_JXL = True
+except ImportError:
+    _HAS_JXL = False
+
+try:
+    import rawpy  # noqa: F401
+    _HAS_RAW = True
+except ImportError:
+    _HAS_RAW = False
+
+try:
+    import cairosvg  # noqa: F401
+    _HAS_SVG = True
+except ImportError:
+    _HAS_SVG = False
 
 # Detect curl_cffi at import — yt-dlp uses it for browser impersonation,
 # which is the only thing that gets past TikTok's datacenter-IP block.
@@ -24,7 +62,27 @@ try:
 except ImportError:
     _HAS_IMPERSONATE = False
 
+IMPERSONATE_HOST = ("tiktok.com", "instagram.com", "threads.net")
+TRUTHY_VALUE = {"1", "true", "yes", "on", "always", "chrome"}
+FALSY_VALUE = {"0", "false", "no", "off", "never", "none", "disable", "disabled"}
+
 jobs: dict[str, dict] = {}
+
+
+def _host_match(host: str, domain: str) -> bool:
+    return host == domain or host.endswith(f".{domain}")
+
+
+def _should_impersonate_url(url: str) -> bool:
+    if not _HAS_IMPERSONATE:
+        return False
+    mode = os.environ.get("EXPORT_YTDLP_IMPERSONATE", "auto").strip().lower()
+    if mode in TRUTHY_VALUE:
+        return True
+    if mode in FALSY_VALUE:
+        return False
+    host = (urlparse(url).hostname or "").lower()
+    return any(_host_match(host, domain) for domain in IMPERSONATE_HOST)
 
 
 def _humanize_extraction_error(err_text: str) -> str:
@@ -72,6 +130,8 @@ IMAGE_SAVE_OPTS = {
     "icns": {"sizes": [(1024, 1024), (512, 512), (256, 256), (128, 128), (64, 64), (32, 32), (16, 16)]},
     "jp2":  {"quality_mode": "rates", "quality_layers": [10]},  # JPEG 2000
 }
+if _HAS_JXL:
+    IMAGE_SAVE_OPTS["jxl"] = {"quality": 80}
 IMAGE_EXT_OVERRIDE = {"jpeg": "jpg"}
 IMAGE_FORMATS = set(IMAGE_SAVE_OPTS.keys())
 
@@ -102,9 +162,10 @@ DOC_INPUT_SUFFIXES = {
     ".textile", ".docbook", ".fb2", ".docx", ".pptx",
 }
 
-# Spreadsheets via openpyxl + stdlib csv/json
-SPREADSHEET_FORMATS = {"csv", "tsv", "xlsx", "json"}
-SPREADSHEET_SUFFIXES = {f".{f}" for f in SPREADSHEET_FORMATS}
+# Spreadsheets via openpyxl + stdlib csv/json. yaml/toml/xml ride the same
+# flatten-to-table path so a config file can become a sheet / json / html.
+SPREADSHEET_FORMATS = {"csv", "tsv", "xlsx", "json", "yaml", "toml"}
+SPREADSHEET_SUFFIXES = {f".{f}" for f in SPREADSHEET_FORMATS} | {".yml", ".xml"}
 # Spreadsheet inputs can also degrade to plain-text outputs — useful when the
 # JSON is nested and you just want a readable dump rather than a rectangular sheet.
 SPREADSHEET_TO_TEXT = {"txt", "md", "html"}
@@ -131,6 +192,23 @@ FONT_TO_IMAGE = {"png", "jpeg", "webp"}
 # PDF → markdown / NoteGPT-style notes (paragraph-grouped from extracted text).
 PDF_TO_MD = {"md"}
 PDF_TO_NOTES = {"notes"}
+# PDF → other doc formats via markdown + pandoc (ebook / print / web).
+PDF_TO_DOC = {"html", "epub", "rtf", "odt", "tex"}
+# Spreadsheet → paginated PDF via HTML + WeasyPrint.
+SPREADSHEET_TO_PDF = {"pdf"}
+# Comic archives (zip of images).
+COMIC_SUFFIXES = {".cbz"}
+COMIC_TO_PDF = {"pdf"}
+# Audio/video "kit": one STT pass → zip of txt + srt + vtt + notes.
+TRANSCRIPT_KIT = {"kit"}
+# Any text-bearing input → translated plain text (uses translate_to, default en).
+TRANSLATE_OUTPUT = {"translate"}
+# Video → mp4 with burned-in captions (transcribe then ffmpeg subtitles filter).
+VIDEO_CAPTIONED = {"captioned"}
+# Video → zip of sampled PNG frames.
+VIDEO_FRAMES = {"frames"}
+# Video → extract embedded subs, or fall back to Whisper srt.
+VIDEO_SUBS = {"subs"}
 # image → editable doc via OCR + pandoc wrap (digitize a scanned page).
 IMAGE_TO_DOC = {"docx", "md", "html", "rtf", "epub", "odt", "tex"}
 
@@ -161,22 +239,31 @@ IMAGE_SUFFIXES = {
     ".tiff", ".bmp", ".gif", ".ico", ".jp2",
     ".psd", ".tga", ".pcx", ".eps", ".icns",
 }
+if _HAS_JXL:
+    IMAGE_SUFFIXES.add(".jxl")
+if _HAS_SVG:
+    IMAGE_SUFFIXES.add(".svg")
+RAW_SUFFIXES = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef", ".srw"}
+if _HAS_RAW:
+    IMAGE_SUFFIXES |= RAW_SUFFIXES
 # .gif is also in IMAGE_SUFFIXES, but ffmpeg reads it fine as a video source —
 # included here so gif → mp4/mov/webm/mkv works. The dispatch checks image
 # bridges first (so gif → png is still an image op), and only falls through to
 # the video branch when the target is a video format.
 VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v",
-                  ".flv", ".wmv", ".3gp", ".ts", ".mts", ".m2ts", ".ogv", ".gif"}
+                  ".flv", ".wmv", ".3gp", ".ts", ".mts", ".m2ts", ".ogv", ".gif",
+                  ".mpg", ".mpeg", ".m2v", ".vob", ".asf", ".mxf"}
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac",
-                  ".aiff", ".aif", ".wma"}
+                  ".aiff", ".aif", ".wma", ".amr", ".3ga", ".m4b", ".ac3", ".caf"}
 PDF_SUFFIXES = {".pdf"}
 OFFICE_SUFFIXES = {".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".odp", ".ods", ".odt"}
 
 # Audio transcoding (ffmpeg)
-AUDIO_FORMATS = {"mp3", "m4a", "wav", "flac", "ogg", "opus", "aac"}
+AUDIO_FORMATS = {"mp3", "m4a", "wav", "flac", "ogg", "opus", "aac", "m4b"}
 AUDIO_FFMPEG_OPTS: dict[str, list[str]] = {
     "mp3":  ["-c:a", "libmp3lame", "-b:a", "192k"],
     "m4a":  ["-c:a", "aac", "-b:a", "192k"],
+    "m4b":  ["-c:a", "aac", "-b:a", "64k"],  # audiobook: lower bitrate, .m4b container
     "wav":  ["-c:a", "pcm_s16le"],
     "flac": ["-c:a", "flac"],
     "ogg":  ["-c:a", "libvorbis", "-q:a", "5"],
@@ -215,7 +302,7 @@ TTS_INPUT_SUFFIXES = {".txt", ".md", ".html", ".htm", ".rtf"}
 PDF_OCR_OUTPUTS = {"pdfa"}
 
 # Whisper STT: audio/video → transcript text/srt/vtt + NoteGPT-style markdown notes
-# Default model: distil-large-v3 (~6x faster than whisper-large-v3, ≤1% WER drop, multilingual)
+# Default model: large-v3-turbo (multilingual). distil-large-v3 is English-only.
 WHISPER_OUTPUTS = {"srt", "vtt", "notes"}
 # Note: "txt" is handled here too when input is audio/video, but we don't add it
 # to the set since the dispatch checks input type first; pdf→txt and image→txt
@@ -292,8 +379,10 @@ def _run_ytdlp(job: dict, url: str, fmt: str, out_dir: Path) -> str:
         opts["proxy"] = proxy
 
     # Chrome impersonation — needed for TikTok / some IG endpoints' TLS fingerprint check.
+    # Keep it off for normal YouTube: curl_cffi has crashed during cleanup on
+    # Python 3.14, and yt-dlp's default transport works for public YouTube URLs.
     # yt-dlp's Python API needs an ImpersonateTarget object, not a bare string.
-    if _HAS_IMPERSONATE:
+    if _should_impersonate_url(url):
         try:
             from yt_dlp.networking.impersonate import ImpersonateTarget
             opts["impersonate"] = ImpersonateTarget(client="chrome")
@@ -347,10 +436,44 @@ def _run_gallerydl(job: dict, url: str, out_dir: Path) -> str:
     return Path(url.rstrip("/").split("/")[-1] or "gallery").stem
 
 
-def _convert_image(input_path: Path, target_fmt: str, out_dir: Path, quality: int | None = None) -> Path:
-    img = Image.open(input_path)
-    img = ImageOps.exif_transpose(img)  # honor camera-rotation EXIF tag
+def _svg_to_pil(input_path: Path) -> Image.Image:
+    if not _HAS_SVG:
+        raise RuntimeError("SVG input needs cairosvg (pip install cairosvg)")
+    import cairosvg
+    from io import BytesIO
+    buf = BytesIO()
+    cairosvg.svg2png(url=str(input_path), write_to=buf, output_width=2048)
+    buf.seek(0)
+    img = Image.open(buf)
     img.load()
+    return img.convert("RGBA")
+
+
+def _raw_to_pil(input_path: Path) -> Image.Image:
+    if not _HAS_RAW:
+        raise RuntimeError("Camera RAW input needs rawpy (pip install rawpy) and libraw")
+    import rawpy as rawpy_mod
+    with rawpy_mod.imread(str(input_path)) as raw:
+        rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=False)
+    return Image.fromarray(rgb)
+
+
+def _open_raster(path: Path) -> Image.Image:
+    """Open any image-like input (including SVG / camera RAW / JXL) as a PIL image.
+    Applies EXIF orientation for camera JPEGs/HEICs."""
+    suffix = path.suffix.lower()
+    if suffix == ".svg":
+        return _svg_to_pil(path)
+    if suffix in RAW_SUFFIXES:
+        return _raw_to_pil(path)
+    img = Image.open(path)
+    img = ImageOps.exif_transpose(img)
+    img.load()
+    return img
+
+
+def _convert_image(input_path: Path, target_fmt: str, out_dir: Path, quality: int | None = None) -> Path:
+    img = _open_raster(input_path)
     # Formats that can't carry alpha (or look bad with it): JPEG, ICO often
     # benefits from RGBA, TIFF is fine either way.
     if target_fmt == "jpeg" and img.mode in ("RGBA", "LA", "P"):
@@ -471,6 +594,40 @@ def _flatten_json_for_table(obj):
     return [["value"], [obj]]
 
 
+def _load_structured(input_path: Path):
+    """Load json / yaml / toml / xml into a Python object (dict/list/scalar)."""
+    import json as json_mod
+    src = input_path.suffix.lower()
+    text = input_path.read_text(encoding="utf-8")
+    if src == ".json":
+        return json_mod.loads(text)
+    if src in {".yaml", ".yml"}:
+        import yaml
+        return yaml.safe_load(text)
+    if src == ".toml":
+        import tomllib
+        return tomllib.loads(text)
+    if src == ".xml":
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(text)
+
+        def _elem(el):
+            children = list(el)
+            payload = {f"@{k}": v for k, v in el.attrib.items()}
+            if children:
+                grouped: dict[str, list] = {}
+                for child in children:
+                    grouped.setdefault(child.tag, []).append(_elem(child))
+                for tag, items in grouped.items():
+                    payload[tag] = items[0] if len(items) == 1 else items
+            text_val = (el.text or "").strip()
+            if text_val:
+                payload["#text"] = text_val
+            return payload or (el.text or "")
+        return {root.tag: _elem(root)}
+    raise RuntimeError(f"unsupported structured input: {src}")
+
+
 def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     """Cross-convert tabular data: csv ↔ tsv ↔ xlsx ↔ json, plus txt/md dump.
     Reads first sheet of multi-sheet xlsx. Nested JSON is auto-tabularized:
@@ -483,6 +640,8 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{target_fmt}"
 
+    structured_src = src in {".json", ".yaml", ".yml", ".toml", ".xml"}
+
     # --- read input into rows: list[list[Any]] ---
     if src in (".csv", ".tsv"):
         delim = "\t" if src == ".tsv" else ","
@@ -492,8 +651,8 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
         wb = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
         ws = wb.active
         rows = [[cell.value for cell in row] for row in ws.iter_rows()]
-    elif src == ".json":
-        data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+    elif structured_src:
+        data = _load_structured(input_path)
         rows = _flatten_json_for_table(data)
     else:
         raise RuntimeError(f"unsupported spreadsheet input: {src}")
@@ -516,9 +675,9 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
             ws.append([_stringify(c) for c in r])
         wb.save(out_path)
     elif target_fmt == "json":
-        if src == ".json":
-            # JSON → JSON: pass the original through unchanged (preserves nesting).
-            data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+        if structured_src:
+            # Structured → JSON: preserve nesting (yaml/toml/xml/json).
+            data = _load_structured(input_path)
         elif rows and len(rows) > 1:
             keys = [str(k) for k in rows[0]]
             data = [{k: _stringify(v) for k, v in zip(keys, r)} for r in rows[1:]]
@@ -529,11 +688,12 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
         # Plain-text dump. For JSON inputs we pretty-print the original (preserves
         # nested structure & is the most useful "read me as text" form). For
         # csv/tsv/xlsx we write a tab-aligned table.
-        if src == ".json":
-            data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+        if structured_src:
+            data = _load_structured(input_path)
             body = json_mod.dumps(data, indent=2, ensure_ascii=False)
             if target_fmt == "md":
-                body = f"```json\n{body}\n```\n"
+                fence = "yaml" if src in {".yaml", ".yml"} else "json"
+                body = f"```{fence}\n{body}\n```\n"
         else:
             lines = ["\t".join(str(_stringify(c)) for c in r) for r in rows]
             body = "\n".join(lines) + "\n"
@@ -547,12 +707,12 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
                     for r in rows[1:]:
                         md_rows.append("| " + " | ".join(str(_stringify(c)).replace("|", "\\|") for c in r) + " |")
                     body = "\n".join(md_rows) + "\n"
-        out_path.write_text(body, encoding="utf-8")
+        out_path.write_text(maybe_translate_text(body), encoding="utf-8")
     elif target_fmt == "html":
         # Render as a styled, readable HTML page. JSON walks the tree (with
         # _JSON_HTML_KEYS rendered raw); csv/tsv/xlsx render as a real <table>.
-        if src == ".json":
-            data = json_mod.loads(input_path.read_text(encoding="utf-8"))
+        if structured_src:
+            data = _load_structured(input_path)
             body = _json_to_html(data)
         else:
             esc = lambda v: ("" if v is None else str(_stringify(v))).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -567,9 +727,55 @@ def _convert_spreadsheet(input_path: Path, target_fmt: str, out_dir: Path) -> Pa
                 body = "<p><em>(empty)</em></p>"
         title = stem.replace("_", " ")
         out_path.write_text(_html_page(title, body), encoding="utf-8")
+    elif target_fmt == "yaml":
+        import yaml
+        if structured_src:
+            data = _load_structured(input_path)
+        elif rows and len(rows) > 1:
+            keys = [str(k) for k in rows[0]]
+            data = [{k: _stringify(v) for k, v in zip(keys, r)} for r in rows[1:]]
+        else:
+            data = [list(r) for r in rows]
+        out_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    elif target_fmt == "toml":
+        import tomli_w
+        if structured_src:
+            data = _load_structured(input_path)
+        elif rows and len(rows) > 1:
+            keys = [str(k) for k in rows[0]]
+            data = {"row": [{k: _stringify(v) for k, v in zip(keys, r)} for r in rows[1:]]}
+        else:
+            data = {"row": [list(r) for r in rows]}
+        if not isinstance(data, dict):
+            data = {"item": data}
+        out_path.write_text(tomli_w.dumps(data), encoding="utf-8")
+    elif target_fmt == "pdf":
+        html_path = _convert_spreadsheet(input_path, "html", out_dir)
+        try:
+            return _doc_to_pdf(html_path, out_dir)
+        finally:
+            html_path.unlink(missing_ok=True)
     else:
         raise RuntimeError(f"unsupported spreadsheet output: {target_fmt}")
     return out_path
+
+
+def _translate_subtitle_event(subs) -> None:
+    """In-place: translate each cue's text when translate_to is set."""
+    if not requested_translate_to() or not subs.events:
+        return
+    from .translate import translate_batch
+    sample = " ".join((e.plaintext or e.text or "") for e in subs.events[:8])
+    source = detect_language_code(sample)
+    target = requested_translate_to()
+    if not target or source == target:
+        return
+    translated = translate_batch(
+        [(e.plaintext or e.text or "") for e in subs.events],
+        source, target,
+    )
+    for event, text in zip(subs.events, translated):
+        event.text = text
 
 
 def _convert_subtitle(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
@@ -578,6 +784,7 @@ def _convert_subtitle(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{target_fmt}"
     subs = pysubs2.load(str(input_path))
+    _translate_subtitle_event(subs)
     subs.save(str(out_path), format_=target_fmt)
     return out_path
 
@@ -593,6 +800,7 @@ def _subtitle_to_text(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     title = stem.replace("_", " ").replace("-", " ").strip()
     subs = pysubs2.load(str(input_path))
     events = sorted(subs.events, key=lambda e: e.start)
+    _translate_subtitle_event(subs)
     lines = [e.plaintext or e.text for e in events]
     if target_fmt == "txt":
         out_path = out_dir / f"{stem}.txt"
@@ -654,11 +862,22 @@ def _convert_font(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
 def _convert_doc(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{target_fmt}"
+    work = input_path
+    tmp = None
+    if requested_translate_to() and input_path.suffix.lower() in {".txt", ".md", ".markdown"}:
+        translated = maybe_translate_text(
+            input_path.read_text(encoding="utf-8", errors="replace")
+        )
+        tmp = out_dir / f"_translated{input_path.suffix.lower() or '.txt'}"
+        tmp.write_text(translated, encoding="utf-8")
+        work = tmp
     writer = PANDOC_WRITER.get(target_fmt, target_fmt)
-    cmd = ["pandoc", str(input_path), "-o", str(out_path), "-t", writer]
+    cmd = ["pandoc", str(work), "-o", str(out_path), "-t", writer]
     if target_fmt == "epub":
         cmd.extend(["--metadata", f"title={stem}"])
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if tmp:
+        tmp.unlink(missing_ok=True)
     if r.returncode != 0:
         raise RuntimeError(f"pandoc failed: {r.stderr.strip()[:500]}")
     return out_path
@@ -736,10 +955,11 @@ def _shrink_image(input_path: Path, level: str, out_dir: Path,
     elif quality is None:
         quality = {"low": 50, "medium": 70, "high": 85}[level]
     quality = max(1, min(100, quality))
-    img = Image.open(input_path)
-    src_fmt = (img.format or "JPEG").lower()  # capture before exif_transpose strips it
-    img = ImageOps.exif_transpose(img)
-    img.load()
+    src_fmt = input_path.suffix.lower().lstrip(".") or "jpeg"
+    img = _open_raster(input_path)
+    src_fmt = {"jpg": "jpeg", "jxl": "jxl", "heic": "jpeg", "heif": "jpeg",
+               "svg": "png", "dng": "jpeg", "cr2": "jpeg", "cr3": "jpeg",
+               "nef": "jpeg", "arw": "jpeg", "raf": "jpeg"}.get(src_fmt, src_fmt)
     if scale_percent and scale_percent > 0 and scale_percent != 100:
         new_w = max(1, int(round(img.size[0] * scale_percent / 100)))
         new_h = max(1, int(round(img.size[1] * scale_percent / 100)))
@@ -974,9 +1194,7 @@ BATCH_IMAGE_FORMATS = {"pdf", "jpeg", "png", "webp", "avif", "gif", "mp4"}
 
 def _open_oriented(path: Path, rotations: dict[str, int] | None = None) -> Image.Image:
     """Open image, apply EXIF orientation, then user-applied rotation."""
-    img = Image.open(path)
-    img = ImageOps.exif_transpose(img)
-    img.load()
+    img = _open_raster(path)
     if rotations:
         original_name = path.name.removeprefix("input_")
         deg = int(rotations.get(original_name, 0)) % 360
@@ -1111,14 +1329,7 @@ def _images_to_pdf(input_paths: list[Path], out_dir: Path,
     rotations = rotations or {}
     pages: list[Image.Image] = []
     for p in input_paths:
-        img = Image.open(p)
-        img = ImageOps.exif_transpose(img)
-        img.load()
-        # User-applied rotation. PIL rotates CCW by default; negate for CW intent.
-        original_name = p.name.removeprefix("input_")
-        deg = int(rotations.get(original_name, 0)) % 360
-        if deg:
-            img = img.rotate(-deg, expand=True)
+        img = _open_oriented(p, rotations)
         if img.mode in ("RGBA", "LA", "P"):
             bg = Image.new("RGB", img.size, (255, 255, 255))
             bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
@@ -1154,9 +1365,7 @@ def run_images_to_pdf_job(job_id: str, input_paths: list[Path],
 
 
 def _image_to_pdf(input_path: Path, out_dir: Path) -> Path:
-    img = Image.open(input_path)
-    img = ImageOps.exif_transpose(img)
-    img.load()
+    img = _open_raster(input_path)
     if img.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
         bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
@@ -1256,22 +1465,39 @@ def _pdf_to_text(input_path: Path, out_dir: Path) -> Path:
             parts.append((page.extract_text() or "").strip())
     text = "\n\n".join(parts).strip()
     if text:
-        out_path.write_text(text, encoding="utf-8")
+        out_path.write_text(maybe_translate_text(text), encoding="utf-8")
         return out_path
-    # Empty result → likely a scanned PDF. OCR each page.
+    # Empty result → likely a scanned PDF. OCR each page with auto language.
     import pytesseract
     pages = pdf2image.convert_from_path(str(input_path), dpi=300)
-    ocr_parts = [pytesseract.image_to_string(pg).strip() for pg in pages]
-    out_path.write_text("\n\n".join(ocr_parts), encoding="utf-8")
+    if not pages:
+        out_path.write_text("", encoding="utf-8")
+        return out_path
+    tess_lang = pick_tess_lang(osd_script=osd_script_from_image(pages[0]))
+    ocr_parts = [pytesseract.image_to_string(pg, lang=tess_lang).strip() for pg in pages]
+    body = maybe_translate_text("\n\n".join(ocr_parts))
+    out_path.write_text(body, encoding="utf-8")
     return out_path
 
 
 def _image_remove_bg(input_path: Path, out_dir: Path) -> Path:
+    if is_offline():
+        # rembg downloads u2net on first use. Fail closed rather than hanging
+        # on huggingface when EXPORT_OFFLINE=1 and the model isn't cached.
+        u2_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
+        if not any(u2_home.glob("*.onnx")):
+            raise RuntimeError(
+                "Offline mode — rembg model is not cached. Run once online "
+                "or unset EXPORT_OFFLINE."
+            )
     from rembg import remove
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}_nobg.png"
-    in_bytes = input_path.read_bytes()
-    out_path.write_bytes(remove(in_bytes))
+    img = _open_raster(input_path)
+    from io import BytesIO
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    out_path.write_bytes(remove(buf.getvalue()))
     return out_path
 
 
@@ -1279,18 +1505,30 @@ def _image_to_svg(input_path: Path, out_dir: Path) -> Path:
     import vtracer
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.svg"
-    vtracer.convert_image_to_svg_py(str(input_path), str(out_path))
-    return out_path
+    work = input_path
+    tmp = None
+    if input_path.suffix.lower() in ({".svg"} | RAW_SUFFIXES | {".jxl", ".heic", ".heif", ".avif"}):
+        img = _open_raster(input_path)
+        tmp = out_dir / "_raster_for_svg.png"
+        img.convert("RGBA").save(tmp, "PNG")
+        work = tmp
+    try:
+        vtracer.convert_image_to_svg_py(str(work), str(out_path))
+        return out_path
+    finally:
+        if tmp:
+            tmp.unlink(missing_ok=True)
 
 
-def _image_to_text(input_path: Path, out_dir: Path) -> Path:
+def _image_to_text(input_path: Path, out_dir: Path, job: dict | None = None) -> Path:
     import pytesseract
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.txt"
-    img = Image.open(input_path)
-    img = ImageOps.exif_transpose(img)  # OCR also benefits from rotation correction
-    img.load()
-    text = pytesseract.image_to_string(img)
+    img = _open_raster(input_path)
+    tess_lang = pick_tess_lang(osd_script=osd_script_from_image(img))
+    text = pytesseract.image_to_string(img, lang=tess_lang)
+    record_on_job(job, detect_language_code(text))
+    text = maybe_translate_text(text, job=job)
     out_path.write_text(text, encoding="utf-8")
     return out_path
 
@@ -1460,6 +1698,7 @@ def _pdf_to_pdfa(input_path: Path, out_dir: Path) -> Path:
         output_type="pdfa",
         skip_text=True,
         deskew=True,
+        language=pick_tess_lang(),
         progress_bar=False,
     )
     return out_path
@@ -1612,30 +1851,37 @@ def _text_to_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     if not text.strip():
         raise RuntimeError("input contains no readable text")
 
+    text = maybe_translate_text(text)
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{target_fmt}"
 
+    lang = requested_translate_to() or detect_language_code(text)
     # Choose synthesizer: macOS `say` if available, else piper-tts.
     if sys.platform == "darwin" and shutil.which("say"):
         raw = out_dir / "_tts.aiff"
+        cmd = ["say", "-o", str(raw)]
+        voice = pick_say_voice(lang)
+        if voice:
+            cmd.extend(["-v", voice])
+        # stdin, not argv — long documents blow the argument list otherwise.
         r = subprocess.run(
-            ["say", "-o", str(raw), text],
-            capture_output=True, text=True, timeout=600,
+            cmd, input=text, capture_output=True, text=True, timeout=600,
         )
         if r.returncode != 0:
             raise RuntimeError(f"say failed: {r.stderr.strip()[-500:]}")
     else:
-        voice = os.environ.get("EXPORT_PIPER_VOICE", "")
-        if not voice or not Path(voice).exists():
+        voice_path = pick_piper_voice(lang)
+        if voice_path is None or not voice_path.exists():
             raise RuntimeError(
                 "TTS unavailable: install piper-tts and set "
-                "EXPORT_PIPER_VOICE to a .onnx voice path"
+                "EXPORT_PIPER_VOICE to a .onnx voice path (or drop matching "
+                "voices into ./voices/{lang}_*.onnx)"
             )
         if not shutil.which("piper"):
             raise RuntimeError("piper binary not in PATH (pip install piper-tts)")
         raw = out_dir / "_tts.wav"
         r = subprocess.run(
-            ["piper", "-m", voice, "-f", str(raw)],
+            ["piper", "-m", str(voice_path), "-f", str(raw)],
             input=text, capture_output=True, text=True, timeout=600,
         )
         if r.returncode != 0:
@@ -1657,12 +1903,16 @@ def _format_ts(seconds: float, comma: bool) -> str:
     return out.replace(".", ",") if comma else out
 
 
-def _write_transcript(segments: list, target_fmt: str, stem: str, out_dir: Path) -> Path:
+def _write_transcript(segments: list, target_fmt: str, stem: str, out_dir: Path,
+                      language_code: str | None = None) -> Path:
     """Write a transcript in the requested format from a list of segments.
     Each segment is a dict-like with .start, .end, .text (or ['start'], ['end'], ['text']).
     Shared by both the local Whisper path and the Groq cloud path."""
     def g(s, k):
         return s[k] if isinstance(s, dict) else getattr(s, k)
+    segments = maybe_translate_segment(segments)
+    if requested_translate_to():
+        language_code = requested_translate_to()
     out_path = out_dir / f"{stem}.{target_fmt}"
     if target_fmt == "txt":
         out_path.write_text("\n".join(g(s, "text").strip() for s in segments) + "\n", encoding="utf-8")
@@ -1678,7 +1928,10 @@ def _write_transcript(segments: list, target_fmt: str, stem: str, out_dir: Path)
         body = "\n\n".join(" ".join(p) for p in paragraphs if p)
         title = stem.replace("_", " ").replace("-", " ").strip()
         out_path = out_dir / f"{stem}_notes.md"
-        out_path.write_text(f"# {title}\n\n## Transcript\n\n{body}\n", encoding="utf-8")
+        lang_line = ""
+        if language_code:
+            lang_line = f"Detected language: {language_name(language_code)} (`{language_code}`)\n\n"
+        out_path.write_text(f"# {title}\n\n{lang_line}## Transcript\n\n{body}\n", encoding="utf-8")
     elif target_fmt == "srt":
         lines: list[str] = []
         for i, s in enumerate(segments, 1):
@@ -1697,8 +1950,8 @@ def _write_transcript(segments: list, target_fmt: str, stem: str, out_dir: Path)
     return out_path
 
 
-def _audio_video_to_transcript_groq(input_path: Path, target_fmt: str, out_dir: Path,
-                                     job: dict | None = None) -> Path:
+def _audio_video_to_transcript_groq(input_path: Path, out_dir: Path,
+                                     job: dict | None = None) -> tuple[list, str | None]:
     """Transcribe via Groq's Whisper API. Free tier: 25 MB upload limit, dev tier: 100 MB.
     We pre-process to flac mono 16 kHz (Whisper's native format) for max compression,
     then segment into ~20-min chunks (well under both limits even for music). Each
@@ -1738,6 +1991,10 @@ def _audio_video_to_transcript_groq(input_path: Path, target_fmt: str, out_dir: 
 
     # Transcribe each chunk, shifting timestamps by the cumulative offset.
     all_segments: list[dict] = []
+    detected_language: str | None = whisper_language_arg(None)
+    groq_data = {"model": model_id, "response_format": "verbose_json"}
+    if detected_language:
+        groq_data["language"] = detected_language
     for i, chunk in enumerate(chunks):
         offset = i * chunk_seconds
         with chunk.open("rb") as f:
@@ -1745,12 +2002,14 @@ def _audio_video_to_transcript_groq(input_path: Path, target_fmt: str, out_dir: 
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": (chunk.name, f, "audio/mpeg")},
-                data={"model": model_id, "response_format": "verbose_json"},
+                data=groq_data,
                 timeout=300,
             )
         if resp.status_code != 200:
             raise RuntimeError(f"groq API error {resp.status_code}: {resp.text[:300]}")
         result = resp.json()
+        if not detected_language:
+            detected_language = result.get("language") or None
         for seg in result.get("segments", []):
             all_segments.append({
                 "start": seg["start"] + offset,
@@ -1762,38 +2021,61 @@ def _audio_video_to_transcript_groq(input_path: Path, target_fmt: str, out_dir: 
 
     pre_path.unlink(missing_ok=True)
     shutil.rmtree(chunk_dir, ignore_errors=True)
-
-    stem = input_path.stem.removeprefix("input_")
-    return _write_transcript(all_segments, target_fmt, stem, out_dir)
+    return all_segments, detected_language
 
 
-def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path,
-                                job: dict | None = None) -> Path:
-    """Route to Groq cloud Whisper if EXPORT_GROQ_API_KEY is set; otherwise local
-    faster-whisper on CPU. Same output format either way (txt/notes/srt/vtt)."""
-    if os.environ.get("EXPORT_GROQ_API_KEY"):
-        return _audio_video_to_transcript_groq(input_path, target_fmt, out_dir, job)
+def _require_network(action: str) -> None:
+    if is_offline():
+        raise RuntimeError(
+            f"Offline mode — {action} needs a network. Unset EXPORT_OFFLINE "
+            "or drop a local file instead."
+        )
+
+
+def _collect_transcript(input_path: Path, out_dir: Path,
+                        job: dict | None = None) -> tuple[list, str | None]:
+    """Run STT once. Returns (segments, language_code). Groq if keyed and online,
+    else local faster-whisper. Default local model is large-v3-turbo (multilingual);
+    distil-large-v3 is English-only and is no longer the default."""
+    if os.environ.get("EXPORT_GROQ_API_KEY") and not is_offline():
+        return _audio_video_to_transcript_groq(input_path, out_dir, job)
 
     from faster_whisper import WhisperModel
-    name = os.environ.get("EXPORT_WHISPER_MODEL", "distil-large-v3")
+    name = default_whisper_model()
     if _whisper_state["model"] is None or _whisper_state["name"] != name:
         download_root = os.environ.get("EXPORT_WHISPER_MODEL_DIR") or None
         _whisper_state["model"] = WhisperModel(
-            name, device="cpu", compute_type="int8", download_root=download_root,
+            name, device="cpu", compute_type="int8",
+            download_root=download_root,
+            local_files_only=is_offline(),
         )
         _whisper_state["name"] = name
     model = _whisper_state["model"]
 
-    segments_iter, info = model.transcribe(str(input_path), beam_size=1)
+    transcribe_kw: dict = {"beam_size": 1}
+    lang_arg = whisper_language_arg(None)
+    if lang_arg:
+        transcribe_kw["language"] = lang_arg
+    elif is_whisper_english_only(name):
+        transcribe_kw["language"] = "en"
+
+    segments_iter, info = model.transcribe(str(input_path), **transcribe_kw)
     duration = max(float(getattr(info, "duration", 0.0) or 0.0), 0.001)
     segments = []
     for s in segments_iter:
         segments.append(s)
         if job is not None:
             job["progress"] = max(1, min(99, int(100 * s.end / duration)))
+    detected = getattr(info, "language", None) or lang_arg
+    return segments, detected
 
+
+def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path,
+                                job: dict | None = None) -> Path:
+    segments, detected = _collect_transcript(input_path, out_dir, job)
+    record_on_job(job, detected)
     stem = input_path.stem.removeprefix("input_")
-    return _write_transcript(segments, target_fmt, stem, out_dir)
+    return _write_transcript(segments, target_fmt, stem, out_dir, language_code=detected)
 
 
 def _audio_denoise(input_path: Path, out_dir: Path) -> Path:
@@ -1880,6 +2162,13 @@ def _audio_to_audiogram(input_path: Path, out_dir: Path) -> Path:
 
 def _audio_separate_stems(input_path: Path, out_dir: Path) -> Path:
     """Run Demucs htdemucs to split audio into vocals/drums/bass/other, then zip the stems."""
+    if is_offline():
+        hub = Path.home() / ".cache" / "torch" / "hub"
+        if not any(hub.rglob("htdemucs*")):
+            raise RuntimeError(
+                "Offline mode — Demucs model is not cached. Run once online "
+                "or unset EXPORT_OFFLINE."
+            )
     stem = input_path.stem.removeprefix("input_")
     sep_root = out_dir / "_demucs"
     sep_root.mkdir(exist_ok=True)
@@ -1982,11 +2271,258 @@ def _doc_to_pdf(input_path: Path, out_dir: Path) -> Path:
     return out_path
 
 
+def _escape_subtitles_path(path: Path) -> str:
+    """Escape a filesystem path for ffmpeg's `subtitles=` filter."""
+    return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+def _ffmpeg_has_subtitles_filter() -> bool:
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-filters"],
+        capture_output=True, text=True, timeout=15,
+    )
+    blob = (r.stdout or "") + (r.stderr or "")
+    return " subtitles " in blob or "\nsubtitles " in blob
+
+
+def _srt_plain_text(path: Path) -> str:
+    line_out: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if not s or s.isdigit() or "-->" in s:
+            continue
+        line_out.append(s)
+    return " ".join(line_out)
+
+
+def _caption_overlay_png(srt_path: Path, width: int, height: int, png_path: Path) -> None:
+    """Rasterize srt text onto a transparent PNG (used when ffmpeg lacks libass)."""
+    from PIL import Image, ImageDraw, ImageFont
+    text = _srt_plain_text(srt_path) or " "
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    font_size = max(16, height // 16)
+    font = None
+    for candidate in (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        if Path(candidate).exists():
+            try:
+                font = ImageFont.truetype(candidate, font_size)
+                break
+            except OSError:
+                continue
+    if font is None:
+        font = ImageFont.load_default()
+    max_w = int(width * 0.9)
+    word = text.split()
+    wrapped: list[str] = []
+    cur = ""
+    for w in word:
+        trial = (cur + " " + w).strip()
+        bbox = draw.textbbox((0, 0), trial, font=font)
+        if bbox[2] - bbox[0] <= max_w:
+            cur = trial
+        else:
+            if cur:
+                wrapped.append(cur)
+            cur = w
+    if cur:
+        wrapped.append(cur)
+    wrapped = wrapped[:8] or [" "]
+    line_h = font_size + 6
+    block_h = line_h * len(wrapped) + 16
+    top = height - block_h - 12
+    draw.rectangle((0, top, width, height), fill=(0, 0, 0, 160))
+    y = top + 8
+    for line in wrapped:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        tw = bbox[2] - bbox[0]
+        draw.text(((width - tw) / 2, y), line, font=font, fill=(255, 255, 255, 255))
+        y += line_h
+    img.save(png_path, "PNG")
+
+
+def _pdf_to_doc(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
+    """pdf → html/epub/rtf/odt/tex via markdown + pandoc."""
+    md_path = _pdf_to_markdown(input_path, out_dir)
+    try:
+        return _convert_doc(md_path, target_fmt, out_dir)
+    finally:
+        md_path.unlink(missing_ok=True)
+
+
+def _cbz_to_pdf(input_path: Path, out_dir: Path) -> Path:
+    """Comic .cbz (zip of images) → multi-page PDF."""
+    extract_dir = out_dir / "_cbz"
+    extract_dir.mkdir(exist_ok=True)
+    with zipfile.ZipFile(input_path) as zf:
+        zf.extractall(extract_dir)
+    image_file = sorted(
+        p for p in extract_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    )
+    if not image_file:
+        raise RuntimeError("cbz contained no images")
+    try:
+        return _images_to_pdf(image_file, out_dir)
+    finally:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+
+
+def _transcript_kit(input_path: Path, out_dir: Path, job: dict | None = None) -> Path:
+    """One STT pass → zip of txt + srt + vtt + notes + language.txt."""
+    segments, detected = _collect_transcript(input_path, out_dir, job)
+    record_on_job(job, detected)
+    stem = input_path.stem.removeprefix("input_")
+    written: list[Path] = []
+    for fmt in ("txt", "srt", "vtt", "notes"):
+        written.append(_write_transcript(segments, fmt, stem, out_dir, language_code=detected))
+    lang_path = out_dir / f"{stem}.language.txt"
+    lang_path.write_text(
+        f"{detected or 'unknown'}\n{language_name(detected)}\n",
+        encoding="utf-8",
+    )
+    written.append(lang_path)
+    zip_path = out_dir / f"{stem}_kit.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+        for p in written:
+            zf.write(p, arcname=p.name)
+    for p in written:
+        p.unlink(missing_ok=True)
+    return zip_path
+
+
+def _video_extract_subs(input_path: Path, out_dir: Path, job: dict | None = None) -> Path:
+    """Pull the first embedded subtitle stream; Whisper srt if the file has none."""
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.srt"
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path), "-map", "0:s:0", str(out_path)],
+        capture_output=True, text=True, timeout=120,
+    )
+    if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+        return out_path
+    out_path.unlink(missing_ok=True)
+    return _audio_video_to_transcript(input_path, "srt", out_dir, job=job)
+
+
+def _video_frames(input_path: Path, out_dir: Path) -> Path:
+    """Sample up to 120 PNG frames at 1 fps (first 2 minutes) and zip them."""
+    stem = input_path.stem.removeprefix("input_")
+    frames_dir = out_dir / "_frames"
+    frames_dir.mkdir(exist_ok=True)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path),
+         "-vf", "fps=1", "-frames:v", "120",
+         str(frames_dir / "frame_%04d.png")],
+        capture_output=True, text=True, timeout=300,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg frames failed: {r.stderr.strip()[-500:]}")
+    frame = sorted(frames_dir.glob("frame_*.png"))
+    if not frame:
+        raise RuntimeError("no frames extracted")
+    zip_path = out_dir / f"{stem}_frames.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+        for p in frame:
+            zf.write(p, arcname=p.name)
+    shutil.rmtree(frames_dir, ignore_errors=True)
+    return zip_path
+
+
+def _video_captioned(input_path: Path, out_dir: Path, job: dict | None = None) -> Path:
+    """Transcribe, then burn captions into an h.264 mp4.
+
+    Prefers ffmpeg's `subtitles` filter (libass). Homebrew ffmpeg 8.x is often
+    built without libass, so we fall back to a PIL overlay + `overlay` filter.
+    """
+    srt_path = _audio_video_to_transcript(input_path, "srt", out_dir, job=job)
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}_captioned.mp4"
+    burn = out_dir / "burn.srt"
+    if srt_path.resolve() != burn.resolve():
+        shutil.copy2(srt_path, burn)
+        srt_path.unlink(missing_ok=True)
+
+    if _ffmpeg_has_subtitles_filter():
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(input_path.resolve()),
+             "-vf", "subtitles=filename=burn.srt",
+             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+             str(out_path.resolve())],
+            cwd=str(out_dir),
+            capture_output=True, text=True, timeout=1200,
+        )
+        burn.unlink(missing_ok=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg captioned failed: {r.stderr.strip()[-500:]}")
+        return out_path
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+         str(input_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if probe.returncode != 0 or "x" not in (probe.stdout or ""):
+        burn.unlink(missing_ok=True)
+        raise RuntimeError(f"ffprobe failed: {probe.stderr.strip()[-300:]}")
+    w_s, h_s = probe.stdout.strip().split("x", 1)
+    overlay = out_dir / "caption.png"
+    _caption_overlay_png(burn, int(w_s), int(h_s), overlay)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path.resolve()), "-i", str(overlay),
+         "-filter_complex", "overlay=0:0",
+         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+         str(out_path.resolve())],
+        capture_output=True, text=True, timeout=1200,
+    )
+    burn.unlink(missing_ok=True)
+    overlay.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg captioned overlay failed: {r.stderr.strip()[-500:]}")
+    return out_path
+
+
+def _notes_to_doc(input_path: Path, target_fmt: str, out_dir: Path,
+                  job: dict | None = None) -> Path:
+    """audio/video → notes.md → pdf/docx/epub via pandoc (or weasyprint for pdf)."""
+    notes_path = _audio_video_to_transcript(input_path, "notes", out_dir, job=job)
+    try:
+        if target_fmt == "pdf":
+            return _doc_to_pdf(notes_path, out_dir)
+        return _convert_doc(notes_path, target_fmt, out_dir)
+    finally:
+        notes_path.unlink(missing_ok=True)
+
+
+def _to_translated_txt(input_path: Path, out_dir: Path, job: dict | None = None) -> Path:
+    """Any text-bearing input → translated .txt. Defaults target to English
+    when translate_to was not pinned (so the `translate` format always does work)."""
+    if not requested_translate_to():
+        with use_translate_to("en"):
+            return _to_translated_txt(input_path, out_dir, job)
+    txt_path = _convert_one(input_path, "txt", out_dir, job=job)
+    target = requested_translate_to() or "en"
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.{target}.txt"
+    if txt_path != out_path:
+        txt_path.replace(out_path)
+    return out_path
+
+
 def _convert_one(input_path: Path, fmt: str, out_dir: Path,
                  quality: int | None = None, job: dict | None = None) -> Path:
     """Single-file convert dispatch. Shared by run_convert_job and run_batch_convert_job.
     Caller is responsible for cleanup of input_path after success."""
     suffix = input_path.suffix.lower()
+    if fmt in TRANSLATE_OUTPUT:
+        return _to_translated_txt(input_path, out_dir, job=job)
     is_image_in       = suffix in IMAGE_SUFFIXES
     is_pdf_in         = suffix in PDF_SUFFIXES
     is_video_in       = suffix in VIDEO_SUFFIXES
@@ -1996,12 +2532,15 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
     is_spreadsheet_in = suffix in SPREADSHEET_SUFFIXES
     is_subtitle_in    = suffix in SUBTITLE_SUFFIXES
     is_font_in        = suffix in FONT_SUFFIXES
+    is_comic_in       = suffix in COMIC_SUFFIXES
+    if is_comic_in and fmt in COMIC_TO_PDF:
+        return _cbz_to_pdf(input_path, out_dir)
     if is_image_in and fmt in IMAGE_FORMATS:
         return _convert_image(input_path, fmt, out_dir, quality=quality)
     if is_image_in and fmt in IMAGE_TO_PDF:
         return _image_to_pdf(input_path, out_dir)
     if is_image_in and fmt in IMAGE_TO_TEXT:
-        return _image_to_text(input_path, out_dir)
+        return _image_to_text(input_path, out_dir, job=job)
     if is_image_in and fmt in IMAGE_TO_NOBG:
         return _image_remove_bg(input_path, out_dir)
     if is_image_in and fmt in IMAGE_TO_SVG:
@@ -2020,6 +2559,8 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _pdf_to_markdown(input_path, out_dir)
     if is_pdf_in and fmt in PDF_TO_NOTES:
         return _pdf_to_notes(input_path, out_dir)
+    if is_pdf_in and fmt in PDF_TO_DOC:
+        return _pdf_to_doc(input_path, fmt, out_dir)
     if is_video_in and fmt in VIDEO_TO_GIF:
         return _video_to_gif(input_path, out_dir)
     if is_video_in and fmt in VIDEO_TO_VIDEO:
@@ -2028,6 +2569,16 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _audio_video_to_transcript(input_path, fmt, out_dir, job=job)
     if (is_audio_in or is_video_in) and fmt == "txt":
         return _audio_video_to_transcript(input_path, "txt", out_dir, job=job)
+    if (is_audio_in or is_video_in) and fmt in TRANSCRIPT_KIT:
+        return _transcript_kit(input_path, out_dir, job=job)
+    if is_video_in and fmt in VIDEO_CAPTIONED:
+        return _video_captioned(input_path, out_dir, job=job)
+    if is_video_in and fmt in VIDEO_FRAMES:
+        return _video_frames(input_path, out_dir)
+    if is_video_in and fmt in VIDEO_SUBS:
+        return _video_extract_subs(input_path, out_dir, job=job)
+    if (is_audio_in or is_video_in) and fmt in {"pdf", "docx", "epub"}:
+        return _notes_to_doc(input_path, fmt, out_dir, job=job)
     if is_audio_in and fmt in AUDIO_DENOISE:
         return _audio_denoise(input_path, out_dir)
     if is_audio_in and fmt in AUDIO_STEMS:
@@ -2070,7 +2621,7 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _doc_to_pdf(input_path, out_dir)
     if fmt in DOC_FORMATS and is_doc_in:
         return _convert_doc(input_path, fmt, out_dir)
-    if is_spreadsheet_in and (fmt in SPREADSHEET_FORMATS or fmt in SPREADSHEET_TO_TEXT):
+    if is_spreadsheet_in and (fmt in SPREADSHEET_FORMATS or fmt in SPREADSHEET_TO_TEXT or fmt in SPREADSHEET_TO_PDF):
         return _convert_spreadsheet(input_path, fmt, out_dir)
     if is_subtitle_in and fmt in SUBTITLE_FORMATS:
         return _convert_subtitle(input_path, fmt, out_dir)
@@ -2090,7 +2641,7 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
 # Subtitles → pysubs2 with timestamp shifting. xlsx → multi-sheet workbook.
 # Images → tile grid into one larger image.
 TEXT_MERGE_FORMATS = {"txt", "md", "markdown", "csv", "tsv", "json", "html", "htm",
-                      "rtf", "tex", "org", "rst", "notes"}
+                      "rtf", "tex", "org", "rst", "notes", "yaml", "yml", "toml"}
 SUBTITLE_MERGE_FORMATS = {"srt", "vtt", "ass", "ssa", "sub", "sbv"}
 AV_MERGE_FORMATS = {"mp3", "m4a", "wav", "flac", "ogg", "opus", "aac",
                     "mp4", "mov", "webm", "mkv"}
@@ -2177,9 +2728,7 @@ def _merge_outputs(paths: list[Path], fmt: str, out_dir: Path) -> Path:
         n = len(paths)
         cols = int(math.ceil(math.sqrt(n)))
         rows = int(math.ceil(n / cols))
-        imgs = [ImageOps.exif_transpose(Image.open(p)) for p in paths]
-        for img in imgs:
-            img.load()
+        imgs = [_open_raster(p) for p in paths]
         # Convert to RGB once so we have a consistent mode (alpha not preserved
         # for jpeg/avif; png/webp keep transparency by switching to RGBA).
         keep_alpha = fmt in {"png", "webp", "tiff"}
@@ -2330,18 +2879,22 @@ def run_batch_shrink_job(job_id: str, input_paths: list[Path], level: str,
 
 def run_batch_convert_job(job_id: str, input_paths: list[Path], fmt: str,
                           downloads_dir: Path, merge: bool = False,
-                          quality: int | None = None) -> None:
+                          quality: int | None = None, language: str | None = None,
+                          translate_to: str | None = None) -> None:
     """Convert N homogeneous files to fmt. If merge=True, return one merged file;
     otherwise zip the N outputs. Per-file errors abort the whole job."""
     job = jobs[job_id]
     out_dir = downloads_dir / job_id
     try:
         job["status"] = "converting"
+        if translate_to:
+            job["translate_to"] = translate_to
         outputs: list[Path] = []
         total = len(input_paths)
-        for i, p in enumerate(input_paths, 1):
-            outputs.append(_convert_one(p, fmt, out_dir, quality=quality, job=job))
-            job["progress"] = max(1, min(99, int(100 * i / total)))
+        with use_language(language), use_translate_to(translate_to):
+            for i, p in enumerate(input_paths, 1):
+                outputs.append(_convert_one(p, fmt, out_dir, quality=quality, job=job))
+                job["progress"] = max(1, min(99, int(100 * i / total)))
         if merge:
             merged = _merge_outputs(outputs, fmt, out_dir)
             for o in outputs:
@@ -2367,14 +2920,20 @@ def run_batch_convert_job(job_id: str, input_paths: list[Path], fmt: str,
         job["error"] = str(e)
 
 
-def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path, quality: int | None = None) -> None:
+def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path,
+                    quality: int | None = None, language: str | None = None,
+                    translate_to: str | None = None) -> None:
     job = jobs[job_id]
     out_dir = downloads_dir / job_id
     try:
         job["status"] = "converting"
-        target = _convert_one(input_path, fmt, out_dir, quality=quality, job=job)
+        if translate_to:
+            job["translate_to"] = translate_to
+        with use_language(language), use_translate_to(translate_to):
+            target = _convert_one(input_path, fmt, out_dir, quality=quality, job=job)
         input_path.unlink(missing_ok=True)
         job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
         job["progress"] = 100
         job["status"] = "ready"
     except Exception as e:
@@ -2382,42 +2941,77 @@ def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
 
 
-def run_job(job_id: str, url: str, fmt: str, downloads_dir: Path) -> None:
+def run_job(job_id: str, url: str, fmt: str, downloads_dir: Path,
+            language: str | None = None, translate_to: str | None = None) -> None:
     job = jobs[job_id]
     out_dir = downloads_dir / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        if fmt == "images":
-            title = _run_gallerydl(job, url, out_dir)
-            job["title"] = title
-            image_files = [p for p in out_dir.rglob("*") if p.is_file()]
-            if not image_files:
-                raise RuntimeError("gallery-dl produced no files")
-            if len(image_files) == 1:
-                target = image_files[0]
+        _require_network("URL extraction")
+        if translate_to:
+            job["translate_to"] = translate_to
+        with use_language(language), use_translate_to(translate_to):
+            if fmt == "images":
+                title = _run_gallerydl(job, url, out_dir)
+                job["title"] = title
+                image_files = [p for p in out_dir.rglob("*") if p.is_file()]
+                if not image_files:
+                    raise RuntimeError("gallery-dl produced no files")
+                if len(image_files) == 1:
+                    target = image_files[0]
+                else:
+                    target = _zip_images(out_dir, title)
+            elif fmt in {"txt", "srt", "vtt", "notes", "kit", "translate"}:
+                # URL → audio (mp3) → transcript via Whisper.
+                title = _run_ytdlp(job, url, "mp3", out_dir)
+                job["title"] = title
+                audio = _pick_single_file(out_dir, prefer_ext="mp3")
+                if audio is None:
+                    raise RuntimeError("yt-dlp produced no audio")
+                job["progress"] = 0
+                job["status"] = "transcribing"
+                if fmt == "kit":
+                    target = _transcript_kit(audio, out_dir, job=job)
+                elif fmt == "translate":
+                    target = _to_translated_txt(audio, out_dir, job=job)
+                else:
+                    target = _audio_video_to_transcript(audio, fmt, out_dir, job=job)
+                audio.unlink(missing_ok=True)
+            elif fmt in {"pdf", "docx", "epub"}:
+                title = _run_ytdlp(job, url, "mp3", out_dir)
+                job["title"] = title
+                audio = _pick_single_file(out_dir, prefer_ext="mp3")
+                if audio is None:
+                    raise RuntimeError("yt-dlp produced no audio")
+                job["progress"] = 0
+                job["status"] = "transcribing"
+                target = _notes_to_doc(audio, fmt, out_dir, job=job)
+                audio.unlink(missing_ok=True)
+            elif fmt in {"captioned", "frames", "subs"}:
+                title = _run_ytdlp(job, url, "mp4", out_dir)
+                job["title"] = title
+                video = _pick_single_file(out_dir, prefer_ext="mp4")
+                if video is None:
+                    raise RuntimeError("yt-dlp produced no video")
+                job["progress"] = 0
+                job["status"] = "converting"
+                if fmt == "captioned":
+                    target = _video_captioned(video, out_dir, job=job)
+                elif fmt == "frames":
+                    target = _video_frames(video, out_dir)
+                else:
+                    target = _video_extract_subs(video, out_dir, job=job)
+                video.unlink(missing_ok=True)
             else:
-                target = _zip_images(out_dir, title)
-        elif fmt in {"txt", "srt", "vtt", "notes"}:
-            # URL → audio (mp3) → transcript via Whisper.
-            title = _run_ytdlp(job, url, "mp3", out_dir)
-            job["title"] = title
-            audio = _pick_single_file(out_dir, prefer_ext="mp3")
-            if audio is None:
-                raise RuntimeError("yt-dlp produced no audio")
-            # Reset progress so the bar doesn't look "done" during the slow Whisper pass
-            job["progress"] = 0
-            job["status"] = "transcribing"
-            target = _audio_video_to_transcript(audio, fmt, out_dir, job=job)
-            audio.unlink(missing_ok=True)  # drop intermediate mp3
-        else:
-            title = _run_ytdlp(job, url, fmt, out_dir)
-            job["title"] = title
-            target = _pick_single_file(out_dir, prefer_ext=fmt)
-            if target is None:
-                raise RuntimeError("yt-dlp produced no file")
+                title = _run_ytdlp(job, url, fmt, out_dir)
+                job["title"] = title
+                target = _pick_single_file(out_dir, prefer_ext=fmt)
+                if target is None:
+                    raise RuntimeError("yt-dlp produced no file")
 
         job["filename"] = target.name
+        job["output_size"] = target.stat().st_size
         job["status"] = "ready"
     except Exception as e:
         job["status"] = "error"
