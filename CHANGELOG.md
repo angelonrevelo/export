@@ -20,6 +20,7 @@
 - Resize-to-cap (`level=resize` + `target_byte`) no longer requires `max_dim` or `scale_percent`.
 - Captioned burn-in falls back to a PIL overlay when ffmpeg has no `subtitles` filter.
 - Reachable-set unions every kind a suffix belongs to, so gif→`mp4` (and mov/webm/mkv) stay one-hop convert-to instead of disappearing behind the image-only family.
+- Rate limit keys on the TCP peer, not the leftmost `X-Forwarded-For` hop (clients could rotate that header and skip the cap).
 
 ### Not done
 - `git push` / origin.

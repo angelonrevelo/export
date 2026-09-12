@@ -2,14 +2,48 @@
 
 Default 30/minute. Unittest auto-disables unless EXPORT_RATE_LIMIT_PER_MINUTE
 is set (so the existing suite does not 429). 0 disables.
+
+Client IP: the TCP peer, unless that peer is the local reverse proxy
+(127.0.0.1 / ::1), in which case X-Real-IP or the rightmost X-Forwarded-For
+hop. Never the leftmost XFF — clients control that.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import sys
 import threading
 import time
 from collections import defaultdict, deque
+
+_LOCAL_PROXY = frozenset({"127.0.0.1", "::1"})
+
+
+def _parse_ip(raw: str) -> str | None:
+    s = raw.strip().strip("[]")
+    if not s:
+        return None
+    try:
+        ipaddress.ip_address(s)
+        return s
+    except ValueError:
+        return None
+
+
+def client_ip(request) -> str:
+    peer = (request.client.host if request.client else "") or "unknown"
+    if peer not in _LOCAL_PROXY:
+        return peer
+    real = _parse_ip(request.headers.get("x-real-ip") or "")
+    if real:
+        return real
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    hop = [h.strip() for h in forwarded.split(",") if h.strip()]
+    if hop:
+        parsed = _parse_ip(hop[-1])
+        if parsed:
+            return parsed
+    return peer
 
 _lock = threading.Lock()
 _hit: dict[str, deque[float]] = defaultdict(deque)

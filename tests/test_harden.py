@@ -85,6 +85,29 @@ class ImageBombTest(unittest.TestCase):
         self.assertEqual(Image.MAX_IMAGE_PIXELS, 64_000_000)
 
 
+class ClientIpTest(unittest.TestCase):
+    def test_non_proxy_peer_ignores_xff(self):
+        req = type("R", (), {
+            "client": type("C", (), {"host": "203.0.113.9"})(),
+            "headers": {"x-forwarded-for": "1.1.1.1, 10.0.0.1", "x-real-ip": "8.8.8.8"},
+        })()
+        self.assertEqual(limit.client_ip(req), "203.0.113.9")
+
+    def test_local_proxy_uses_x_real_ip(self):
+        req = type("R", (), {
+            "client": type("C", (), {"host": "127.0.0.1"})(),
+            "headers": {"x-real-ip": "203.0.113.50", "x-forwarded-for": "1.1.1.1, 203.0.113.50"},
+        })()
+        self.assertEqual(limit.client_ip(req), "203.0.113.50")
+
+    def test_local_proxy_uses_rightmost_xff(self):
+        req = type("R", (), {
+            "client": type("C", (), {"host": "127.0.0.1"})(),
+            "headers": {"x-forwarded-for": "spoof, 10.0.0.1"},
+        })()
+        self.assertEqual(limit.client_ip(req), "10.0.0.1")
+
+
 class RateLimitTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
@@ -111,6 +134,41 @@ class RateLimitTest(unittest.TestCase):
         r = post()
         self.assertEqual(r.status_code, 429, r.text)
         self.assertIn("too many", r.json()["detail"])
+
+    def _post_png(self, extra_header=None):
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, "PNG")
+        buf.seek(0)
+        headers = {"X-Password": "1234"}
+        if extra_header:
+            headers.update(extra_header)
+        return self.client.post(
+            "/api/upload",
+            headers=headers,
+            files={"file": ("a.png", buf, "image/png")},
+            data={"format": "jpeg"},
+        )
+
+    def test_spoofed_xff_still_429(self):
+        """Client-controlled X-Forwarded-For must not mint a fresh bucket."""
+        os.environ["EXPORT_RATE_LIMIT_PER_MINUTE"] = "2"
+        limit.reset()
+        self.assertEqual(self._post_png({"X-Forwarded-For": "1.1.1.1"}).status_code, 200)
+        self.assertEqual(self._post_png({"X-Forwarded-For": "2.2.2.2"}).status_code, 200)
+        r = self._post_png({"X-Forwarded-For": "3.3.3.3"})
+        self.assertEqual(r.status_code, 429, r.text)
+        r = self._post_png({"X-Forwarded-For": "spoof, 10.0.0.1"})
+        self.assertEqual(r.status_code, 429, r.text)
+        r = self._post_png({"X-Forwarded-For": "5.5.5.5"})
+        self.assertEqual(r.status_code, 429, r.text)
+
+    def test_spoofed_x_real_ip_ignored_without_local_proxy(self):
+        os.environ["EXPORT_RATE_LIMIT_PER_MINUTE"] = "2"
+        limit.reset()
+        self.assertEqual(self._post_png({"X-Real-IP": "8.8.8.8"}).status_code, 200)
+        self.assertEqual(self._post_png({"X-Real-IP": "9.9.9.9"}).status_code, 200)
+        r = self._post_png({"X-Real-IP": "1.2.3.4"})
+        self.assertEqual(r.status_code, 429, r.text)
 
 
 class CheapPathStillWorks(unittest.TestCase):

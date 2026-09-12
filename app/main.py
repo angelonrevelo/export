@@ -174,21 +174,12 @@ def check(pw: str | None) -> None:
         raise HTTPException(status_code=401, detail="bad password")
 
 
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for") or ""
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
-
-
 @app.middleware("http")
 async def rate_limit_mutate(request: Request, call_next):
     if request.method == "POST" and request.url.path.startswith("/api/"):
-        from .limit import RateLimited, enforce
+        from .limit import RateLimited, client_ip, enforce
         try:
-            enforce(_client_ip(request))
+            enforce(client_ip(request))
         except RateLimited as e:
             return JSONResponse({"detail": str(e)}, status_code=429)
     return await call_next(request)
