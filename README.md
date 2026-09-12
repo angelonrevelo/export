@@ -165,8 +165,9 @@ rather than stuffing source bytes into the target container. A suffix in
 more than one family (`.gif` is image and video) unions every one-hop those
 families already have, so gif→`mp4` stays a direct convert-to.
 
-`GET /api/reachable?ext=mp4` returns `{ "format": [...] }` (singular
-collection key). Query is pure — no ffmpeg. Execution walks the path by
+`GET /api/reachable?ext=mp4` returns `{ "format": [...], "kind": { "image": [...], ... } }`
+(singular collection keys). The UI convert-to picker is grouped by kind
+(not a flat A–Z dump). Query is pure — no ffmpeg. Execution walks the path by
 calling `_convert_one` per hop. Cheap one-hop paths (PNG→JPEG, YAML→JSON)
 stay the first step and do not load Whisper / rembg / NLLB.
 
@@ -233,15 +234,16 @@ effect as not setting it.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `EXPORT_PASSWORD` | `1234` | Required. Sent as `X-Password` header. Always `1234` unless you override it. |
+| `EXPORT_PASSWORD` | `1234` | Required. Sent as `X-Password` header. Localhost stays `1234`. Public/trusted-group: 32+ chars (`openssl rand -base64 24`). |
 
 ### Storage & limits
 
 | Env var | Default | Notes |
 |---|---|---|
 | `EXPORT_DOWNLOADS` | `/tmp/export` | Where job output lives. Mount as tmpfs for RAM-backed ephemeral storage on a VPS. |
-| `EXPORT_MAX_UPLOAD_MB` | `0` (unlimited) | Per-file upload cap in MB. Set to a positive integer only if exposing publicly. |
-| `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge / batch. |
+| `EXPORT_MAX_UPLOAD_MB` | `0` (unlimited) | Per-file upload cap in MB. Public Phase 2: `500`. |
+| `EXPORT_MAX_COMPRESS_MB` | `0` (unlimited) | Combined cap for multi-file compress / merge / batch. Public Phase 2: `2000`. |
+| `EXPORT_RATE_LIMIT_PER_MINUTE` | `30` | Mutating `/api` POSTs per IP. `0` disables. Unittest auto-off unless this env is set. |
 | `EXPORT_CLEANUP_AGE_SECONDS` | `21600` (6 h) | Age threshold for the lifespan cleanup loop. Lower for more-ephemeral storage; raise if you process long files and download later. |
 | `EXPORT_CLEANUP_INTERVAL_SECONDS` | `900` (15 min) | How often the cleanup loop sweeps. |
 | `EXPORT_DOWNLOAD_AUTODELETE` | (off) | When `1` / `true` / `yes`, the output file + job dir are deleted the *instant* the download stream finishes. Maximum-ephemeral mode. |
@@ -436,15 +438,19 @@ model.
 
 ## Security & deployment scope
 
-`export` is built for **personal use** (localhost or your private network). If
-you're considering exposing it on the public internet — even just to share
-with a friend — read [SECURITY.md](SECURITY.md) first. It contains an honest
-audit of the current security posture and a phased hardening roadmap (Phase 1:
-where we are; Phase 2: ~90 min of work for "trusted small group on the open
-internet"; Phase 3: real product territory).
+`export` is built for **personal use** (localhost or your private network).
+Phase 2 app hardening is in: download uses a short-lived `token` (not `?pw=`),
+mutating POSTs are rate-limited, URL extract refuses SSRF, Pillow bombs are
+capped at 64_000_000 pixels. HTTPS is a reverse-proxy job —
+[scripts/nginx-export.conf](scripts/nginx-export.conf) and
+[scripts/Caddyfile](scripts/Caddyfile). Certbot / live DNS / tmpfs mount are
+deploy-time, not claimed here.
 
-The Phase 2 hardening checklist explicitly includes setting `EXPORT_MAX_UPLOAD_MB`
-and enabling `EXPORT_DOWNLOAD_AUTODELETE=1` for any public exposure.
+For a trusted-group host set `EXPORT_MAX_UPLOAD_MB=500`,
+`EXPORT_MAX_COMPRESS_MB=2000`, `EXPORT_DOWNLOAD_AUTODELETE=1`,
+`EXPORT_CLEANUP_AGE_SECONDS=900`, `EXPORT_CLEANUP_INTERVAL_SECONDS=60`, and a
+32+ character `EXPORT_PASSWORD`. Localhost may keep unlimited caps and `1234`.
+Read [SECURITY.md](SECURITY.md) before exposing anything.
 
 ## License
 

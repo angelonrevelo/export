@@ -388,6 +388,82 @@ const $ = (id) => document.getElementById(id);
 const getPw = () => localStorage.getItem(PW_KEY) || "1234";
 
 let _reachable = null;
+let _reachableKind = null;
+
+const KIND_ORDER = ["image","video","audio","document","pdf","office","spreadsheet","subtitle","font","comic","other"];
+const KIND_PREFER = {
+  image: ["png","jpeg","webp","pdf"],
+  video: ["mp4","webm","mov","mkv","gif","png"],
+  audio: ["mp3","m4a","wav","flac"],
+  document: ["txt","md","pdf","docx"],
+  pdf: ["png","txt","pdfa"],
+};
+const KIND_OF_FORMAT = {
+  jpeg:"image", jpg:"image", png:"image", webp:"image", avif:"image", tiff:"image",
+  bmp:"image", gif:"image", ico:"image", icns:"image", jp2:"image", jxl:"image",
+  svg:"image", heic:"image", heif:"image", nobg:"image",
+  mp4:"video", mov:"video", webm:"video", mkv:"video", audiogram:"video", captioned:"video",
+  mp3:"audio", m4a:"audio", m4b:"audio", wav:"audio", flac:"audio", ogg:"audio",
+  opus:"audio", aac:"audio", denoise:"audio",
+  pdf:"pdf", pdfa:"pdf",
+  txt:"document", md:"document", html:"document", htm:"document", rtf:"document",
+  epub:"document", odt:"document", tex:"document", org:"document", rst:"document",
+  pptx:"document", notes:"document", translate:"document",
+  docx:"office", doc:"office",
+  csv:"spreadsheet", tsv:"spreadsheet", xlsx:"spreadsheet", json:"spreadsheet",
+  yaml:"spreadsheet", yml:"spreadsheet", toml:"spreadsheet",
+  srt:"subtitle", vtt:"subtitle", ass:"subtitle", ssa:"subtitle", sub:"subtitle", sbv:"subtitle",
+  ttf:"font", otf:"font", woff:"font", woff2:"font",
+};
+
+function fillGrouped(sel, opts, kindMap) {
+  sel.innerHTML = "";
+  let groups = kindMap;
+  if (!groups) {
+    groups = {};
+    for (const f of opts) {
+      const k = KIND_OF_FORMAT[f] || "other";
+      (groups[k] ||= []).push(f);
+    }
+  }
+  for (const k of KIND_ORDER) {
+    const arr = groups[k];
+    if (!arr || !arr.length) continue;
+    const og = document.createElement("optgroup");
+    og.label = k;
+    const prefer = KIND_PREFER[k] || [];
+    const ranked = [...arr].sort((a, b) => {
+      const ia = prefer.indexOf(a), ib = prefer.indexOf(b);
+      const ra = ia < 0 ? 100 : ia, rb = ib < 0 ? 100 : ib;
+      return ra - rb || a.localeCompare(b);
+    });
+    for (const f of ranked) {
+      const o = document.createElement("option");
+      o.value = f;
+      o.textContent = f;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+}
+
+async function httpError(r) {
+  let detail = "";
+  try {
+    const j = await r.clone().json();
+    detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail || "");
+  } catch {
+    try { detail = await r.text(); } catch { detail = ""; }
+  }
+  if (r.status === 401) return detail || "bad password";
+  if (r.status === 429) return detail || "too many requests — wait a minute";
+  if (r.status === 413) return detail || "file too large";
+  if (r.status === 400 && /refused|private|metadata/i.test(detail))
+    return detail.length < 160 ? detail : "that URL is not allowed";
+  if (detail && detail.length < 200 && !detail.trim().startsWith("{") && !detail.trim().startsWith("<"))
+    return detail;
+  return `request failed (${r.status})`;
+}
 
 const TYPES = {
   image:       { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico","jp2","psd","tga","pcx","eps","icns","jxl","svg","dng","cr2","cr3","nef","arw","raf","orf","rw2","pef","srw"],
@@ -541,7 +617,7 @@ $("go").onclick = async () => {
       }),
     });
     if (r.status === 401) { localStorage.removeItem(PW_KEY); location.reload(); return; }
-    if (!r.ok) throw new Error(await r.text() || "failed");
+    if (!r.ok) throw new Error(await httpError(r));
     const { job_id } = await r.json();
     poll(job_id, format);
   } catch (e) {
@@ -673,14 +749,16 @@ function showPicked(files) {
     if (type === "pdf") acts.push("split", "rotate", "watermark", "encrypt", "decrypt");
     const ext = (f.name.split(".").pop() || "").toLowerCase();
     _reachable = null;
+    _reachableKind = null;
     renderActions(acts, type);
     fetch("/api/reachable?ext=" + encodeURIComponent(ext))
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
         _reachable = (d && d.format && d.format.length) ? d.format : null;
+        _reachableKind = (d && d.kind) ? d.kind : null;
         if (_reachable) renderActions(acts, type);
       })
-      .catch(() => { _reachable = null; });
+      .catch(() => { _reachable = null; _reachableKind = null; });
     // Probe video metadata asynchronously so the estimator can use real source
     // bitrate. Browser-local; no upload. When it lands, refresh the estimate.
     _probe = null;
@@ -710,6 +788,7 @@ function showPicked(files) {
     }
     const ctx = allSameType ? `${sharedType}-multi` : "mixed";
     _reachable = null;
+    _reachableKind = null;
     renderActions(acts, ctx);
     if (allSameType && files[0]) {
       const ext = (files[0].name.split(".").pop() || "").toLowerCase();
@@ -717,9 +796,10 @@ function showPicked(files) {
         .then((r) => r.ok ? r.json() : null)
         .then((d) => {
           _reachable = (d && d.format && d.format.length) ? d.format : null;
+          _reachableKind = (d && d.kind) ? d.kind : null;
           if (_reachable) renderActions(acts, ctx);
         })
-        .catch(() => { _reachable = null; });
+        .catch(() => { _reachable = null; _reachableKind = null; });
     }
   }
 }
@@ -961,10 +1041,14 @@ function updateOptForAction(type) {
   } else if (action === "split" || action === "merge") {
     showSel = false; showTxt = false; label = `(no options)`;
   }
-  for (const o of opts) {
-    const opt = document.createElement("option");
-    opt.value = o; opt.textContent = o;
-    sel.appendChild(opt);
+  if (action === "convert") {
+    fillGrouped(sel, opts, _reachableKind);
+  } else {
+    for (const o of opts) {
+      const opt = document.createElement("option");
+      opt.value = o; opt.textContent = o;
+      sel.appendChild(opt);
+    }
   }
   sel.style.display = showSel ? "" : "none";
   txt.style.display = showTxt ? "" : "none";
@@ -1317,7 +1401,7 @@ $("process").onclick = async () => {
       body: fd,
     });
     if (r.status === 401) { localStorage.removeItem(PW_KEY); location.reload(); return; }
-    if (!r.ok) throw new Error(await r.text() || "failed");
+    if (!r.ok) throw new Error(await httpError(r));
     const { job_id } = await r.json();
     poll(job_id, pollHint);
   } catch (e) {
@@ -1351,9 +1435,11 @@ async function shrinkMore(prevJobId, prevFilename) {
   setStatus("re-uploading for further shrink...");
   $("bar").classList.add("show");
   setProgress(0);
-  const r = await fetch(`/api/files/${prevJobId}?pw=${encodeURIComponent(getPw())}`, {
-    headers: { "X-Password": getPw() },
-  });
+  const prev = await fetch(`/api/jobs/${prevJobId}`, { headers: { "X-Password": getPw() } });
+  if (!prev.ok) { setStatus(await httpError(prev), "error"); return; }
+  const prevJob = await prev.json();
+  const r = await fetch(`/api/files/${prevJobId}?token=${encodeURIComponent(prevJob.token || "")}`);
+  if (!r.ok) { setStatus(await httpError(r), "error"); return; }
   const blob = await r.blob();
   const file = new File([blob], prevFilename, { type: blob.type });
   // Step quality down by 10 (floor 10). If no quality was set on the first
@@ -1369,7 +1455,7 @@ async function shrinkMore(prevJobId, prevFilename) {
     headers: { "X-Password": getPw() },
     body: fd,
   });
-  if (!r2.ok) { setStatus(await r2.text() || "shrink-more failed", "error"); return; }
+  if (!r2.ok) { setStatus(await httpError(r2), "error"); return; }
   const { job_id } = await r2.json();
   poll(job_id);
 }
@@ -1393,7 +1479,7 @@ async function poll(jobId) {
     if (j.status === "ready") {
       $("bar").classList.remove("indeterminate");
       setProgress(100);
-      const url = `/api/files/${jobId}?pw=${encodeURIComponent(getPw())}`;
+      const url = `/api/files/${jobId}?token=${encodeURIComponent(j.token || "")}`;
       const name = j.filename || `${j.title || "file"}`;
       let sizeNote = "";
       // For shrink chains, compare against the *original* input, not the

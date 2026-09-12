@@ -1,0 +1,13 @@
+# Trusted-group HTTPS in front of export (uvicorn on 127.0.0.1:8500).
+# Caddy obtains and renews the Let's Encrypt cert automatically.
+#
+#   caddy run --config scripts/Caddyfile
+#
+# Certbot/DNS are deploy-time; this file is the in-repo shape.
+
+export.bygelo.com {
+	reverse_proxy 127.0.0.1:8500
+	request_body {
+		max_size 500MB
+	}
+}

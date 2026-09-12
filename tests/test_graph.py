@@ -158,7 +158,7 @@ class ReachableApiTest(unittest.TestCase):
         job_id = r.json()["job_id"]
         st = self.client.get(f"/api/jobs/{job_id}", headers={"X-Password": "1234"}).json()
         self.assertEqual(st["status"], "ready", st)
-        dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+        dl = self.client.get(f"/api/files/{job_id}", params={"token": st["token"]})
         self.assertEqual(dl.status_code, 200)
         self.assertEqual(dl.content[:8], b"\x89PNG\r\n\x1a\n")
         with Image.open(io.BytesIO(dl.content)) as img:

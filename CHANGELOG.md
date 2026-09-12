@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Phase 2 hardening: per-job download `token` (not `?pw=`), SSRF refuse on URL extract, 30/min mutating rate limit, Pillow `MAX_IMAGE_PIXELS=64000000`. Convert-to picker grouped by kind (`<optgroup>`).
 - Multilingual OCR/STT/TTS with auto-detect, Tesseract pack picking, and a UI language dropdown.
 - Offline mode (`EXPORT_OFFLINE`) plus `scripts/prefetch.sh` / `scripts/install-tessdata.sh`.
 - NLLB-200 translation (`translate_to` / format `translate`), including Filipino.
@@ -22,7 +23,8 @@
 
 ### Not done
 - `git push` / origin.
-- SECURITY.md Phase 2 (public `?pw=` / rate limit / upload caps).
+- Live certbot / DNS / tmpfs mount (documented, not provisioned here).
+- SECURITY.md Phase 3 (accounts, Redis, sandbox converters).
 - Bilingual srt, HTML-safe translate, Homebrew libass burn-in.
 - New format families (aseprite, N64, Minecraft, WASM). Video→PDF is still STT, not frames-as-PDF.
 - No in-repo tests for `/api/compress`, `/api/pdf/op`, `/api/pdf/merge`, `/api/images/batch`, `/api/thumbnail`.

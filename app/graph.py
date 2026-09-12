@@ -205,6 +205,32 @@ def shortest_path(suffix: str, fmt: str) -> list[str] | None:
     return None
 
 
+_KIND_ORDER = (
+    "image", "video", "audio", "document", "pdf", "office",
+    "spreadsheet", "subtitle", "font", "comic", "other",
+)
+_KIND_PREFER = {
+    "image": ("png", "jpeg", "webp", "pdf"),
+    "video": ("mp4", "webm", "mov", "mkv", "gif", "png"),
+    "audio": ("mp3", "m4a", "wav", "flac"),
+    "document": ("txt", "md", "pdf", "docx"),
+    "pdf": ("png", "txt", "pdfa"),
+}
+
+
+def grouped_format(fmt_list: list[str]) -> dict[str, list[str]]:
+    """kind → formats, preferred first then alpha. Singular collection key at API."""
+    kind_map: dict[str, list[str]] = {}
+    for f in fmt_list:
+        k = kind_of_format(f) or "other"
+        kind_map.setdefault(k, []).append(f)
+    for k, lst in kind_map.items():
+        prefer = _KIND_PREFER.get(k, ())
+        rank = {x: i for i, x in enumerate(prefer)}
+        lst.sort(key=lambda x: (rank.get(x, 100), x))
+    return {k: kind_map[k] for k in _KIND_ORDER if k in kind_map}
+
+
 def reachable(suffix: str) -> list[str]:
     if not kind_of_suffix(suffix):
         return []

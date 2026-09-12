@@ -6,8 +6,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -174,6 +174,26 @@ def check(pw: str | None) -> None:
         raise HTTPException(status_code=401, detail="bad password")
 
 
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+@app.middleware("http")
+async def rate_limit_mutate(request: Request, call_next):
+    if request.method == "POST" and request.url.path.startswith("/api/"):
+        from .limit import RateLimited, enforce
+        try:
+            enforce(_client_ip(request))
+        except RateLimited as e:
+            return JSONResponse({"detail": str(e)}, status_code=429)
+    return await call_next(request)
+
+
 class CreateJob(BaseModel):
     url: str
     format: str = "mp3"
@@ -189,6 +209,11 @@ def create_job(body: CreateJob, bg: BackgroundTasks, x_password: str | None = He
             status_code=503,
             detail="Offline mode — URL extraction needs a network. Unset EXPORT_OFFLINE or drop a local file.",
         )
+    from .ssrf import SsrfRefused, refuse_ssrf
+    try:
+        refuse_ssrf(body.url)
+    except SsrfRefused as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     job_id = uuid.uuid4().hex[:12]
     jobs[job_id] = {
         "status": "pending",
@@ -712,13 +737,16 @@ def get_job(job_id: str, x_password: str | None = Header(None)):
 
 
 @app.get("/api/files/{job_id}")
-def download_file(job_id: str, pw: str | None = None):
-    check(pw)
+def download_file(job_id: str, token: str | None = None, pw: str | None = None):
+    if pw is not None:
+        raise HTTPException(status_code=401, detail="use the download token, not ?pw=")
     job = jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="not found")
     if job["status"] != "ready" or not job["filename"]:
         raise HTTPException(status_code=400, detail="not ready")
+    if not token or token != job.get("token"):
+        raise HTTPException(status_code=401, detail="bad download token")
     path = DOWNLOADS_DIR / job_id / job["filename"]
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing")
@@ -854,9 +882,10 @@ def capabilities():
 @app.get("/api/reachable")
 def reachable_format(ext: str = ""):
     """Public — formats reachable from this input suffix by composing bridges."""
-    from .graph import reachable
+    from .graph import grouped_format, reachable
     suffix = ext if ext.startswith(".") else f".{ext}"
-    return {"format": reachable(suffix)}
+    fmt_list = reachable(suffix)
+    return {"format": fmt_list, "kind": grouped_format(fmt_list)}
 
 
 @app.get("/")

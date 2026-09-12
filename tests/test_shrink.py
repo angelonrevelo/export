@@ -153,7 +153,7 @@ class ShrinkApiTest(unittest.TestCase):
         self.assertEqual(st["status"], "ready", st)
         self.assertEqual(st["output_size"], cap)
         self.assertEqual(st["predicted_byte"], cap)
-        dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+        dl = self.client.get(f"/api/files/{job_id}", params={"token": st["token"]})
         self.assertEqual(len(dl.content), cap)
         self.assertEqual(dl.content[:2], b"\xff\xd8")
 
@@ -176,7 +176,7 @@ class ShrinkApiTest(unittest.TestCase):
         self.assertNotEqual(st["status"], "error")
         self.assertEqual(st["output_size"], cap)
         self.assertEqual(st["predicted_byte"], cap)
-        dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+        dl = self.client.get(f"/api/files/{job_id}", params={"token": st["token"]})
         self.assertEqual(len(dl.content), cap)
         self.assertEqual(dl.content[:2], b"\xff\xd8")
 

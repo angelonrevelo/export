@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import uuid
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,6 +15,8 @@ import yt_dlp
 import zstandard as zstd
 from gallery_dl import config as gdl_config, job as gdl_job
 from PIL import Image, ImageOps
+
+Image.MAX_IMAGE_PIXELS = 64_000_000
 
 from .language import (
     default_whisper_model,
@@ -68,6 +71,15 @@ TRUTHY_VALUE = {"1", "true", "yes", "on", "always", "chrome"}
 FALSY_VALUE = {"0", "false", "no", "off", "never", "none", "disable", "disabled"}
 
 jobs: dict[str, dict] = {}
+
+
+def mark_ready(job: dict, target: Path) -> None:
+    """Job is downloadable. Mint a short-lived token (job TTL); never ?pw=."""
+    job["filename"] = target.name
+    job["output_size"] = target.stat().st_size
+    job["token"] = uuid.uuid4().hex
+    job["progress"] = 100
+    job["status"] = "ready"
 
 
 def _host_match(host: str, domain: str) -> bool:
@@ -1294,12 +1306,9 @@ def run_shrink_job(job_id: str, input_path: Path, level: str, downloads_dir: Pat
         else:
             raise ValueError(f"unsupported file type for shrink: {suffix or '(no extension)'}")
         input_path.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
+        mark_ready(job, target)
         if job.get("predicted_byte") is not None:
             job["predicted_byte"] = job["output_size"]
-        job["progress"] = 100
-        job["status"] = "ready"
     except Exception as e:
         job["status"] = "error"
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
@@ -1325,10 +1334,7 @@ def run_compress_job(job_id: str, input_paths: list[Path], fmt: str, downloads_d
             target = _make_archive(input_paths, fmt, out_dir, base_name)
         for p in input_paths:
             p.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
@@ -1455,10 +1461,7 @@ def run_image_batch_job(job_id: str, input_paths: list[Path], fmt: str,
             raise ValueError(f"unsupported batch format: {fmt}")
         for p in input_paths:
             p.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
@@ -1500,10 +1503,7 @@ def run_images_to_pdf_job(job_id: str, input_paths: list[Path],
         target = _images_to_pdf(input_paths, out_dir, rotations)
         for p in input_paths:
             p.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
@@ -1798,9 +1798,7 @@ def run_pdf_merge_job(job_id: str, input_paths: list[Path], downloads_dir: Path)
         target = _pdf_merge(input_paths, out_dir)
         for p in input_paths:
             p.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
@@ -1824,9 +1822,7 @@ def run_pdf_op_job(job_id: str, input_path: Path, op: str, value: str, downloads
         else:
             raise ValueError(f"unknown PDF op: {op}")
         input_path.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
@@ -3042,10 +3038,7 @@ def run_batch_shrink_job(job_id: str, input_paths: list[Path], level: str,
             o.unlink(missing_ok=True)
         for p in input_paths:
             p.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
@@ -3085,10 +3078,7 @@ def run_batch_convert_job(job_id: str, input_paths: list[Path], fmt: str,
                 o.unlink(missing_ok=True)
         for p in input_paths:
             p.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
@@ -3106,10 +3096,7 @@ def run_convert_job(job_id: str, input_path: Path, fmt: str, downloads_dir: Path
         with use_language(language), use_translate_to(translate_to):
             target = _convert_one(input_path, fmt, out_dir, quality=quality, job=job)
         input_path.unlink(missing_ok=True)
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["progress"] = 100
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)
@@ -3122,6 +3109,8 @@ def run_job(job_id: str, url: str, fmt: str, downloads_dir: Path,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        from .ssrf import refuse_ssrf
+        refuse_ssrf(url)
         _require_network("URL extraction")
         if translate_to:
             job["translate_to"] = translate_to
@@ -3184,9 +3173,7 @@ def run_job(job_id: str, url: str, fmt: str, downloads_dir: Path,
                 if target is None:
                     raise RuntimeError("yt-dlp produced no file")
 
-        job["filename"] = target.name
-        job["output_size"] = target.stat().st_size
-        job["status"] = "ready"
+        mark_ready(job, target)
     except Exception as e:
         job["status"] = "error"
         job["error"] = _humanize_extraction_error(str(e) or repr(e) or e.__class__.__name__)

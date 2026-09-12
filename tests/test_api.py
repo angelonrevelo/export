@@ -49,7 +49,7 @@ class CapabilitiesTest(unittest.TestCase):
         body = st.json()
         self.assertEqual(body["status"], "ready", body)
         self.assertTrue(body["filename"].endswith(".jpg"))
-        dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+        dl = self.client.get(f"/api/files/{job_id}", params={"token": body["token"]})
         self.assertEqual(dl.status_code, 200)
         self.assertGreater(len(dl.content), 50)
 
@@ -64,7 +64,7 @@ class CapabilitiesTest(unittest.TestCase):
         job_id = r.json()["job_id"]
         st = self.client.get(f"/api/jobs/{job_id}", headers={"X-Password": "1234"}).json()
         self.assertEqual(st["status"], "ready", st)
-        dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+        dl = self.client.get(f"/api/files/{job_id}", params={"token": st["token"]})
         self.assertIn(b"export", dl.content)
 
     def test_txt_translate_upload(self):
@@ -83,7 +83,7 @@ class CapabilitiesTest(unittest.TestCase):
             st = self.client.get(f"/api/jobs/{job_id}", headers={"X-Password": "1234"}).json()
             self.assertEqual(st["status"], "ready", st)
             self.assertEqual(st.get("translate_to"), "tl")
-            dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+            dl = self.client.get(f"/api/files/{job_id}", params={"token": st["token"]})
             self.assertIn(b"TR-tgl_Latn-", dl.content)
             self.assertIn(b"Hello there", dl.content)
         finally:

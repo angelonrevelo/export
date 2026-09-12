@@ -36,9 +36,9 @@ opportunistically. T5 is a research project we explicitly punt on.
 |---|---|---|---|
 | Single shared password | ⚠️ | T3, T4 | No accounts, no audit trail, no revocation. Acceptable for T0-T2. |
 | Password sent as `X-Password` header | ✓ | — | Header-based, not in URL for JSON endpoints. |
-| **Password sent as `?pw=` query param for downloads** | 🔴 | T1, T2 | Leaks via browser history, server logs, Referer. Highest-priority fix. |
+| **Password sent as `?pw=` query param for downloads** | ✓ | — | Replaced by a per-job download `token` on `/api/files`. `?pw=` returns 401. |
 | Password stored in browser localStorage | ⚠️ | XSS | We render no user content as HTML, so XSS surface is currently nil. Future-proof would be httpOnly cookie. |
-| HTTPS | 🔴 | T1, T2 | Not enforced. nginx config in `scripts/` provides the shape; certbot run is a deploy-time step. |
+| HTTPS | ⚠️ | T1, T2 | In-repo: `scripts/nginx-export.conf` + `scripts/Caddyfile`. Live certbot/DNS is deploy-time. |
 | CSRF tokens | ⚠️ | T2 | None. Mitigated by same-origin and X-Password header requirement, but multipart uploads from a malicious origin would still go through if password leaks. |
 
 ### Input handling & resource limits
@@ -47,10 +47,10 @@ opportunistically. T5 is a research project we explicitly punt on.
 |---|---|---|---|
 | Per-file upload cap | ⚠️ | T3, T4 | **Default: unlimited** (correct for personal use). Set `EXPORT_MAX_UPLOAD_MB=N` to enforce. **Required before any public exposure** — Phase 2 should ship a sane cap (e.g. 500 MB). |
 | Multi-file total cap | ⚠️ | T3, T4 | Same — `EXPORT_MAX_COMPRESS_MB` defaults to unlimited; cap before exposing. |
-| **No request rate limiting** | 🔴 | T3, T4 | Anyone with the password can submit unlimited jobs. Single shared CPU = trivial DoS. |
+| **No request rate limiting** | ✓ | — | 30 mutating POSTs / minute / IP (`EXPORT_RATE_LIMIT_PER_MINUTE`). 429 + one-line detail. |
 | No per-user job concurrency limit | ⚠️ | T3 | Whisper is single-model; concurrent transcribes serialize but other ops compete for CPU. |
-| **SSRF via URL extraction** | 🔴 | T2-T4 | yt-dlp will fetch any URL the user gives it, including `http://169.254.169.254/...` (AWS metadata), `http://127.0.0.1:6379` (Redis), `http://internal.corp/admin`. |
-| **No image-bomb protection** | 🔴 | T4 | Pillow can be tricked into multi-GB allocations from crafted PNG/JPEG. `Image.MAX_IMAGE_PIXELS` is at default. |
+| **SSRF via URL extraction** | ✓ | — | `refuse_ssrf` before yt-dlp: RFC1918, `169.254/16`, `127/8`, IPv6 unique-local → 400. |
+| **No image-bomb protection** | ✓ | — | `Image.MAX_IMAGE_PIXELS = 64_000_000` (~8K×8K). |
 | File extension trusted from upload | ⚠️ | T4 | We dispatch by suffix. A `.pdf` that's actually JS bytecode just fails the relevant parser — but the parsers themselves have CVEs (Ghostscript especially). |
 
 ### Subprocess & code execution
@@ -90,45 +90,27 @@ needed. Ship.
 Minimum to be defensible on the open internet for a few friends. Roughly 1
 afternoon of work.
 
-- [ ] **HTTPS terminating reverse proxy** — Caddy or nginx + Let's Encrypt.
-      `scripts/nginx-export.conf` already covers nginx; Caddy is a one-liner
-      `Caddyfile`. Cert renewal is automatic.
-- [ ] **Move download auth from `?pw=` query param to short-lived signed
-      tokens** — when a job becomes ready, mint a one-shot UUID download token
-      stored alongside the job, valid for 6 hours. Frontend calls
-      `/api/files/{job_id}?token=<short-uuid>` instead of `?pw=<password>`.
-      ~30 LOC change in `app/main.py` + `app/jobs.py`.
-- [ ] **Rate limiting** — `pip install slowapi`, decorate `/api/jobs`,
-      `/api/upload`, `/api/compress`, `/api/shrink`, `/api/pdf/*`,
-      `/api/batch`, `/api/images/*`. Default to something like `30/minute`
-      per IP. ~15 min.
-- [ ] **SSRF guard in URL extractor** — before passing a URL to yt-dlp/gallery-dl,
-      resolve its hostname, verify the resolved IP is not in any RFC1918
-      private range (10/8, 172.16/12, 192.168/16), the link-local 169.254/16
-      (cloud metadata!), 127/8, or any IPv6 unique-local. Refuse with a clear
-      400. ~25 LOC.
-- [ ] **Image-bomb defense** — set `PIL.Image.MAX_IMAGE_PIXELS = 64_000_000`
-      (≈8K×8K), wrap each Pillow open in try/except `DecompressionBombError`.
-      ~5 LOC.
-- [ ] **Stronger password** — 32+ chars from `openssl rand -base64 24`,
-      documented requirement in `.env.example`.
-- [ ] **Set upload caps** — `EXPORT_MAX_UPLOAD_MB=500` and
-      `EXPORT_MAX_COMPRESS_MB=2000` (or whatever your disk can absorb).
-      Default is unlimited which is correct for personal use but a trivial
-      disk-fill DoS in any multi-user context.
-- [ ] **Enable stream-and-delete** — `EXPORT_DOWNLOAD_AUTODELETE=1` in
-      `.env`. Files + job dirs are nuked the instant the user finishes their
-      download. Combined with a tmpfs mount on `/tmp/export`, this gives
-      true ephemeral storage with zero retention.
-- [ ] **Shorten cleanup TTL** — `EXPORT_CLEANUP_AGE_SECONDS=900` (15 min)
-      so jobs the user abandoned don't sit around. Pair with
-      `EXPORT_CLEANUP_INTERVAL_SECONDS=60` for tighter sweeps.
-- [ ] **Mount /tmp/export as tmpfs** (Linux only) — RAM-backed storage,
-      auto-clears on reboot, no SSD wear, faster I/O. One line in
-      `/etc/fstab` (see `scripts/install-linux.sh` notes).
-- [ ] **Document the threat model clearly to the trusted users** — they know
-      that abuse can shut things down for everyone (single shared password,
-      no audit).
+- [x] **HTTPS terminating reverse proxy** — in-repo `scripts/nginx-export.conf`
+      and `scripts/Caddyfile`. Certbot / live DNS is deploy-time (not claimed).
+- [x] **Move download auth from `?pw=` query param to short-lived
+      tokens** — job `token` minted at ready; `/api/files/{job_id}?token=…`.
+      `?pw=` is 401. Token lives with the job TTL (shrink-more can re-fetch).
+- [x] **Rate limiting** — in-process 30 mutating POSTs / minute / IP
+      (`EXPORT_RATE_LIMIT_PER_MINUTE`). 429 with a one-line body.
+- [x] **SSRF guard in URL extractor** — `refuse_ssrf` before yt-dlp/gallery-dl:
+      RFC1918, `169.254/16`, `127/8`, IPv6 unique-local → 400.
+- [x] **Image-bomb defense** — `PIL.Image.MAX_IMAGE_PIXELS = 64_000_000`.
+- [x] **Stronger password** — documented: public 32+ chars
+      (`openssl rand -base64 24`); localhost may stay `1234`.
+- [x] **Set upload caps** — documented public values `EXPORT_MAX_UPLOAD_MB=500`
+      and `EXPORT_MAX_COMPRESS_MB=2000`. Localhost default remains unlimited.
+- [x] **Enable stream-and-delete** — documented `EXPORT_DOWNLOAD_AUTODELETE=1`
+      for public; localhost opt-in.
+- [x] **Shorten cleanup TTL** — documented public `EXPORT_CLEANUP_AGE_SECONDS=900`
+      + `EXPORT_CLEANUP_INTERVAL_SECONDS=60`. Localhost default 6 h / 15 min.
+- [x] **Mount /tmp/export as tmpfs** (Linux only) — notes in
+      `scripts/install-linux.sh`. Live mount is deploy-time.
+- [x] **Document the threat model clearly to the trusted users** — this file.
 
 After Phase 2 everything in the audit table above marked 🔴 is resolved.
 
@@ -229,7 +211,8 @@ run before flipping DNS:
 ## Final word for the friend
 
 The threat model is "self + small trusted circle on the open internet."
-Closing the five 🔴 items above gets us there. The Phase 3 list is not a hint
+Phase 2 app items (token, rate limit, SSRF, image-bomb) are in; HTTPS is
+the reverse-proxy deploy. The Phase 3 list is not a hint
 that we should go there — it's a list to read *before deciding whether* to.
 The current architecture is built for personal use; promoting it to a public
 product is a real shift in scope, not a checkbox.
