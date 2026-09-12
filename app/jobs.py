@@ -33,6 +33,7 @@ from .language import (
     whisper_language_arg,
 )
 from .translate import maybe_translate_segment, maybe_translate_text
+from .budget import pad_to_byte, predicted_byte, video_bit_rate
 
 pillow_heif.register_heif_opener()
 
@@ -943,11 +944,14 @@ def _compress_single(input_path: Path, fmt: str, out_dir: Path) -> Path:
 
 def _shrink_image(input_path: Path, level: str, out_dir: Path,
                   quality: int | None = None, max_dim: int | None = None,
-                  scale_percent: float | None = None) -> Path:
+                  scale_percent: float | None = None,
+                  target_byte: int | None = None) -> Path:
     """Image shrink. Quality slider tunes JPEG/WebP/AVIF encoder quality.
     Optional resize via either max_dim (longest-side cap in px) OR
     scale_percent (e.g. 50 = half on both axes). scale_percent wins when both
-    set. Level "resize" uses high quality and requires one of the two."""
+    set. Level "resize" uses high quality and requires one of the two.
+    `target_byte` lands on that exact file size (encode-under + pad). A source
+    already at or under the cap is copied and never grown."""
     if level == "resize":
         if max_dim is None and scale_percent is None:
             raise RuntimeError("level=resize requires max_dim or scale_percent")
@@ -983,6 +987,48 @@ def _shrink_image(input_path: Path, level: str, out_dir: Path,
         save_kwargs.update({"optimize": True, "progressive": True})
     elif out_fmt == "webp":
         save_kwargs["method"] = 6
+
+    if target_byte and target_byte > 0:
+        source_byte = input_path.stat().st_size
+        if source_byte <= target_byte:
+            dest = out_dir / f"{stem}_small{input_path.suffix.lower() or '.jpg'}"
+            shutil.copy2(input_path, dest)
+            return dest
+        if img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        out_path = out_dir / f"{stem}_small.jpg"
+        work = img
+        best_q = 1
+        for _ in range(6):
+            lo, hi = 1, 95
+            best_q = 1
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                work.save(out_path, format="JPEG", quality=mid, optimize=True, progressive=True)
+                sz = out_path.stat().st_size
+                if sz <= target_byte:
+                    best_q = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            work.save(out_path, format="JPEG", quality=best_q, optimize=True, progressive=True)
+            if out_path.stat().st_size <= target_byte:
+                break
+            nw = max(2, int(work.size[0] * 0.7))
+            nh = max(2, int(work.size[1] * 0.7))
+            work = work.resize((nw, nh), Image.LANCZOS)
+        if out_path.stat().st_size > target_byte:
+            raise RuntimeError(
+                f"cannot fit image under {target_byte} bytes (landed {out_path.stat().st_size})"
+            )
+        if out_path.stat().st_size < target_byte:
+            pad_to_byte(out_path, target_byte)
+        return out_path
+
     img.save(out_path, format=out_fmt.upper(), **save_kwargs)
     return out_path
 
@@ -1030,9 +1076,31 @@ def _video_scale_filter(input_path: Path, max_dim: int | None = None,
     return f"scale={new_w}:{new_h}:flags=lanczos"
 
 
+def _probe_duration_second(input_path: Path) -> float:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(input_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    try:
+        return max(float((r.stdout or "0").strip() or 0), 0.05)
+    except ValueError:
+        return 1.0
+
+
+def _probe_has_audio(input_path: Path) -> bool:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(input_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    return bool((r.stdout or "").strip())
+
+
 def _shrink_video(input_path: Path, level: str, out_dir: Path,
                   quality: int | None = None, max_dim: int | None = None,
-                  scale_percent: float | None = None) -> Path:
+                  scale_percent: float | None = None,
+                  target_byte: int | None = None) -> Path:
     """Video shrink. Default codec: libx264 (h.264) for universal playback —
     QuickTime, Preview, every browser, every messaging app, every NLE. About
     20-30% larger than SVT-AV1 at matched quality, but AV1-in-MP4 breaks on
@@ -1050,6 +1118,59 @@ def _shrink_video(input_path: Path, level: str, out_dir: Path,
     codec = os.environ.get("EXPORT_SHRINK_VIDEO_CODEC", "x264").lower()
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}_small.mp4"
+
+    if target_byte and target_byte > 0:
+        source_byte = input_path.stat().st_size
+        if source_byte <= target_byte:
+            dest = out_dir / f"{stem}_small{input_path.suffix.lower() or '.mp4'}"
+            shutil.copy2(input_path, dest)
+            return dest
+        duration_second = _probe_duration_second(input_path)
+        has_audio = _probe_has_audio(input_path)
+        audio_bit_rate = 96_000 if has_audio else 0
+        scale_filter = _video_scale_filter(input_path, max_dim=max_dim, scale_percent=scale_percent) \
+            if (max_dim or scale_percent) else None
+        bit_rate = video_bit_rate(target_byte, duration_second, audio_bit_rate)
+        last_err = ""
+        for _ in range(6):
+            vf_args = ["-vf", scale_filter] if scale_filter else []
+            audio_args = ["-c:a", "aac", "-b:a", "96k"] if has_audio else ["-an"]
+            cmd = [
+                "ffmpeg", "-y", "-i", str(input_path),
+                *vf_args,
+                "-c:v", "libx264",
+                "-b:v", str(bit_rate), "-maxrate", str(bit_rate),
+                "-bufsize", str(max(bit_rate * 2, 16_000)),
+                "-profile:v", "high", "-level:v", "4.0", "-pix_fmt", "yuv420p",
+                "-preset", "fast",
+                *audio_args,
+                "-movflags", "+faststart", str(out_path),
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if r.returncode != 0:
+                last_err = r.stderr.strip()[-400:]
+                bit_rate = max(8_000, int(bit_rate * 0.7))
+                continue
+            sz = out_path.stat().st_size
+            if sz == target_byte:
+                return out_path
+            if sz < target_byte and (target_byte - sz) >= 8:
+                pad_to_byte(out_path, target_byte)
+                return out_path
+            # Over cap, or under by <8 (can't write a free box): squeeze more.
+            bit_rate = max(8_000, int(bit_rate * 0.7))
+            if scale_filter is None:
+                scale_filter = "scale=trunc(iw*3/8)*2:trunc(ih*3/8)*2"
+            else:
+                scale_filter = "scale=trunc(iw*0.7/2)*2:trunc(ih*0.7/2)*2"
+        if out_path.exists() and out_path.stat().st_size <= target_byte:
+            if out_path.stat().st_size < target_byte:
+                pad_to_byte(out_path, target_byte)
+            return out_path
+        raise RuntimeError(
+            f"cannot fit video under {target_byte} bytes"
+            + (f": {last_err}" if last_err else "")
+        )
 
     # Pure-resize mode: keep visual quality high, only scale dimensions.
     if level == "resize":
@@ -1105,7 +1226,8 @@ def _shrink_video(input_path: Path, level: str, out_dir: Path,
     return out_path
 
 
-def _shrink_pdf(input_path: Path, level: str, out_dir: Path, quality: int | None = None) -> Path:
+def _shrink_pdf(input_path: Path, level: str, out_dir: Path, quality: int | None = None,
+                target_byte: int | None = None) -> Path:
     # Ghostscript only has 4 quality presets. Map quality slider to nearest preset.
     if quality is not None:
         q = max(1, min(100, quality))
@@ -1127,32 +1249,55 @@ def _shrink_pdf(input_path: Path, level: str, out_dir: Path, quality: int | None
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError(f"ghostscript failed: {r.stderr.strip()[-500:]}")
+    if target_byte and target_byte > 0:
+        source_byte = input_path.stat().st_size
+        if source_byte <= target_byte:
+            dest = out_dir / f"{stem}_small.pdf"
+            if dest != out_path:
+                shutil.copy2(input_path, dest)
+                out_path.unlink(missing_ok=True)
+                return dest
+            return out_path
+        if out_path.stat().st_size > target_byte:
+            raise RuntimeError(
+                f"cannot fit pdf under {target_byte} bytes (landed {out_path.stat().st_size})"
+            )
+        if out_path.stat().st_size < target_byte:
+            pad_to_byte(out_path, target_byte)
     return out_path
 
 
 def run_shrink_job(job_id: str, input_path: Path, level: str, downloads_dir: Path,
                    quality: int | None = None, max_dim: int | None = None,
-                   scale_percent: float | None = None) -> None:
+                   scale_percent: float | None = None,
+                   target_byte: int | None = None) -> None:
     job = jobs[job_id]
     out_dir = downloads_dir / job_id
     try:
         job["status"] = "shrinking"
+        source_byte = input_path.stat().st_size
+        job["predicted_byte"] = predicted_byte(source_byte, target_byte)
         suffix = input_path.suffix.lower()
         if suffix in IMAGE_SUFFIXES:
             target = _shrink_image(input_path, level, out_dir, quality=quality,
-                                   max_dim=max_dim, scale_percent=scale_percent)
+                                   max_dim=max_dim, scale_percent=scale_percent,
+                                   target_byte=target_byte)
         elif suffix in VIDEO_SUFFIXES:
             target = _shrink_video(input_path, level, out_dir, quality=quality,
-                                   max_dim=max_dim, scale_percent=scale_percent)
+                                   max_dim=max_dim, scale_percent=scale_percent,
+                                   target_byte=target_byte)
         elif suffix in PDF_SUFFIXES:
             # PDF doesn't currently honor max_dim/scale_percent (would need
             # Ghostscript -dColorImageResolution tuning, separate concern).
-            target = _shrink_pdf(input_path, level, out_dir, quality=quality)
+            target = _shrink_pdf(input_path, level, out_dir, quality=quality,
+                                 target_byte=target_byte)
         else:
             raise ValueError(f"unsupported file type for shrink: {suffix or '(no extension)'}")
         input_path.unlink(missing_ok=True)
         job["filename"] = target.name
         job["output_size"] = target.stat().st_size
+        if job.get("predicted_byte") is not None:
+            job["predicted_byte"] = job["output_size"]
         job["progress"] = 100
         job["status"] = "ready"
     except Exception as e:
@@ -2826,26 +2971,31 @@ def _merge_outputs(paths: list[Path], fmt: str, out_dir: Path) -> Path:
 
 def _shrink_one(input_path: Path, level: str, out_dir: Path,
                 quality: int | None = None, max_dim: int | None = None,
-                scale_percent: float | None = None) -> Path:
+                scale_percent: float | None = None,
+                target_byte: int | None = None) -> Path:
     """Single-file shrink dispatch. Mirrors _convert_one's role for the
     batch-shrink endpoint. PDF currently ignores max_dim/scale_percent
     (Ghostscript image-DPI tuning is a separate concern)."""
     suffix = input_path.suffix.lower()
     if suffix in IMAGE_SUFFIXES:
         return _shrink_image(input_path, level, out_dir, quality=quality,
-                             max_dim=max_dim, scale_percent=scale_percent)
+                             max_dim=max_dim, scale_percent=scale_percent,
+                             target_byte=target_byte)
     if suffix in VIDEO_SUFFIXES:
         return _shrink_video(input_path, level, out_dir, quality=quality,
-                             max_dim=max_dim, scale_percent=scale_percent)
+                             max_dim=max_dim, scale_percent=scale_percent,
+                             target_byte=target_byte)
     if suffix in PDF_SUFFIXES:
-        return _shrink_pdf(input_path, level, out_dir, quality=quality)
+        return _shrink_pdf(input_path, level, out_dir, quality=quality,
+                           target_byte=target_byte)
     raise ValueError(f"unsupported file type for shrink: {suffix or '(no extension)'}")
 
 
 def run_batch_shrink_job(job_id: str, input_paths: list[Path], level: str,
                          downloads_dir: Path, quality: int | None = None,
                          max_dim: int | None = None,
-                         scale_percent: float | None = None) -> None:
+                         scale_percent: float | None = None,
+                         target_byte: int | None = None) -> None:
     """Apply the same shrink/resize params to N homogeneous files. Zips the
     outputs (no merge mode — combining N shrunk images/videos doesn't make
     sense). Per-file errors abort the whole job."""
@@ -2857,7 +3007,8 @@ def run_batch_shrink_job(job_id: str, input_paths: list[Path], level: str,
         total = len(input_paths)
         for i, p in enumerate(input_paths, 1):
             outputs.append(_shrink_one(p, level, out_dir, quality=quality,
-                                       max_dim=max_dim, scale_percent=scale_percent))
+                                       max_dim=max_dim, scale_percent=scale_percent,
+                                       target_byte=target_byte))
             job["progress"] = max(1, min(99, int(100 * i / total)))
         zip_name = f"{'resized' if level == 'resize' else 'shrunk'}_{total}.zip"
         target = out_dir / zip_name

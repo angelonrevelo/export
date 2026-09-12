@@ -65,15 +65,15 @@ version.
 | PDF | Ghostscript `/screen` | `/ebook` | `/printer` | — (resize n/a for PDF) |
 
 The **advanced disclosure** under shrink and image/video convert exposes a
-1–100 quality slider that overrides these presets. The slider's "estimated
-output size" is shown as a **range** rather than a single fake-precise number,
-because output size depends heavily on source bitrate and content complexity.
-For video specifically, the frontend probes the source's duration + resolution
-locally via the HTML5 `<video>` element (no upload, no server roundtrip) and
-feeds that into an x264 CRF target-bitrate model — so a 25 Mbps phone video
-and an already-tight 1.5 Mbps web clip get different predictions even at the
-same slider position. After processing, the actual `original → output (n%)`
-delta is shown next to the download link, with a green badge if smaller.
+1–100 quality slider *and* an **exact size** cap (`target_byte`, presets include
+**20 MB = 20_000_000 bytes**). When a byte cap is set, the predicted size is
+that single number (not a lo–hi range) and the delivered file **equals** the
+cap: the encoder aims under budget, then a container-legal pad (JPEG COM /
+PNG tEXt / MP4 `free` box) lands on the exact count. A source already at or
+under the cap is copied and **never grown**. Without a cap, the quality slider
+still shows a source-aware range. After processing, the actual
+`original → output (n%)` delta is shown next to the download link, with a
+green badge if smaller.
 
 Video shrink defaults to **libx264 (h.264)** for universal playback —
 QuickTime/Preview/iOS Safari/Discord/messaging apps all accept it natively.

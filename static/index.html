@@ -341,11 +341,24 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
           <button type="button" class="chip chip-sm pct-preset" data-pct="25">25%</button>
         </span>
       </div>
+      <div id="adv-target-row" style="margin-top: 0.4rem; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+        <span style="color:#888; font-size:0.85em; min-width:9rem;">or exact size (MB):</span>
+        <input type="number" id="adv-target-mb" min="0.001" max="2000" step="0.1" placeholder="(off)" style="width:6.5rem;">
+        <span style="display:inline-flex; gap:0.25rem; flex-wrap:wrap;">
+          <button type="button" class="chip chip-sm mb-preset" data-mb="">off</button>
+          <button type="button" class="chip chip-sm mb-preset" data-mb="20">20 MB</button>
+          <button type="button" class="chip chip-sm mb-preset" data-mb="10">10 MB</button>
+          <button type="button" class="chip chip-sm mb-preset" data-mb="8">8 MB</button>
+          <button type="button" class="chip chip-sm mb-preset" data-mb="5">5 MB</button>
+        </span>
+      </div>
       <div style="color:#666; font-size:0.8em; margin-top:0.5rem;">
         Lower quality = smaller file, more visible compression. Max-dim
         downscales the longest side (preserves aspect) — biggest single lever
-        for high-res sources. Slider overrides the level dropdown above when
-        this panel is open. <span class="est" id="adv-estimate"></span>
+        for high-res sources. An exact-size cap encodes under the budget then
+        pads so the delivered file is that many bytes (20 MB = 20000000).
+        Slider overrides the level dropdown above when this panel is open
+        and no byte cap is set. <span class="est" id="adv-estimate"></span>
       </div>
     </div>
     <button id="process">process</button>
@@ -1073,12 +1086,34 @@ $("adv-quality").oninput = () => {
   refreshEstimate();
 };
 
+document.querySelectorAll(".mb-preset").forEach(btn => {
+  btn.onclick = () => {
+    const v = btn.dataset.mb;
+    $("adv-target-mb").value = v;
+    refreshEstimate();
+  };
+});
+$("adv-target-mb").oninput = () => refreshEstimate();
+
+function targetByteFromUi() {
+  const mb = +$("adv-target-mb").value;
+  if (!(mb > 0) || mb > 2000) return null;
+  return Math.round(mb * 1_000_000);
+}
+
 function refreshEstimate() {
   const files = $("drop-file").files;
   if (!files || !files.length) { $("adv-estimate").textContent = ""; return; }
   const inputBytes = [...files].reduce((s, f) => s + f.size, 0);
   const q = +$("adv-quality").value;
   const t = files.length === 1 ? detectType(files[0].name) : "image";
+  const cap = targetByteFromUi();
+  if (cap) {
+    const delivered = inputBytes <= cap ? inputBytes : cap;
+    const tag = inputBytes <= cap ? "already under cap — will not grow" : "exact";
+    $("adv-estimate").textContent = `= ${fmtBytes(delivered)} (${tag})`;
+    return;
+  }
 
   // Read max-dim AND scale% from the advanced panel. The two are mutually
   // exclusive in the UI but if both somehow ended up set, scale% wins to
@@ -1230,6 +1265,8 @@ $("process").onclick = async () => {
       } else if (maxDimVal >= 16 && maxDimVal <= 16384) {
         fd.append("max_dim", String(maxDimVal));
       }
+      const cap = targetByteFromUi();
+      if (cap) fd.append("target_byte", String(cap));
       // Shrink-chain only applies to single-file (chain tracks cumulative
       // ratio against an original; doesn't make sense for a zip of N).
       _shrinkChain = isBatch ? null : {

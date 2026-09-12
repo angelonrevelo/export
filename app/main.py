@@ -306,17 +306,20 @@ async def shrink_file(
     quality: int | None = Form(None),
     max_dim: int | None = Form(None),
     scale_percent: float | None = Form(None),
+    target_byte: int | None = Form(None),
     x_password: str | None = Header(None),
 ):
     check(x_password)
     if level not in SHRINK_LEVELS:
         raise HTTPException(status_code=400, detail=f"invalid level: {level}")
-    if level == "resize" and not max_dim and not scale_percent:
+    if level == "resize" and not max_dim and not scale_percent and not target_byte:
         raise HTTPException(status_code=400, detail="level=resize requires max_dim or scale_percent")
     if max_dim is not None and (max_dim < 16 or max_dim > 16384):
         raise HTTPException(status_code=400, detail="max_dim must be 16-16384 px")
     if scale_percent is not None and (scale_percent <= 0 or scale_percent > 200):
         raise HTTPException(status_code=400, detail="scale_percent must be in (0, 200]")
+    if target_byte is not None and (target_byte < 64 or target_byte > 2_000_000_000):
+        raise HTTPException(status_code=400, detail="target_byte must be 64–2000000000")
     job_id = uuid.uuid4().hex[:12]
     job_dir = DOWNLOADS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -340,9 +343,10 @@ async def shrink_file(
         "filename": None,
         "original_size": written,
         "output_size": None,
+        "predicted_byte": None,
     }
     bg.add_task(run_shrink_job, job_id, input_path, level, DOWNLOADS_DIR,
-                quality, max_dim, scale_percent)
+                quality, max_dim, scale_percent, target_byte)
     return {"job_id": job_id}
 
 
@@ -564,6 +568,7 @@ async def batch_shrink(
     quality: int | None = Form(None),
     max_dim: int | None = Form(None),
     scale_percent: float | None = Form(None),
+    target_byte: int | None = Form(None),
     x_password: str | None = Header(None),
 ):
     """Apply the same shrink/resize params to N homogeneous files. Returns a
@@ -574,12 +579,14 @@ async def batch_shrink(
         raise HTTPException(status_code=400, detail="batch shrink needs at least 2 files")
     if level not in SHRINK_LEVELS:
         raise HTTPException(status_code=400, detail=f"invalid level: {level}")
-    if level == "resize" and not max_dim and not scale_percent:
+    if level == "resize" and not max_dim and not scale_percent and not target_byte:
         raise HTTPException(status_code=400, detail="level=resize requires max_dim or scale_percent")
     if max_dim is not None and (max_dim < 16 or max_dim > 16384):
         raise HTTPException(status_code=400, detail="max_dim must be 16-16384 px")
     if scale_percent is not None and (scale_percent <= 0 or scale_percent > 200):
         raise HTTPException(status_code=400, detail="scale_percent must be in (0, 200]")
+    if target_byte is not None and (target_byte < 64 or target_byte > 2_000_000_000):
+        raise HTTPException(status_code=400, detail="target_byte must be 64–2000000000")
 
     job_id = uuid.uuid4().hex[:12]
     job_dir = DOWNLOADS_DIR / job_id
@@ -611,7 +618,7 @@ async def batch_shrink(
         "output_size": None,
     }
     bg.add_task(run_batch_shrink_job, job_id, saved, level, DOWNLOADS_DIR,
-                quality, max_dim, scale_percent)
+                quality, max_dim, scale_percent, target_byte)
     return {"job_id": job_id}
 
 
@@ -818,6 +825,7 @@ def capabilities():
             "compress_archive":     sorted(ARCHIVE_FORMATS),
             "compress_single_file": sorted(SINGLE_FILE_COMPRESS),
             "shrink_levels":        sorted(SHRINK_LEVELS),
+            "shrink_target_byte":   20_000_000,
             "pdf_ops":              sorted(list(PDF_OPS) + ["merge"]),
             "batch_mergeable":      sorted(MERGEABLE_FORMATS),
         },
