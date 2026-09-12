@@ -72,6 +72,7 @@ from .jobs import (
     MERGEABLE_FORMATS,
     _open_raster,
 )
+from .meta import META_OP, is_darwin, reveal, run_meta_job
 from .language import (
     UI_LANGUAGE,
     default_whisper_model,
@@ -718,6 +719,68 @@ async def pdf_op(
     return {"job_id": job_id}
 
 
+@app.post("/api/meta")
+async def meta_file(
+    bg: BackgroundTasks,
+    file: UploadFile = File(...),
+    op: str = Form(...),
+    modified_at: str = Form(""),
+    tag: str = Form(""),
+    password: str = Form(""),
+    from_exif: str = Form(""),
+    x_password: str | None = Header(None),
+):
+    check(x_password)
+    if op not in META_OP:
+        raise HTTPException(status_code=400, detail=f"unknown meta op: {op}")
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = DOWNLOADS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    input_path = job_dir / f"input_{file.filename or 'upload'}"
+    written = 0
+    with input_path.open("wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
+                f.close()
+                input_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"file > {MAX_UPLOAD_BYTES // (1024*1024)} MB")
+            f.write(chunk)
+    jobs[job_id] = {
+        "status": "pending",
+        "progress": 0,
+        "title": Path(file.filename or "upload").stem,
+        "error": None,
+        "filename": None,
+        "original_size": written,
+        "output_size": None,
+    }
+    is_from_exif = from_exif.strip().lower() in {"1", "true", "yes", "on"}
+    bg.add_task(
+        run_meta_job, job_id, input_path, op, DOWNLOADS_DIR,
+        modified_at, tag, password, is_from_exif,
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/{job_id}/reveal")
+def reveal_job(job_id: str, x_password: str | None = Header(None)):
+    check(x_password)
+    if not is_darwin():
+        raise HTTPException(status_code=400, detail="show in Finder is macOS-only")
+    job = jobs.get(job_id)
+    if job is None or job.get("status") != "ready" or not job.get("filename"):
+        raise HTTPException(status_code=404, detail="not found")
+    path = DOWNLOADS_DIR / job_id / job["filename"]
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="file missing")
+    try:
+        reveal(path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, x_password: str | None = Header(None)):
     check(x_password)
@@ -847,6 +910,13 @@ def capabilities():
             "shrink_target_byte":   20_000_000,
             "pdf_ops":              sorted(list(PDF_OPS) + ["merge"]),
             "batch_mergeable":      sorted(MERGEABLE_FORMATS),
+            "meta_op":              sorted(META_OP),
+        },
+        "meta": {
+            "op": sorted(META_OP),
+            "is_finder_tag": is_darwin(),
+            "is_created_at": is_darwin(),
+            "is_reveal": is_darwin(),
         },
         "language": {
             "ui": [{"code": c, "name": language_name(c)} for c in UI_LANGUAGE],

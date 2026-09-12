@@ -291,7 +291,7 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
   <div class="subtle">from a file</div>
   <div id="drop">
     drag a file here, or click to pick
-    <small>images · video · audio · pdf · documents · or any files to compress</small>
+    <small>images · video · audio · pdf · documents · dates · tags · unlock · or any files to compress</small>
   </div>
   <input type="file" id="drop-file" multiple>
 
@@ -389,6 +389,7 @@ const getPw = () => localStorage.getItem(PW_KEY) || "1234";
 
 let _reachable = null;
 let _reachableKind = null;
+let _capsMeta = { is_reveal: false, is_finder_tag: false, is_created_at: false };
 
 const KIND_ORDER = ["image","video","audio","document","pdf","office","spreadsheet","subtitle","font","comic","other"];
 const KIND_PREFER = {
@@ -523,6 +524,7 @@ async function applyRuntime() {
       }
       if ([...sel.options].some(o => o.value === current)) sel.value = current;
     };
+    if (d.meta) _capsMeta = d.meta;
     fillLang($("language"), "auto-detect", $("language").value);
     fillLang($("translate-to"), "no translation", $("translate-to").value);
     const offline = !!d.offline?.is_offline;
@@ -583,6 +585,8 @@ $("caps-link").onclick = async (e) => {
     <div>mergeable target formats (${d.operations.batch_mergeable.length}): ${fmt(d.operations.batch_mergeable)}</div>
     <h3>Lossy shrink (image/video/pdf)</h3>
     <div>levels: ${fmt(d.operations.shrink_levels)}</div>
+    <h3>File meta</h3>
+    <div>ops: ${fmt(d.operations.meta_op || [])} · Finder tags ${d.meta?.is_finder_tag ? "yes" : "no"} · created date ${d.meta?.is_created_at ? "yes" : "no"} · show in Finder ${d.meta?.is_reveal ? "yes" : "no"}</div>
     <h3>Limits</h3>
     <div>upload ${d.limits.max_upload_bytes ? `≤ ${mb(d.limits.max_upload_bytes)}` : "unlimited"} · multi-file total ${d.limits.max_compress_bytes ? `≤ ${mb(d.limits.max_compress_bytes)}` : "unlimited"} · jobs deleted after ${ttlHuman}</div>`;
   panel.hidden = false;
@@ -746,7 +750,9 @@ function showPicked(files) {
     // Only meaningful for image/video where dimensions exist; pdf shrink
     // doesn't honor max_dim yet.
     if (type === "image" || type === "video") acts.push("resize");
+    acts.push("date", "tag", "unlock");
     if (type === "pdf") acts.push("split", "rotate", "watermark", "encrypt", "decrypt");
+    else if (/\.(zip|cbz)$/i.test(f.name)) acts.push("decrypt");
     const ext = (f.name.split(".").pop() || "").toLowerCase();
     _reachable = null;
     _reachableKind = null;
@@ -1038,6 +1044,15 @@ function updateOptForAction(type) {
     showSel = false; showTxt = true; label = "set password:"; txtPlaceholder = "password"; txtType = "password";
   } else if (action === "decrypt") {
     showSel = false; showTxt = true; label = "current password:"; txtPlaceholder = "password"; txtType = "password";
+  } else if (action === "date") {
+    opts = ["now", "from-exif"];
+    showSel = true; showTxt = true;
+    label = "modified:"; txtType = "datetime-local";
+  } else if (action === "tag") {
+    showSel = false; showTxt = true;
+    label = "Finder tags:"; txtPlaceholder = "red, work";
+  } else if (action === "unlock") {
+    showSel = false; showTxt = false; label = "(quarantine + lock)";
   } else if (action === "split" || action === "merge") {
     showSel = false; showTxt = false; label = `(no options)`;
   }
@@ -1056,6 +1071,12 @@ function updateOptForAction(type) {
   txt.type = txtType;
   txt.value = "";
   $("opt-label").textContent = label;
+  if (action === "date") {
+    const d = new Date();
+    d.setSeconds(0, 0);
+    const pad = (n) => String(n).padStart(2, "0");
+    txt.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
   // For resize the whole opt-row is redundant — controls live in the advanced
   // panel below. Hide the row entirely instead of showing "(use max-dim below)".
   $("opt-row").style.display = action === "resize" ? "none" : "";
@@ -1389,11 +1410,25 @@ $("process").onclick = async () => {
     } else if (action === "merge") {
       endpoint = "/api/pdf/merge";
       for (const f of files) fd.append("files", f);
-    } else if (["split", "rotate", "watermark", "encrypt", "decrypt"].includes(action)) {
+    } else if (["split", "rotate", "watermark", "encrypt"].includes(action)
+               || (action === "decrypt" && files[0].name.toLowerCase().endsWith(".pdf"))) {
       endpoint = "/api/pdf/op";
       fd.append("file", files[0]);
       fd.append("op", action);
       fd.append("value", action === "rotate" ? selVal : txtVal);
+    } else if (action === "date" || action === "tag" || action === "unlock"
+               || action === "decrypt") {
+      endpoint = "/api/meta";
+      fd.append("file", files[0]);
+      fd.append("op", action);
+      if (action === "date") {
+        fd.append("modified_at", txtVal);
+        if (selVal === "from-exif") fd.append("from_exif", "1");
+      } else if (action === "tag") {
+        fd.append("tag", txtVal);
+      } else if (action === "decrypt") {
+        fd.append("password", txtVal);
+      }
     }
     const r = await fetch(endpoint, {
       method: "POST",
@@ -1505,12 +1540,22 @@ async function poll(jobId) {
           moreBtn = ` <button id="shrink-more" type="button" class="chip chip-sm">shrink more ↓</button>`;
         }
       }
-      $("status").innerHTML = `<a href="${url}" download>download "${name}"</a>${sizeNote}${moreBtn}`;
+      let revealBtn = "";
+      if (_capsMeta.is_reveal && j.is_reveal) {
+        revealBtn = ` <button id="reveal-finder" type="button" class="chip chip-sm">show in Finder</button>`;
+      }
+      $("status").innerHTML = `<a href="${url}" download>download "${name}"</a>${sizeNote}${moreBtn}${revealBtn}`;
       $("status").className = "show ready";
       $("go").disabled = false;
       $("process").disabled = false;
       if ($("shrink-more")) {
         $("shrink-more").onclick = () => shrinkMore(jobId, j.filename);
+      }
+      if ($("reveal-finder")) {
+        $("reveal-finder").onclick = async () => {
+          const rr = await fetch(`/api/jobs/${jobId}/reveal`, { method: "POST", headers: { "X-Password": getPw() } });
+          if (!rr.ok) setStatus(await httpError(rr), "error");
+        };
       }
       return;
     }

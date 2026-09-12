@@ -45,6 +45,19 @@ version.
 | **Subtitle** (`.srt .vtt .ass .ssa .sub .sbv`) | `srt, vtt, ass, ssa, sub, sbv` (cross-conversion via pysubs2). Also: `txt / md / notes` (transcript dumps; notes groups paragraphs by ≥1.5 s gap between cues), `docx / rtf / epub / odt / tex / html / pdf` (printable transcript via pandoc), `mp3 / m4a / wav` (TTS read-aloud), `audiogram` (waveform mp4 of the TTS render). | — |
 | **Font** (`.ttf .otf .woff .woff2`) | `ttf, otf, woff, woff2` (container conversion via fontTools — TTF↔OTF is a no-op, woff/woff2 wrap or unwrap). Also: `png / jpeg / webp` specimen — renders the font name + a large AaBbCc preview + two pangrams as an image (woff/woff2 routed through a fontTools TTF intermediate so older Pillow builds still work). | — |
 
+### File meta (dates, tags, unlock)
+
+Unusual ops that convert sites skip. Any **single** dropped file:
+
+| Action | What it does |
+|---|---|
+| `date` | Set filesystem **modified** (and **created** on macOS) to a datetime, `now`, or the image’s EXIF date. |
+| `tag` | Write **Finder tags** (`red, work`, …) as `com.apple.metadata:_kMDItemUserTags`. |
+| `unlock` | Strip `com.apple.quarantine` and the uchg lock flag. |
+| `decrypt` | PDF (existing) or password-zip / cbz. |
+
+A browser **download** typically resets mtime and drops xattrs. On a Mac, use **show in Finder** after the job — that selects the job copy under `EXPORT_DOWNLOADS` so you can move it with tags and dates intact.
+
 ### Multi-file operations
 
 | Action | Inputs | Output |
