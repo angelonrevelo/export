@@ -57,6 +57,16 @@ class ImageTargetByteTest(unittest.TestCase):
             with Image.open(out) as img:
                 self.assertEqual(img.format, "JPEG")
 
+    def test_resize_to_cap_without_max_dim(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = _noisy_png(Path(d) / "input_photo.png")
+            cap = max(8_000, src.stat().st_size // 4)
+            self.assertGreater(src.stat().st_size, cap)
+            out = _shrink_image(src, "resize", Path(d), target_byte=cap)
+            self.assertEqual(out.stat().st_size, cap)
+            with Image.open(out) as img:
+                self.assertEqual(img.format, "JPEG")
+
     def test_under_cap_does_not_grow(self):
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / "input_tiny.png"
@@ -141,6 +151,29 @@ class ShrinkApiTest(unittest.TestCase):
         job_id = r.json()["job_id"]
         st = self.client.get(f"/api/jobs/{job_id}", headers={"X-Password": "1234"}).json()
         self.assertEqual(st["status"], "ready", st)
+        self.assertEqual(st["output_size"], cap)
+        self.assertEqual(st["predicted_byte"], cap)
+        dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})
+        self.assertEqual(len(dl.content), cap)
+        self.assertEqual(dl.content[:2], b"\xff\xd8")
+
+    def test_resize_to_cap_via_api(self):
+        with tempfile.TemporaryDirectory() as d:
+            raw_path = _noisy_png(Path(d) / "photo.png", size=(280, 200))
+            raw = raw_path.read_bytes()
+        cap = max(8_000, len(raw) // 4)
+        self.assertGreater(len(raw), cap)
+        r = self.client.post(
+            "/api/shrink",
+            headers={"X-Password": "1234"},
+            files={"file": ("photo.png", io.BytesIO(raw), "image/png")},
+            data={"level": "resize", "target_byte": str(cap)},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        job_id = r.json()["job_id"]
+        st = self.client.get(f"/api/jobs/{job_id}", headers={"X-Password": "1234"}).json()
+        self.assertEqual(st["status"], "ready", st)
+        self.assertNotEqual(st["status"], "error")
         self.assertEqual(st["output_size"], cap)
         self.assertEqual(st["predicted_byte"], cap)
         dl = self.client.get(f"/api/files/{job_id}", params={"pw": "1234"})

@@ -953,7 +953,7 @@ def _shrink_image(input_path: Path, level: str, out_dir: Path,
     `target_byte` lands on that exact file size (encode-under + pad). A source
     already at or under the cap is copied and never grown."""
     if level == "resize":
-        if max_dim is None and scale_percent is None:
+        if max_dim is None and scale_percent is None and not target_byte:
             raise RuntimeError("level=resize requires max_dim or scale_percent")
         quality = quality if quality is not None else 95
     elif quality is None:
@@ -1174,7 +1174,7 @@ def _shrink_video(input_path: Path, level: str, out_dir: Path,
 
     # Pure-resize mode: keep visual quality high, only scale dimensions.
     if level == "resize":
-        if max_dim is None and scale_percent is None:
+        if max_dim is None and scale_percent is None and not target_byte:
             raise RuntimeError("level=resize requires max_dim or scale_percent")
         quality = quality if quality is not None else 95
         level = "high"  # fall through to high-quality CRF mapping below
