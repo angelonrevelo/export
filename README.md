@@ -161,7 +161,9 @@ Each **one-hop** conversion is still an explicit function in
 including multi-hop (video → `png` still → `jpeg`). Direct one-hop always
 wins, so video→PDF stays the existing transcript PDF (not frames-as-PDF).
 A format with no path is not offered; the convert entry raises `no bridge`
-rather than stuffing source bytes into the target container.
+rather than stuffing source bytes into the target container. A suffix in
+more than one family (`.gif` is image and video) unions every one-hop those
+families already have, so gif→`mp4` stays a direct convert-to.
 
 `GET /api/reachable?ext=mp4` returns `{ "format": [...] }` (singular
 collection key). Query is pure — no ffmpeg. Execution walks the path by

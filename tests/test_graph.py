@@ -56,6 +56,16 @@ class ReachableSetTest(unittest.TestCase):
     def test_video_png_is_direct(self):
         self.assertEqual(shortest_path(".mp4", "png"), ["png"])
 
+    def test_gif_mp4_is_one_hop(self):
+        r = reachable(".gif")
+        self.assertIn("mp4", r)
+        self.assertIn("mov", r)
+        self.assertIn("webm", r)
+        self.assertIn("mkv", r)
+        self.assertIn("jpeg", r)
+        self.assertEqual(shortest_path(".gif", "mp4"), ["mp4"])
+        self.assertEqual(shortest_path(".gif", "jpeg"), ["jpeg"])
+
 
 class HopConvertTest(unittest.TestCase):
     def test_png_jpeg_still_works(self):
@@ -88,6 +98,15 @@ class HopConvertTest(unittest.TestCase):
                 self.assertEqual(img.size, (160, 120))
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg missing")
+    def test_gif_to_mp4_one_hop(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "input_anim.gif"
+            Image.new("RGB", (16, 12), (0, 0, 255)).save(src, "GIF")
+            out = _convert_one(src, "mp4", Path(d))
+            self.assertGreater(out.stat().st_size, 0)
+            self.assertTrue(out.name.endswith(".mp4"))
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg missing")
     def test_video_to_jpeg_is_frame_not_transcript_page(self):
         with tempfile.TemporaryDirectory() as d:
             clip = _tiny_clip(Path(d) / "input_clip.mp4")
@@ -116,6 +135,13 @@ class ReachableApiTest(unittest.TestCase):
     def test_capabilities_video_png(self):
         d = self.client.get("/api/capabilities").json()
         self.assertIn("png", d["convert_outputs"]["video"])
+
+    def test_reachable_gif_includes_mp4(self):
+        r = self.client.get("/api/reachable", params={"ext": "gif"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("mp4", body["format"])
+        self.assertIn("jpeg", body["format"])
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg missing")
     def test_upload_clip_to_png(self):

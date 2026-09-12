@@ -38,35 +38,48 @@ def _sets():
     return J
 
 
-def kind_of_suffix(suffix: str) -> str | None:
-    """Map `.mp4` / `mp4` to a kind used as a graph node."""
+def kind_of_suffix(suffix: str) -> list[str]:
+    """Every input kind this suffix belongs to.
+
+    `.gif` is image *and* video (ffmpeg gif→mp4); `.xlsx` is spreadsheet
+    *and* office. Returning only the detectType primary would drop
+    `_convert_one` one-hops the UI used to list on the family convertTo.
+    """
     J = _sets()
     s = suffix if suffix.startswith(".") else f".{suffix}"
     s = s.lower()
     if s == ".jpg":
         s = ".jpeg"
-    # gif is in both image and video suffix sets; match detectType (image first).
+    kind: list[str] = []
     if s in J.IMAGE_SUFFIXES:
-        return "image"
+        kind.append("image")
     if s in J.VIDEO_SUFFIXES:
-        return "video"
+        kind.append("video")
     if s in J.AUDIO_SUFFIXES:
-        return "audio"
+        kind.append("audio")
     if s in J.PDF_SUFFIXES:
-        return "pdf"
+        kind.append("pdf")
     if s in J.COMIC_SUFFIXES:
-        return "comic"
+        kind.append("comic")
     if s in J.FONT_SUFFIXES:
-        return "font"
+        kind.append("font")
     if s in J.SUBTITLE_SUFFIXES:
-        return "subtitle"
+        kind.append("subtitle")
     if s in J.SPREADSHEET_SUFFIXES:
-        return "spreadsheet"
+        kind.append("spreadsheet")
     if s in J.OFFICE_SUFFIXES:
-        return "office"
+        kind.append("office")
     if s in J.DOC_INPUT_SUFFIXES or s in J.TTS_INPUT_SUFFIXES:
-        return "document"
-    return None
+        kind.append("document")
+    return kind
+
+
+def direct_target_for_suffix(suffix: str) -> frozenset[str]:
+    """Union of one-hop outputs for every kind this suffix matches."""
+    out: set[str] = set()
+    for k in kind_of_suffix(suffix):
+        out |= direct_target(k)
+    return frozenset(out)
 
 
 def kind_of_format(fmt: str) -> str | None:
@@ -157,14 +170,14 @@ def _visit_order(format_set: frozenset[str] | set[str]) -> list[str]:
 def shortest_path(suffix: str, fmt: str) -> list[str] | None:
     """Formats to convert TO, in order. Empty list means already that format.
     None means no semantic path (not a binary waterfall)."""
-    kind = kind_of_suffix(suffix)
-    if kind is None:
+    if not kind_of_suffix(suffix):
         return None
-    if fmt in direct_target(kind):
+    direct = direct_target_for_suffix(suffix)
+    if fmt in direct:
         return [fmt]
     parent: dict[str, str | None] = {}
     q: deque[str] = deque()
-    for f in _visit_order(direct_target(kind)):
+    for f in _visit_order(direct):
         parent[f] = None
         q.append(f)
     seen = set(parent)
@@ -193,10 +206,9 @@ def shortest_path(suffix: str, fmt: str) -> list[str] | None:
 
 
 def reachable(suffix: str) -> list[str]:
-    kind = kind_of_suffix(suffix)
-    if kind is None:
+    if not kind_of_suffix(suffix):
         return []
-    seen: set[str] = set(direct_target(kind))
+    seen: set[str] = set(direct_target_for_suffix(suffix))
     q = deque(_visit_order(seen))
     while q:
         cur = q.popleft()
