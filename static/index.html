@@ -387,13 +387,15 @@ const PW_KEY = "export_pw";
 const $ = (id) => document.getElementById(id);
 const getPw = () => localStorage.getItem(PW_KEY) || "1234";
 
+let _reachable = null;
+
 const TYPES = {
   image:       { exts: ["jpg","jpeg","png","webp","avif","heic","heif","tiff","bmp","gif","ico","jp2","psd","tga","pcx","eps","icns","jxl","svg","dng","cr2","cr3","nef","arw","raf","orf","rw2","pef","srw"],
                  // mp4 is here mostly for gif→mp4 (animated gif → video); for non-animated
                  // image inputs picking mp4 will return a clear "no bridge" error.
                  convertTo: ["jpeg","png","webp","avif","jxl","tiff","bmp","gif","ico","icns","jp2","pdf","txt","translate","nobg","svg","docx","md","html","rtf","epub","odt","tex","mp4"], shrink: true },
   video:       { exts: ["mp4","mov","webm","mkv","avi","m4v","flv","wmv","3gp","ts","mts","m2ts","ogv","gif","mpg","mpeg","m2v","vob","asf","mxf"],
-                 convertTo: ["mp4","mov","webm","mkv","gif","mp3","m4a","m4b","wav","flac","ogg","opus","aac","audiogram","txt","srt","vtt","notes","kit","translate","captioned","frames","subs","pdf","docx","epub"], shrink: true },
+                 convertTo: ["mp4","mov","webm","mkv","gif","png","mp3","m4a","m4b","wav","flac","ogg","opus","aac","audiogram","txt","srt","vtt","notes","kit","translate","captioned","frames","subs","pdf","docx","epub"], shrink: true },
   audio:       { exts: ["mp3","m4a","wav","flac","ogg","aac","opus","aiff","aif","wma","amr","3ga","m4b","ac3","caf"],
                  convertTo: ["mp3","m4a","m4b","wav","flac","ogg","opus","aac","txt","srt","vtt","notes","kit","translate","denoise","stems","audiogram","pdf","docx","epub"], shrink: false },
   doc:         { exts: ["md","markdown","html","htm","rtf","epub","txt","tex","org","rst","ipynb","adoc","asciidoc","textile","docbook","fb2"],
@@ -669,7 +671,16 @@ function showPicked(files) {
     // doesn't honor max_dim yet.
     if (type === "image" || type === "video") acts.push("resize");
     if (type === "pdf") acts.push("split", "rotate", "watermark", "encrypt", "decrypt");
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    _reachable = null;
     renderActions(acts, type);
+    fetch("/api/reachable?ext=" + encodeURIComponent(ext))
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        _reachable = (d && d.format && d.format.length) ? d.format : null;
+        if (_reachable) renderActions(acts, type);
+      })
+      .catch(() => { _reachable = null; });
     // Probe video metadata asynchronously so the estimator can use real source
     // bitrate. Browser-local; no upload. When it lands, refresh the estimate.
     _probe = null;
@@ -698,7 +709,18 @@ function showPicked(files) {
       acts.push("shrink", "resize");
     }
     const ctx = allSameType ? `${sharedType}-multi` : "mixed";
+    _reachable = null;
     renderActions(acts, ctx);
+    if (allSameType && files[0]) {
+      const ext = (files[0].name.split(".").pop() || "").toLowerCase();
+      fetch("/api/reachable?ext=" + encodeURIComponent(ext))
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          _reachable = (d && d.format && d.format.length) ? d.format : null;
+          if (_reachable) renderActions(acts, ctx);
+        })
+        .catch(() => { _reachable = null; });
+    }
   }
 }
 
@@ -903,9 +925,10 @@ function updateOptForAction(type) {
       opts = ["pdf", "jpeg", "png", "webp", "avif", "tiff", "bmp", "gif", "mp4"];
     } else if (type.endsWith("-multi")) {
       // Generic homogeneous batch convert (doc-multi, audio-multi, pdf-multi, etc.)
-      opts = TYPES[type.slice(0, -"-multi".length)].convertTo;
+      const base = type.slice(0, -"-multi".length);
+      opts = (_reachable && _reachable.length) ? _reachable : TYPES[base].convertTo;
     } else {
-      opts = TYPES[type].convertTo;
+      opts = (_reachable && _reachable.length) ? _reachable : TYPES[type].convertTo;
     }
     label = "convert to:";
   } else if (action === "compress") {

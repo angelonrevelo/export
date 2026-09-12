@@ -2646,6 +2646,20 @@ def _notes_to_doc(input_path: Path, target_fmt: str, out_dir: Path,
         notes_path.unlink(missing_ok=True)
 
 
+def _video_to_png(input_path: Path, out_dir: Path) -> Path:
+    """One sampled still from a video (pictures of frames, not a transcript)."""
+    stem = input_path.stem.removeprefix("input_")
+    out_path = out_dir / f"{stem}.png"
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path), "-frames:v", "1", "-q:v", "2",
+         str(out_path)],
+        capture_output=True, text=True, timeout=120,
+    )
+    if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError(f"ffmpeg still frame failed: {(r.stderr or '')[-400:]}")
+    return out_path
+
+
 def _to_translated_txt(input_path: Path, out_dir: Path, job: dict | None = None) -> Path:
     """Any text-bearing input → translated .txt. Defaults target to English
     when translate_to was not pinned (so the `translate` format always does work)."""
@@ -2706,6 +2720,8 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _pdf_to_notes(input_path, out_dir)
     if is_pdf_in and fmt in PDF_TO_DOC:
         return _pdf_to_doc(input_path, fmt, out_dir)
+    if is_video_in and fmt == "png":
+        return _video_to_png(input_path, out_dir)
     if is_video_in and fmt in VIDEO_TO_GIF:
         return _video_to_gif(input_path, out_dir)
     if is_video_in and fmt in VIDEO_TO_VIDEO:
@@ -2778,6 +2794,13 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _convert_font(input_path, fmt, out_dir)
     if is_font_in and fmt in FONT_TO_IMAGE:
         return _font_to_image(input_path, fmt, out_dir)
+    from .graph import shortest_path
+    hop = shortest_path(suffix, fmt)
+    if hop and len(hop) > 1:
+        current = input_path
+        for hop_fmt in hop:
+            current = _convert_one(current, hop_fmt, out_dir, quality=quality, job=job)
+        return current
     raise ValueError(f"no bridge: {suffix or '(no ext)'} → {fmt}")
 
 

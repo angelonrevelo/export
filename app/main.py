@@ -811,7 +811,7 @@ def capabilities():
         },
         "convert_outputs": {
             "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC | TRANSLATE_OUTPUT),
-            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | TRANSCRIPT_KIT | VIDEO_CAPTIONED | VIDEO_FRAMES | VIDEO_SUBS | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub"}),
+            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | TRANSCRIPT_KIT | VIDEO_CAPTIONED | VIDEO_FRAMES | VIDEO_SUBS | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub", "png"}),
             "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | TRANSCRIPT_KIT | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub"}),
             "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS | PDF_TO_MD | PDF_TO_NOTES | PDF_TO_DOC | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO | TRANSLATE_OUTPUT),
             "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS | TRANSLATE_OUTPUT),
@@ -849,6 +849,14 @@ def capabilities():
             "job_ttl_seconds":    CLEANUP_AGE_SECONDS,
         },
     }
+
+
+@app.get("/api/reachable")
+def reachable_format(ext: str = ""):
+    """Public — formats reachable from this input suffix by composing bridges."""
+    from .graph import reachable
+    suffix = ext if ext.startswith(".") else f".{ext}"
+    return {"format": reachable(suffix)}
 
 
 @app.get("/")

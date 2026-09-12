@@ -35,7 +35,7 @@ version.
 | Input type | Convert to | Other operations |
 |---|---|---|
 | **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns .jxl .svg` + camera RAW `.dng .cr2 .cr3 .nef .arw .raf .orf .rw2 .pef .srw`) | `jpeg, png, webp, avif, jxl, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract, auto language), nobg (transparent PNG via rembg), svg (vectorize via vtracer)`. Also via OCR→pandoc chain: `docx, md, html, rtf, epub, odt, tex`. JXL and RAW need the optional `.[media]` extra. | `shrink` (with quality slider) |
-| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif .mpg .mpeg .vob .asf .mxf`) | `mp4, mov, webm, mkv, gif, mp3, m4a, m4b, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram`, `txt, srt, vtt, notes, kit` (Whisper — local multilingual `large-v3-turbo` or Groq), `captioned` (burn-in subs), `frames` (zip of 1 fps PNGs, cap 120), `subs` (embedded stream or Whisper fallback), `pdf / docx / epub` (transcript as a document). `.gif` is both image and video. | `shrink` (libx264 re-encode with quality slider — universal playback) |
+| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif .mpg .mpeg .vob .asf .mxf`) | Direct: `mp4, mov, webm, mkv, gif, png` (one still frame — pictures of frames, not a transcript), `mp3, m4a, m4b, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram`, `txt, srt, vtt, notes, kit` (Whisper — local multilingual `large-v3-turbo` or Groq), `captioned` (burn-in subs), `frames` (zip of 1 fps PNGs, cap 120), `subs` (embedded stream or Whisper fallback), `pdf / docx / epub` (transcript as a document). Convert-to in the UI is the **reachable set** (composed hops, e.g. video → `png` → `jpeg`), not only this family list. `.gif` is both image and video. | `shrink` (libx264 re-encode with quality slider — universal playback) |
 | **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma .amr .3ga .m4b .ac3 .caf`) | `mp3, m4a, m4b, wav, flac, ogg, opus, aac, txt, srt, vtt, notes, kit (Whisper), denoise (noisereduce), stems (Demucs), audiogram, pdf / docx / epub` (transcript as a document) | — |
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback, auto language), md, notes, docx, html, epub, rtf, odt, tex, pdfa (searchable PDF/A via OCRmyPDF with the detected language pack), mp3/m4a/wav (audiobook via TTS, voice matched to detected language), audiogram` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
@@ -60,8 +60,8 @@ version.
 
 | Input | `low` | `medium` | `high` | `resize` |
 |---|---|---|---|---|
-| Image (any) | quality 50 | quality 70 | quality 85 | quality 95 (near-lossless), max-dim or scale% **required** |
-| Video | libx264 CRF 30, preset fast | CRF 26, preset medium | CRF 22, preset slow | CRF 18, preset medium, max-dim or scale% **required** |
+| Image (any) | quality 50 | quality 70 | quality 85 | quality 95 (near-lossless); max-dim, scale%, **or** a `target_byte` cap |
+| Video | libx264 CRF 30, preset fast | CRF 26, preset medium | CRF 22, preset slow | CRF 18, preset medium; max-dim, scale%, **or** a `target_byte` cap |
 | PDF | Ghostscript `/screen` | `/ebook` | `/printer` | — (resize n/a for PDF) |
 
 The **advanced disclosure** under shrink and image/video convert exposes a
@@ -144,6 +144,7 @@ deletes job dirs older than 6 h every 15 min.
 │   │   /api/jobs/:id        → poll status  │     │
 │   │   /api/files/:id       → download     │     │
 │   │   /api/capabilities    → format list  │     │
+│   │   /api/reachable       → hop targets  │     │
 │   └───────────────────────────────────────┘     │
 │                  ↕                              │
 │   In-memory `jobs` dict + BackgroundTasks       │
@@ -154,22 +155,30 @@ deletes job dirs older than 6 h every 15 min.
 
 ### Adding a new conversion (the bridge pattern)
 
-We deliberately don't use a generic graph router (that's the
-[convert.to.it](https://github.com/p2r3/convert) approach — see the sibling
-`autoheal/` project for the writeup on why we picked the simpler model).
-Instead, each conversion is an explicit function with an entry in the dispatch.
+Each **one-hop** conversion is still an explicit function in
+[app/jobs.py](app/jobs.py). After a file is chosen, convert-to is the
+**reachable set**: BFS over those hops in [app/graph.py](app/graph.py),
+including multi-hop (video → `png` still → `jpeg`). Direct one-hop always
+wins, so video→PDF stays the existing transcript PDF (not frames-as-PDF).
+A format with no path is not offered; the convert entry raises `no bridge`
+rather than stuffing source bytes into the target container.
 
-To add one new bridge in [app/jobs.py](app/jobs.py):
+`GET /api/reachable?ext=mp4` returns `{ "format": [...] }` (singular
+collection key). Query is pure — no ffmpeg. Execution walks the path by
+calling `_convert_one` per hop. Cheap one-hop paths (PNG→JPEG, YAML→JSON)
+stay the first step and do not load Whisper / rembg / NLLB.
+
+To add one new **one-hop** bridge in [app/jobs.py](app/jobs.py):
 
 1. Add a format set: `MY_NEW_BRIDGE = {"target_fmt"}`
 2. Write a helper: `def _do_my_thing(input_path, out_dir) -> Path: ...`
-3. Add a branch in `run_convert_job`'s if/elif chain
+3. Add a branch in `_convert_one`'s if/elif chain
 4. Re-export the format set from [app/main.py](app/main.py)'s import + `ALLOWED_UPLOAD_FORMATS`
-5. Add `target_fmt` to [static/index.html](static/index.html)'s `TYPES.<input>.convertTo` array
-6. Add `target_fmt` to the matching `convert_outputs` list in `/api/capabilities`
+5. Add `target_fmt` to the matching `convert_outputs` list in `/api/capabilities`
+6. `TYPES.<input>.convertTo` in [static/index.html](static/index.html) is only a fallback if `/api/reachable` fails — the picker fills from the reachable set
 
-That's the whole pattern. ~30 lines per new conversion. No abstraction needed
-until you have ≥10 handlers in one input domain.
+That's the whole pattern. ~30 lines per new one-hop. Multi-hop targets
+appear automatically once both edges exist.
 
 For multi-file batch operations:
 
@@ -270,6 +279,15 @@ covers 8 h/day of audio; paid tier is $0.04/h. Offline mode ignores the key.
 | Env var | Default | Notes |
 |---|---|---|
 | `EXPORT_PIPER_VOICE` | (none) | Required on Linux for TTS — path to a `.onnx` voice. macOS uses built-in `say` instead. `install-linux.sh` downloads `voices/en_US-lessac-medium.onnx` for you. |
+| `EXPORT_PIPER_VOICE_DIR` | (none) | Extra directory of `{lang}_*.onnx` Piper voices; the TTS picker matches on filename prefix. |
+
+### Translation (NLLB)
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_NLLB_MODEL` | `entai2965/nllb-200-distilled-600M-ctranslate2` | CTranslate2 int8 snapshot (200 languages including Filipino). First use downloads ~1.2 GB. |
+| `EXPORT_NLLB_TOKENIZER` | `facebook/nllb-200-distilled-600M` | Hugging Face tokenizer id paired with the CT2 weights. |
+| `EXPORT_NLLB_MODEL_DIR` | (auto) | Local dir of already-converted CT2 weights; used when the snapshot download is skipped. |
 
 ### URL extraction (yt-dlp / gallery-dl)
 
@@ -346,7 +364,7 @@ the **show what's supported** link in the UI renders it inline. Snapshot:
 | Input → | image | pdf | docx | epub | html | md | txt | mp3 | mp4 | csv | xlsx | json | srt | vtt | ttf | woff2 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | image | ✓ | ✓ | OCR | — | OCR | OCR | OCR | — | — | — | — | — | — | — | — | — |
-| video | — | STT | STT | STT | — | notes | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
+| video | still | STT | STT | STT | — | notes | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
 | audio | — | STT | STT | STT | — | notes | STT | ✓ | AG | — | — | — | STT | STT | — | — |
 | pdf | ✓ | OCR | ✓ | ✓ | ✓ | ✓ | ✓+OCR | TTS | AG | — | — | — | — | — | — | — |
 | document | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | TTS | — | — | — | — | — | — | — | — |
@@ -357,12 +375,14 @@ the **show what's supported** link in the UI renders it inline. Snapshot:
 | comic | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
 | URL | — | STT | STT | STT | — | notes | STT | ✓ | ✓ | — | — | — | STT | STT | — | — |
 
-(`✓` = direct conversion, `OCR` = via Tesseract, `STT` = via Whisper, `TTS` =
-via `say`/piper, `AG` = audiogram (mp4 with waveform + playhead), `—` = not exposed.
-The `image` row also covers special outputs `nobg` (transparent PNG), `svg`
-(vectorized) and `jxl`; the `audio`/`video` rows also produce `denoise`, `stems`,
-`kit` (zip of txt+srt+vtt+notes), `captioned`, `frames`, `subs`. Spreadsheet also
-cross-converts `yaml`/`toml`/`xml`.)
+(`✓` = direct conversion, `still` = one sampled PNG frame (composable to other
+image formats), `OCR` = via Tesseract, `STT` = via Whisper, `TTS` =
+via `say`/piper, `AG` = audiogram (mp4 with waveform + playhead), `—` = no
+semantic path. The UI convert-to list is the reachable set (composed hops),
+not only this snapshot. The `image` row also covers special outputs `nobg`
+(transparent PNG), `svg` (vectorized) and `jxl`; the `audio`/`video` rows also
+produce `denoise`, `stems`, `kit` (zip of txt+srt+vtt+notes), `captioned`,
+`frames`, `subs`. Spreadsheet also cross-converts `yaml`/`toml`/`xml`.)
 
 ### Operations (not format conversions)
 
@@ -371,7 +391,7 @@ cross-converts `yaml`/`toml`/`xml`.)
 | `shrink` | image / video / pdf | Lossy size reduction with `low / medium / high` presets + advanced quality slider (1–100). For image/video the advanced panel also exposes **two mutually-exclusive resize knobs**: a **max longest side (px)** input (presets `source / 4K / 1080p / 720p / 480p`) and a **scale by (%)** input (presets `off / 75% / 50% / 25%`). When set, downscales preserving aspect ratio (Pillow `resize`/`thumbnail` for images, ffmpeg `-vf scale` for video, both rounded to even dimensions). |
 | `compress` (archive) | any files | `zip` / `7z` / `tar.zst` / `tar.gz` / `tar.bz2` / `tar.xz` |
 | `compress` (single-file) | one file | `gz` / `bz2` / `xz` / `zst` (raw stream, no tar) |
-| `resize` | one image / video | Downscale by either absolute longest-side (`max_dim=N` px, presets `source / 4K / 1080p / 720p / 480p`) OR relative percentage (`scale_percent=N`, presets `off / 75% / 50% / 25%`). The two are mutually exclusive in the UI — picking one clears the other. Aspect ratio preserved, output dimensions rounded to even. Internally `/api/shrink?level=resize` with implicit high-quality CRF. Biggest single compression lever for high-res sources — 4K → 1080p alone is ~4× smaller. |
+| `resize` | one image / video | Downscale by longest-side (`max_dim=N` px) OR `scale_percent=N`, **or** an exact `target_byte` cap with no max_dim/scale (same encode-under + pad as shrink-to-20-MB). Internally `/api/shrink?level=resize`. |
 | `merge` | 2+ PDFs | Single combined PDF (pypdf) |
 | `split` | one PDF | Each page as a separate PDF, zipped |
 | `rotate` / `watermark` / `encrypt` / `decrypt` | one PDF | Per-PDF operations |
@@ -402,7 +422,7 @@ instead of the raw 200-line yt-dlp stack trace. Examples:
 | Command | What it does |
 |---|---|
 | `npm run dev` / `npm start` / `npm run watch` | Wraps `bash scripts/run.sh`. Auto-creates `.env` with password `1234` on first run. No actual Node deps — pure muscle-memory shim. |
-| `bash scripts/run.sh` | Same. Loads `.env`, sets `DYLD_FALLBACK_LIBRARY_PATH` on macOS, execs uvicorn on port 8500. |
+| `bash scripts/run.sh` | Same. Loads `.env`, sets `DYLD_FALLBACK_LIBRARY_PATH` on macOS, execs uvicorn on `HOST` (default `127.0.0.1`) / `PORT` (default `8500`). |
 | `npm run install:macos` / `bash scripts/install-macos.sh` | One-shot macOS setup: brew installs (ffmpeg, pandoc, ghostscript, poppler, tesseract, pango, deno, libraw), LibreOffice cask, venv + `pip install -e ".[media]"`, curated tessdata packs. |
 | `npm run install:linux` / `bash scripts/install-linux.sh` | One-shot Debian/Ubuntu setup: apt installs, deno via official installer, venv + pip, tessdata packs, piper voice. Prints tmpfs guidance for ephemeral storage. |
 | `bash scripts/install-tessdata.sh` | Download Filipino/CJK/Arabic/… Tesseract packs into the system tessdata dir. Idempotent. |
