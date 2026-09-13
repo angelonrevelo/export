@@ -722,34 +722,49 @@ async def pdf_op(
 @app.post("/api/meta")
 async def meta_file(
     bg: BackgroundTasks,
-    file: UploadFile = File(...),
     op: str = Form(...),
     modified_at: str = Form(""),
     tag: str = Form(""),
     password: str = Form(""),
     from_exif: str = Form(""),
+    comment: str = Form(""),
+    where_from: str = Form(""),
+    mode: str = Form(""),
+    file: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
     x_password: str | None = Header(None),
 ):
     check(x_password)
     if op not in META_OP:
         raise HTTPException(status_code=400, detail=f"unknown meta op: {op}")
+    upload: list[UploadFile] = []
+    if files:
+        upload.extend(files)
+    if file is not None:
+        upload.append(file)
+    if not upload:
+        raise HTTPException(status_code=400, detail="no files")
     job_id = uuid.uuid4().hex[:12]
     job_dir = DOWNLOADS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    input_path = job_dir / f"input_{file.filename or 'upload'}"
+    saved: list[Path] = []
     written = 0
-    with input_path.open("wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            written += len(chunk)
-            if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
-                f.close()
-                input_path.unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail=f"file > {MAX_UPLOAD_BYTES // (1024*1024)} MB")
-            f.write(chunk)
+    for i, up in enumerate(upload):
+        input_path = job_dir / f"input_{up.filename or f'upload{i}'}"
+        with input_path.open("wb") as f:
+            while chunk := await up.read(1024 * 1024):
+                written += len(chunk)
+                if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
+                    f.close()
+                    for p in saved + [input_path]:
+                        p.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail=f"file > {MAX_UPLOAD_BYTES // (1024*1024)} MB")
+                f.write(chunk)
+        saved.append(input_path)
     jobs[job_id] = {
         "status": "pending",
         "progress": 0,
-        "title": Path(file.filename or "upload").stem,
+        "title": Path(upload[0].filename or "upload").stem if len(saved) == 1 else f"{len(saved)} files",
         "error": None,
         "filename": None,
         "original_size": written,
@@ -757,8 +772,8 @@ async def meta_file(
     }
     is_from_exif = from_exif.strip().lower() in {"1", "true", "yes", "on"}
     bg.add_task(
-        run_meta_job, job_id, input_path, op, DOWNLOADS_DIR,
-        modified_at, tag, password, is_from_exif,
+        run_meta_job, job_id, saved if len(saved) > 1 else saved[0], op, DOWNLOADS_DIR,
+        modified_at, tag, password, is_from_exif, comment, where_from, mode,
     )
     return {"job_id": job_id}
 

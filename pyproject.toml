@@ -41,6 +41,7 @@ dependencies = [
     "cairosvg>=2.7",
     "transformers>=4.40",
     "sentencepiece>=0.2",
+    "msoffcrypto-tool>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +51,7 @@ media = [
 ]
 dev = [
     "pytest>=8",
+    "piexif>=1.1",
 ]
 
 [build-system]

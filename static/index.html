@@ -307,6 +307,7 @@ hr.sep { border: none; border-top: 1px solid #1d1d1d; margin: 1.5rem 0; }
       <span id="opt-label">format:</span>
       <select id="opt-select"></select>
       <input type="text" id="opt-input" style="display:none; flex:1;" placeholder="">
+      <input type="text" id="opt-input-2" style="display:none; flex:1;" placeholder="">
     </div>
     <div id="merge-row" hidden style="margin: -0.25rem 0 0.5rem 6.5rem; color:#888; font-size:0.85em;">
       <label style="cursor:pointer;"><input type="checkbox" id="merge-toggle"> merge into one file</label>
@@ -587,6 +588,7 @@ $("caps-link").onclick = async (e) => {
     <div>levels: ${fmt(d.operations.shrink_levels)}</div>
     <h3>File meta</h3>
     <div>ops: ${fmt(d.operations.meta_op || [])} · Finder tags ${d.meta?.is_finder_tag ? "yes" : "no"} · created date ${d.meta?.is_created_at ? "yes" : "no"} · show in Finder ${d.meta?.is_reveal ? "yes" : "no"}</div>
+    <div>scrub GPS/xattrs · comment/Where From · hidden/clear-icon · decrypt pdf/zip/7z/docx/xlsx</div>
     <h3>Limits</h3>
     <div>upload ${d.limits.max_upload_bytes ? `≤ ${mb(d.limits.max_upload_bytes)}` : "unlimited"} · multi-file total ${d.limits.max_compress_bytes ? `≤ ${mb(d.limits.max_compress_bytes)}` : "unlimited"} · jobs deleted after ${ttlHuman}</div>`;
   panel.hidden = false;
@@ -750,9 +752,9 @@ function showPicked(files) {
     // Only meaningful for image/video where dimensions exist; pdf shrink
     // doesn't honor max_dim yet.
     if (type === "image" || type === "video") acts.push("resize");
-    acts.push("date", "tag", "unlock");
+    acts.push("date", "tag", "unlock", "scrub", "comment", "hidden");
     if (type === "pdf") acts.push("split", "rotate", "watermark", "encrypt", "decrypt");
-    else if (/\.(zip|cbz)$/i.test(f.name)) acts.push("decrypt");
+    else if (/\.(zip|cbz|7z|docx|xlsx|pptx)$/i.test(f.name)) acts.push("decrypt");
     const ext = (f.name.split(".").pop() || "").toLowerCase();
     _reachable = null;
     _reachableKind = null;
@@ -792,6 +794,7 @@ function showPicked(files) {
     if (allImages || sharedType === "video") {
       acts.push("shrink", "resize");
     }
+    acts.push("date", "tag");
     const ctx = allSameType ? `${sharedType}-multi` : "mixed";
     _reachable = null;
     _reachableKind = null;
@@ -1000,8 +1003,9 @@ function updateOptForAction(type) {
   const action = document.querySelector("input[name=action]:checked")?.value;
   const sel = $("opt-select");
   const txt = $("opt-input");
+  const txt2 = $("opt-input-2");
   sel.innerHTML = "";
-  let opts = [], label = "", showSel = true, showTxt = false, txtPlaceholder = "", txtType = "text";
+  let opts = [], label = "", showSel = true, showTxt = false, showTxt2 = false, txtPlaceholder = "", txtType = "text", txt2Placeholder = "";
   if (action === "convert") {
     if (type === "image-multi") {
       // pdf  = multi-page document (dedicated image endpoint)
@@ -1053,6 +1057,15 @@ function updateOptForAction(type) {
     label = "Finder tags:"; txtPlaceholder = "red, work";
   } else if (action === "unlock") {
     showSel = false; showTxt = false; label = "(quarantine + lock)";
+  } else if (action === "scrub") {
+    showSel = false; showTxt = false; label = "(strip GPS + xattrs)";
+  } else if (action === "comment") {
+    showSel = false; showTxt = true; showTxt2 = true;
+    label = "comment:"; txtPlaceholder = "Finder comment";
+    txt2Placeholder = "https://where-from (empty clears)";
+  } else if (action === "hidden") {
+    opts = ["hide", "show", "clear-icon"];
+    showSel = true; showTxt = false; label = "flag:";
   } else if (action === "split" || action === "merge") {
     showSel = false; showTxt = false; label = `(no options)`;
   }
@@ -1070,6 +1083,10 @@ function updateOptForAction(type) {
   txt.placeholder = txtPlaceholder;
   txt.type = txtType;
   txt.value = "";
+  txt2.placeholder = txt2Placeholder;
+  txt2.type = "text";
+  txt2.value = "";
+  txt2.style.display = showTxt2 ? "" : "none";
   $("opt-label").textContent = label;
   if (action === "date") {
     const d = new Date();
@@ -1417,9 +1434,14 @@ $("process").onclick = async () => {
       fd.append("op", action);
       fd.append("value", action === "rotate" ? selVal : txtVal);
     } else if (action === "date" || action === "tag" || action === "unlock"
-               || action === "decrypt") {
+               || action === "decrypt" || action === "scrub" || action === "comment"
+               || action === "hidden") {
       endpoint = "/api/meta";
-      fd.append("file", files[0]);
+      if (files.length > 1) {
+        for (const f of files) fd.append("files", f);
+      } else {
+        fd.append("file", files[0]);
+      }
       fd.append("op", action);
       if (action === "date") {
         fd.append("modified_at", txtVal);
@@ -1428,6 +1450,11 @@ $("process").onclick = async () => {
         fd.append("tag", txtVal);
       } else if (action === "decrypt") {
         fd.append("password", txtVal);
+      } else if (action === "comment") {
+        fd.append("comment", txtVal);
+        fd.append("where_from", $("opt-input-2").value);
+      } else if (action === "hidden") {
+        fd.append("mode", selVal);
       }
     }
     const r = await fetch(endpoint, {

@@ -45,18 +45,21 @@ version.
 | **Subtitle** (`.srt .vtt .ass .ssa .sub .sbv`) | `srt, vtt, ass, ssa, sub, sbv` (cross-conversion via pysubs2). Also: `txt / md / notes` (transcript dumps; notes groups paragraphs by ≥1.5 s gap between cues), `docx / rtf / epub / odt / tex / html / pdf` (printable transcript via pandoc), `mp3 / m4a / wav` (TTS read-aloud), `audiogram` (waveform mp4 of the TTS render). | — |
 | **Font** (`.ttf .otf .woff .woff2`) | `ttf, otf, woff, woff2` (container conversion via fontTools — TTF↔OTF is a no-op, woff/woff2 wrap or unwrap). Also: `png / jpeg / webp` specimen — renders the font name + a large AaBbCc preview + two pangrams as an image (woff/woff2 routed through a fontTools TTF intermediate so older Pillow builds still work). | — |
 
-### File meta (dates, tags, unlock)
+### File meta (dates, tags, unlock, scrub, comment, hidden)
 
-Unusual ops that convert sites skip. Any **single** dropped file:
+Unusual ops that convert sites skip.
 
 | Action | What it does |
 |---|---|
-| `date` | Set filesystem **modified** (and **created** on macOS) to a datetime, `now`, or the image’s EXIF date. |
-| `tag` | Write **Finder tags** (`red, work`, …) as `com.apple.metadata:_kMDItemUserTags`. |
+| `date` | Set filesystem **modified** (and **created** on macOS) to a datetime, `now`, or the image’s EXIF date. **N files** apply the same datetime to every copy on disk. |
+| `tag` | Write **Finder tags** (`red, work`, …) as `com.apple.metadata:_kMDItemUserTags`. **N files** get the same tags. |
 | `unlock` | Strip `com.apple.quarantine` and the uchg lock flag. |
-| `decrypt` | PDF (existing) or password-zip / cbz. |
+| `scrub` | Strip EXIF GPS/serial, `kMDItemWhereFroms`, and leftover xattrs. JPEG scan data is not re-encoded (pixels stay). |
+| `comment` | Set or clear Spotlight Finder comment and download **Where From** URL. Empty input clears. |
+| `hidden` | `hide` / `show` the macOS hidden flag (`UF_HIDDEN`), or `clear-icon` (FinderInfo custom-icon bit + resource fork). |
+| `decrypt` | PDF, password-zip / cbz, password-`.7z`, encrypted `.docx` / `.xlsx` / `.pptx`. |
 
-A browser **download** typically resets mtime and drops xattrs. On a Mac, use **show in Finder** after the job — that selects the job copy under `EXPORT_DOWNLOADS` so you can move it with tags and dates intact.
+A browser **download** typically resets mtime and drops xattrs. On a Mac, use **show in Finder** after the job — that selects the job copy under `EXPORT_DOWNLOADS` so you can move it with tags and dates intact. Bulk date/tag also writes a `batch.zip` for download; the per-file copies stay next to it.
 
 ### Multi-file operations
 

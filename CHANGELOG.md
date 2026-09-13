@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- File meta: **scrub** (GPS/serial EXIF + Where From + xattrs), Finder **comment** / Where From, **hidden** / clear custom icon, bulk date/tag on N copies, decrypt **7z** and encrypted **docx/xlsx**. Dates, tags, unlock, pdf/zip decrypt stay.
 - File meta ops: set modified/created date (EXIF or a datetime), Finder tags on Mac, unlock (quarantine + lock), zip decrypt. **Show in Finder** so tags/dates survive (browser download strips xattrs).
 - Phase 2 hardening: per-job download `token` (not `?pw=`), SSRF refuse on URL extract, 30/min mutating rate limit, Pillow `MAX_IMAGE_PIXELS=64000000`. Convert-to picker grouped by kind (`<optgroup>`).
 - Multilingual OCR/STT/TTS with auto-detect, Tesseract pack picking, and a UI language dropdown.
