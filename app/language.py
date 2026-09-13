@@ -152,12 +152,20 @@ LANGUAGE_NAME = {
     "cy": "Welsh", "ga": "Irish", "is": "Icelandic", "lt": "Lithuanian",
     "lv": "Latvian", "et": "Estonian", "sk": "Slovak", "hr": "Croatian",
     "sr": "Serbian", "bg": "Bulgarian", "la": "Latin",
+    "ceb": "Cebuano", "ilo": "Ilocano", "hil": "Hiligaynon",
+    "war": "Waray", "bcl": "Bikol", "bik": "Bikol",
 }
+
+# ISO 639-3 codes with no Whisper `language=` token. Pinning these must NOT
+# coerce to Tagalog (`tl`); STT loads whisper-medium-ph instead of turbo.
+PH_DIALECT_CODE = frozenset({"ceb", "ilo", "hil", "war", "bcl"})
+DIALECT_STT_MODEL = "rbcurzon/whisper-medium-ph"
 
 # UI / capabilities shortlist — globally high-use languages, Filipino first after English
 # because this tool is used in the PH. The detector still handles anything in TESS_CODE.
 UI_LANGUAGE = [
-    "en", "tl", "es", "zh", "hi", "ar", "fr", "pt", "ru", "ja",
+    "en", "tl", "ceb", "ilo", "hil", "war", "bcl",
+    "es", "zh", "hi", "ar", "fr", "pt", "ru", "ja",
     "de", "ko", "it", "tr", "vi", "id", "th", "pl", "nl", "uk",
 ]
 
@@ -189,6 +197,10 @@ def normalize_language_code(raw: str | None) -> str | None:
         return None
     if code == "fil":
         return "tl"
+    if code in {"bik"}:
+        return "bcl"
+    if code in {"bis", "bisaya"}:
+        return "ceb"
     if code == "zh-cn":
         return "zh"
     if code in TESS_CODE or code in LANGUAGE_NAME:
@@ -428,9 +440,14 @@ def osd_script_from_image(image) -> str | None:
 
 
 def whisper_language_arg(code: str | None) -> str | None:
-    """faster-whisper / Groq `language=` value. None means auto-detect."""
+    """faster-whisper / Groq `language=` value. None means auto-detect.
+
+    Philippine dialects are not Whisper language tokens — do not coerce to `tl`.
+    """
     code = normalize_language_code(code) or requested_language_code()
     if not code:
+        return None
+    if is_ph_dialect(code):
         return None
     if code in {"zh-cn", "zh-tw", "zh"}:
         return "zh"
@@ -441,6 +458,28 @@ def whisper_language_arg(code: str | None) -> str | None:
 
 def default_whisper_model() -> str:
     return os.environ.get("EXPORT_WHISPER_MODEL", "large-v3-turbo")
+
+
+def is_ph_dialect(code: str | None) -> bool:
+    return normalize_language_code(code) in PH_DIALECT_CODE
+
+
+def dialect_stt_model() -> str:
+    return os.environ.get("EXPORT_WHISPER_PH_MODEL", DIALECT_STT_MODEL).strip() or DIALECT_STT_MODEL
+
+
+def dialect_stt_dir() -> Path:
+    raw = os.environ.get("EXPORT_WHISPER_PH_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    return Path.home() / ".cache" / "export" / "whisper-medium-ph-ct2"
+
+
+def stt_model_id() -> str:
+    """Checkpoint this job should load. Pinned PH dialect is not turbo+tl."""
+    if is_ph_dialect(requested_language_code()):
+        return dialect_stt_model()
+    return default_whisper_model()
 
 
 @lru_cache(maxsize=1)

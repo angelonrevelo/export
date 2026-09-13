@@ -230,7 +230,7 @@ For multi-file batch operations:
 | Subtitle | pysubs2 |
 | Font | fontTools + brotli (for woff2) |
 | OCR | Tesseract (via pytesseract); applied as auto-fallback when scanned PDFs return empty pdfplumber output |
-| STT | faster-whisper local (default `large-v3-turbo`, multilingual) — or Groq cloud `whisper-large-v3-turbo` when `EXPORT_GROQ_API_KEY` is set and `EXPORT_OFFLINE` is unset. `distil-large-v3` is English-only and is no longer the default. |
+| STT | faster-whisper local (default `large-v3-turbo`, multilingual) for English/Tagalog/auto — or Groq cloud `whisper-large-v3-turbo` when `EXPORT_GROQ_API_KEY` is set and `EXPORT_OFFLINE` is unset. **Pinned PH dialects** (Cebuano, Ilocano, Hiligaynon, Waray, Bikol) load `rbcurzon/whisper-medium-ph` (not turbo with `language=tl`). Missing dialect weights fail the job; they do not silently transcribe as Tagalog. `distil-large-v3` is English-only and is no longer the default. |
 | TTS | macOS `say` (voice picked from detected language) / `piper-tts` (Linux; `{lang}_*.onnx` in `voices/` or `EXPORT_PIPER_VOICE`) |
 | Language | `langdetect` + Unicode script ranges + Tesseract OSD. UI language dropdown pins OCR/STT/TTS per job. |
 | Translate | NLLB-200 distilled 600M via CTranslate2 int8 (200 languages including Filipino `tgl_Latn`). UI **to** dropdown; format `translate` dumps translated txt. Applies to OCR / STT / subtitles / TTS / notes / kit / captioned. |
@@ -274,9 +274,11 @@ effect as not setting it.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `EXPORT_WHISPER_MODEL` | `large-v3-turbo` | Any faster-whisper model name. Default is multilingual. `distil-large-v3` and `*.en` are English-only. Smaller = less disk + faster but lower quality. |
-| `EXPORT_WHISPER_MODEL_DIR` | (auto) | Override model cache dir (defaults to `~/.cache/huggingface`). |
-| `EXPORT_LANGUAGE` | (auto) | Pin OCR / STT / TTS to an ISO 639-1 code (`en`, `tl`, `es`, `zh`, …). The UI dropdown sends the same value per job. |
+| `EXPORT_WHISPER_MODEL` | `large-v3-turbo` | Any faster-whisper model name. Default is multilingual. `distil-large-v3` and `*.en` are English-only. Smaller = less disk + faster but lower quality. Used for auto / `tl` / `en` — not for pinned Cebuano/Ilocano/…. |
+| `EXPORT_WHISPER_MODEL_DIR` | (auto) | Override turbo cache dir (defaults to `~/.cache/huggingface`). |
+| `EXPORT_WHISPER_PH_MODEL` | `rbcurzon/whisper-medium-ph` | Hugging Face id for pinned PH dialect STT (Tagalog/Bisaya/Ilocano/Waray/Kapampangan/Pangasinan/Bikol fine-tune). Converted to CTranslate2 int8 on first use. |
+| `EXPORT_WHISPER_PH_DIR` | `~/.cache/export/whisper-medium-ph-ct2` | Local CT2 directory. If missing and `EXPORT_OFFLINE=1`, the job errors naming this model. |
+| `EXPORT_LANGUAGE` | (auto) | Pin OCR / STT / TTS. ISO 639-1 (`en`, `tl`, …) or dialect ISO 639-3 (`ceb`, `ilo`, `hil`, `war`, `bcl`). The UI dropdown sends the same value per job. |
 | `EXPORT_OCR_LANG` | (auto) | Force a Tesseract `-l` string (`eng+fil`). Overrides pack picking. |
 | `EXPORT_OFFLINE` | (off) | When `1`, URL extraction and Groq are refused and Whisper/rembg/demucs/NLLB will not download models. Prefetch first: `bash scripts/prefetch.sh`. |
 | `EXPORT_TRANSLATE_TO` | (off) | Process-wide NLLB target (ISO 639-1). The UI **to** dropdown sends the same value per job. |

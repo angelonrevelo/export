@@ -21,7 +21,10 @@ Image.MAX_IMAGE_PIXELS = 64_000_000
 from .language import (
     default_whisper_model,
     detect_language_code,
+    dialect_stt_dir,
+    dialect_stt_model,
     is_offline,
+    is_ph_dialect,
     is_whisper_english_only,
     language_name,
     osd_script_from_image,
@@ -2173,31 +2176,73 @@ def _require_network(action: str) -> None:
         )
 
 
+def _ct2_ready(path: Path) -> bool:
+    return path.is_dir() and (
+        (path / "model.bin").exists() or any(path.glob("model*.bin"))
+    )
+
+
+def ensure_dialect_ct2() -> Path:
+    """Local CTranslate2 copy of whisper-medium-ph. Fail closed if missing."""
+    dest = dialect_stt_dir()
+    name = dialect_stt_model()
+    if _ct2_ready(dest):
+        return dest
+    if is_offline():
+        raise RuntimeError(
+            f"missing dialect STT model {name} at {dest} — "
+            "unset EXPORT_OFFLINE or convert once online"
+        )
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        from ctranslate2.converters.transformers import TransformersConverter
+        conv = TransformersConverter(
+            name,
+            copy_files=["tokenizer.json", "preprocessor_config.json"],
+        )
+        conv.convert(str(dest), quantization="int8", force=True)
+    except Exception as e:
+        raise RuntimeError(f"missing dialect STT model {name}: {e}") from e
+    if not _ct2_ready(dest):
+        raise RuntimeError(f"missing dialect STT model {name} at {dest}")
+    return dest
+
+
 def _collect_transcript(input_path: Path, out_dir: Path,
                         job: dict | None = None) -> tuple[list, str | None]:
     """Run STT once. Returns (segments, language_code). Groq if keyed and online,
     else local faster-whisper. Default local model is large-v3-turbo (multilingual);
-    distil-large-v3 is English-only and is no longer the default."""
-    if os.environ.get("EXPORT_GROQ_API_KEY") and not is_offline():
+    distil-large-v3 is English-only and is no longer the default.
+    Pinned PH dialects (Cebuano, Ilocano, …) load whisper-medium-ph, not turbo+tl."""
+    pinned = requested_language_code()
+    use_dialect = is_ph_dialect(pinned)
+
+    if os.environ.get("EXPORT_GROQ_API_KEY") and not is_offline() and not use_dialect:
         return _audio_video_to_transcript_groq(input_path, out_dir, job)
 
     from faster_whisper import WhisperModel
-    name = default_whisper_model()
-    if _whisper_state["model"] is None or _whisper_state["name"] != name:
+    if use_dialect:
+        load_name = str(ensure_dialect_ct2())
+        download_root = None
+        local_only = True
+    else:
+        load_name = default_whisper_model()
         download_root = os.environ.get("EXPORT_WHISPER_MODEL_DIR") or None
+        local_only = is_offline()
+    if _whisper_state["model"] is None or _whisper_state["name"] != load_name:
         _whisper_state["model"] = WhisperModel(
-            name, device="cpu", compute_type="int8",
+            load_name, device="cpu", compute_type="int8",
             download_root=download_root,
-            local_files_only=is_offline(),
+            local_files_only=local_only,
         )
-        _whisper_state["name"] = name
+        _whisper_state["name"] = load_name
     model = _whisper_state["model"]
 
     transcribe_kw: dict = {"beam_size": 1}
-    lang_arg = whisper_language_arg(None)
+    lang_arg = None if use_dialect else whisper_language_arg(None)
     if lang_arg:
         transcribe_kw["language"] = lang_arg
-    elif is_whisper_english_only(name):
+    elif (not use_dialect) and is_whisper_english_only(load_name):
         transcribe_kw["language"] = "en"
 
     segments_iter, info = model.transcribe(str(input_path), **transcribe_kw)
@@ -2207,7 +2252,10 @@ def _collect_transcript(input_path: Path, out_dir: Path,
         segments.append(s)
         if job is not None:
             job["progress"] = max(1, min(99, int(100 * s.end / duration)))
-    detected = getattr(info, "language", None) or lang_arg
+    if use_dialect:
+        detected = pinned
+    else:
+        detected = getattr(info, "language", None) or lang_arg
     return segments, detected
 
 

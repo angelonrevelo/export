@@ -74,8 +74,10 @@ from .jobs import (
 )
 from .meta import META_OP, is_darwin, reveal, run_meta_job
 from .language import (
+    PH_DIALECT_CODE,
     UI_LANGUAGE,
     default_whisper_model,
+    dialect_stt_model,
     installed_tess_lang,
     is_offline,
     is_whisper_english_only,
@@ -938,6 +940,8 @@ def capabilities():
             "ocr_pack": list(installed_tess_lang()),
             "whisper_model": whisper_model,
             "is_whisper_multilingual": not is_whisper_english_only(whisper_model),
+            "dialect_stt_model": dialect_stt_model(),
+            "dialect_code": sorted(PH_DIALECT_CODE),
             "tts_backend": tts_backend(),
             "translate": "nllb-200-distilled-600M (CTranslate2 int8, 200 languages incl. Filipino)",
         },
