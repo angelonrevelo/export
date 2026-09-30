@@ -323,6 +323,10 @@ WHISPER_OUTPUTS = {"srt", "vtt", "notes"}
 # Note: "txt" is handled here too when input is audio/video, but we don't add it
 # to the set since the dispatch checks input type first; pdf→txt and image→txt
 # stay routed to their own handlers.
+# Word-level transcript: {stem}_words.json = { language, word: [{ text, start,
+# end, confidence }] } from faster-whisper word_timestamps=True (or Groq's word
+# granularity). For editors that time captions per spoken word. Never translated.
+WHISPER_WORDS = {"words"}
 
 _whisper_state: dict = {"model": None, "name": None}
 
@@ -2094,8 +2098,74 @@ def _write_transcript(segments: list, target_fmt: str, stem: str, out_dir: Path,
     return out_path
 
 
+def _spread_word(text: str, start: float, end: float) -> list[dict]:
+    """Fallback word times for a segment with none: split on whitespace and share
+    the segment's span by character length. Confidence is unknown (None)."""
+    token = text.split()
+    if not token:
+        return []
+    total = sum(len(t) for t in token)
+    span = max(end - start, 0.0)
+    out: list[dict] = []
+    t = start
+    for w in token:
+        dur = span * len(w) / total
+        out.append({"text": w, "start": t, "end": t + dur, "confidence": None})
+        t += dur
+    return out
+
+
+def _segment_word(s) -> list[dict]:
+    """Words of one segment as dicts. faster-whisper Segment.words carry
+    .word/.start/.end/.probability; Groq segment dicts carry a `words` list we
+    built as {text, start, end, confidence}. Missing → even spread fallback."""
+    if isinstance(s, dict):
+        raw = s.get("words")
+        text, start, end = s["text"], s["start"], s["end"]
+    else:
+        raw = getattr(s, "words", None)
+        text, start, end = s.text, s.start, s.end
+    if not raw:
+        return _spread_word(text, float(start), float(end))
+    out: list[dict] = []
+    for w in raw:
+        if isinstance(w, dict):
+            word, ws, we, p = w.get("text", ""), w["start"], w["end"], w.get("confidence")
+        else:
+            word, ws, we, p = w.word, w.start, w.end, getattr(w, "probability", None)
+        word = (word or "").strip()
+        if word:
+            out.append({"text": word, "start": float(ws), "end": float(we),
+                        "confidence": None if p is None else float(p)})
+    return out
+
+
+def _write_words(segments: list, stem: str, out_dir: Path,
+                 language_code: str | None = None) -> Path:
+    """words.json — { language, word: [{ text, start, end, confidence }] }.
+    Seconds from the start of the input, 3 decimals. Not translated: a
+    translation has no spoken time per word."""
+    import json as json_mod
+    word: list[dict] = []
+    for s in segments:
+        for w in _segment_word(s):
+            word.append({
+                "text": w["text"],
+                "start": round(w["start"], 3),
+                "end": round(max(w["end"], w["start"]), 3),
+                "confidence": None if w["confidence"] is None else round(w["confidence"], 3),
+            })
+    out_path = out_dir / f"{stem}_words.json"
+    out_path.write_text(
+        json_mod.dumps({"language": language_code, "word": word}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return out_path
+
+
 def _audio_video_to_transcript_groq(input_path: Path, out_dir: Path,
-                                     job: dict | None = None) -> tuple[list, str | None]:
+                                     job: dict | None = None,
+                                     is_word: bool = False) -> tuple[list, str | None]:
     """Transcribe via Groq's Whisper API. Free tier: 25 MB upload limit, dev tier: 100 MB.
     We pre-process to flac mono 16 kHz (Whisper's native format) for max compression,
     then segment into ~20-min chunks (well under both limits even for music). Each
@@ -2136,9 +2206,14 @@ def _audio_video_to_transcript_groq(input_path: Path, out_dir: Path,
     # Transcribe each chunk, shifting timestamps by the cumulative offset.
     all_segments: list[dict] = []
     detected_language: str | None = whisper_language_arg(None)
-    groq_data = {"model": model_id, "response_format": "verbose_json"}
+    groq_data: dict = {"model": model_id, "response_format": "verbose_json"}
     if detected_language:
         groq_data["language"] = detected_language
+    if is_word:
+        # OpenAI-compatible word granularity: top-level `words` [{word, start, end}]
+        # with no per-word probability, so confidence is None. If a response has
+        # no `words`, _segment_word spreads each segment's span by length.
+        groq_data["timestamp_granularities[]"] = ["word", "segment"]
     for i, chunk in enumerate(chunks):
         offset = i * chunk_seconds
         with chunk.open("rb") as f:
@@ -2154,12 +2229,28 @@ def _audio_video_to_transcript_groq(input_path: Path, out_dir: Path,
         result = resp.json()
         if not detected_language:
             detected_language = result.get("language") or None
+        chunk_segments: list[dict] = []
         for seg in result.get("segments", []):
-            all_segments.append({
+            chunk_segments.append({
                 "start": seg["start"] + offset,
                 "end":   seg["end"]   + offset,
                 "text":  seg["text"],
             })
+        if is_word and chunk_segments:
+            # Bucket each word under the last segment that starts at or before it.
+            for w in result.get("words") or []:
+                ws = w["start"] + offset
+                home = chunk_segments[0]
+                for seg in chunk_segments:
+                    if seg["start"] <= ws:
+                        home = seg
+                    else:
+                        break
+                home.setdefault("words", []).append({
+                    "text": w.get("word", ""), "start": ws,
+                    "end": w["end"] + offset, "confidence": None,
+                })
+        all_segments.extend(chunk_segments)
         if job is not None:
             job["progress"] = max(1, min(99, int(100 * (i + 1) / len(chunks))))
 
@@ -2209,16 +2300,18 @@ def ensure_dialect_ct2() -> Path:
 
 
 def _collect_transcript(input_path: Path, out_dir: Path,
-                        job: dict | None = None) -> tuple[list, str | None]:
+                        job: dict | None = None,
+                        is_word: bool = False) -> tuple[list, str | None]:
     """Run STT once. Returns (segments, language_code). Groq if keyed and online,
     else local faster-whisper. Default local model is large-v3-turbo (multilingual);
     distil-large-v3 is English-only and is no longer the default.
-    Pinned PH dialects (Cebuano, Ilocano, …) load whisper-medium-ph, not turbo+tl."""
+    Pinned PH dialects (Cebuano, Ilocano, …) load whisper-medium-ph, not turbo+tl.
+    is_word asks for word timestamps (segment.words) on every path."""
     pinned = requested_language_code()
     use_dialect = is_ph_dialect(pinned)
 
     if os.environ.get("EXPORT_GROQ_API_KEY") and not is_offline() and not use_dialect:
-        return _audio_video_to_transcript_groq(input_path, out_dir, job)
+        return _audio_video_to_transcript_groq(input_path, out_dir, job, is_word=is_word)
 
     from faster_whisper import WhisperModel
     if use_dialect:
@@ -2239,6 +2332,8 @@ def _collect_transcript(input_path: Path, out_dir: Path,
     model = _whisper_state["model"]
 
     transcribe_kw: dict = {"beam_size": 1}
+    if is_word:
+        transcribe_kw["word_timestamps"] = True
     lang_arg = None if use_dialect else whisper_language_arg(None)
     if lang_arg:
         transcribe_kw["language"] = lang_arg
@@ -2261,9 +2356,12 @@ def _collect_transcript(input_path: Path, out_dir: Path,
 
 def _audio_video_to_transcript(input_path: Path, target_fmt: str, out_dir: Path,
                                 job: dict | None = None) -> Path:
-    segments, detected = _collect_transcript(input_path, out_dir, job)
+    is_word = target_fmt in WHISPER_WORDS
+    segments, detected = _collect_transcript(input_path, out_dir, job, is_word=is_word)
     record_on_job(job, detected)
     stem = input_path.stem.removeprefix("input_")
+    if is_word:
+        return _write_words(segments, stem, out_dir, language_code=detected)
     return _write_transcript(segments, target_fmt, stem, out_dir, language_code=detected)
 
 
@@ -2774,6 +2872,8 @@ def _convert_one(input_path: Path, fmt: str, out_dir: Path,
         return _audio_video_to_transcript(input_path, fmt, out_dir, job=job)
     if (is_audio_in or is_video_in) and fmt == "txt":
         return _audio_video_to_transcript(input_path, "txt", out_dir, job=job)
+    if (is_audio_in or is_video_in) and fmt in WHISPER_WORDS:
+        return _audio_video_to_transcript(input_path, fmt, out_dir, job=job)
     if (is_audio_in or is_video_in) and fmt in TRANSCRIPT_KIT:
         return _transcript_kit(input_path, out_dir, job=job)
     if is_video_in and fmt in VIDEO_CAPTIONED:
@@ -3173,7 +3273,7 @@ def run_job(job_id: str, url: str, fmt: str, downloads_dir: Path,
                     target = image_files[0]
                 else:
                     target = _zip_images(out_dir, title)
-            elif fmt in {"txt", "srt", "vtt", "notes", "kit", "translate"}:
+            elif fmt in {"txt", "srt", "vtt", "notes", "words", "kit", "translate"}:
                 # URL → audio (mp3) → transcript via Whisper.
                 title = _run_ytdlp(job, url, "mp3", out_dir)
                 job["title"] = title

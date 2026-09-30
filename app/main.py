@@ -58,6 +58,7 @@ from .jobs import (
     VIDEO_TO_GIF,
     VIDEO_TO_VIDEO,
     WHISPER_OUTPUTS,
+    WHISPER_WORDS,
     jobs,
     run_batch_convert_job,
     run_batch_shrink_job,
@@ -94,7 +95,7 @@ ALLOWED_UPLOAD_FORMATS = (
     | DOC_TO_PDF | VIDEO_TO_GIF | VIDEO_TO_VIDEO
     | AUDIO_FORMATS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO
     | OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT
-    | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS
+    | TTS_AUDIO_FORMATS | WHISPER_OUTPUTS | WHISPER_WORDS
     | SPREADSHEET_FORMATS | SPREADSHEET_TO_TEXT | SPREADSHEET_TO_PDF
     | SUBTITLE_FORMATS | SUBTITLE_TO_TEXT | SUBTITLE_TO_DOC
     | FONT_FORMATS | FONT_TO_IMAGE
@@ -898,7 +899,7 @@ def capabilities():
         "url_extraction": {
             "video_audio_sites": "~1800 (yt-dlp)",
             "image_sites": "~300 (gallery-dl)",
-            "url_outputs": ["mp3", "mp4", "images", "txt", "srt", "vtt", "notes",
+            "url_outputs": ["mp3", "mp4", "images", "txt", "srt", "vtt", "notes", "words",
                             "kit", "pdf", "docx", "epub", "captioned", "frames", "subs",
                             "translate"],
         },
@@ -916,8 +917,8 @@ def capabilities():
         },
         "convert_outputs": {
             "image":       sorted(IMAGE_FORMATS | IMAGE_TO_PDF | IMAGE_TO_TEXT | IMAGE_TO_NOBG | IMAGE_TO_SVG | IMAGE_TO_DOC | TRANSLATE_OUTPUT),
-            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | TRANSCRIPT_KIT | VIDEO_CAPTIONED | VIDEO_FRAMES | VIDEO_SUBS | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub", "png"}),
-            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | TRANSCRIPT_KIT | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub"}),
+            "video":       sorted(VIDEO_TO_VIDEO | VIDEO_TO_GIF | AUDIO_FORMATS | AUDIO_TO_VIDEO | WHISPER_OUTPUTS | WHISPER_WORDS | TRANSCRIPT_KIT | VIDEO_CAPTIONED | VIDEO_FRAMES | VIDEO_SUBS | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub", "png"}),
+            "audio":       sorted(AUDIO_FORMATS | WHISPER_OUTPUTS | WHISPER_WORDS | AUDIO_DENOISE | AUDIO_STEMS | AUDIO_TO_VIDEO | TRANSCRIPT_KIT | TRANSLATE_OUTPUT | {"txt", "pdf", "docx", "epub"}),
             "pdf":         sorted(PDF_TO_IMAGE | PDF_TO_TEXT | PDF_TO_DOCX | PDF_OCR_OUTPUTS | PDF_TO_MD | PDF_TO_NOTES | PDF_TO_DOC | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO | TRANSLATE_OUTPUT),
             "document":    sorted(DOC_FORMATS | DOC_TO_PDF | TTS_AUDIO_FORMATS | TRANSLATE_OUTPUT),
             "office":      sorted(OFFICE_TO_PDF | OFFICE_TO_IMAGE | OFFICE_TO_TEXT | DOC_FORMATS | TTS_AUDIO_FORMATS | AUDIO_TO_VIDEO | TRANSLATE_OUTPUT),

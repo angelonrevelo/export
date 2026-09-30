@@ -4,6 +4,7 @@
 
 ### Added
 - `EXPORT_CORS_ORIGIN` CORS allow-list (comma-separated exact origins; unset = no CORS, as before). Allows `X-Password` + `Content-Type`, answers private-network preflights with `Access-Control-Allow-Private-Network: true`, and 401/429 responses carry the CORS headers. For cuttingboard's Companion.
+- `words` transcript format → `{stem}_words.json` = `{ language, word: [{ text, start, end, confidence }] }` from faster-whisper `word_timestamps=True` (turbo and the pinned PH dialect model) or Groq word granularity (`confidence` null). Upload, URL, capabilities and the reachable set list it. Not translated.
 - PH dialect STT: UI pins Cebuano / Ilocano / Hiligaynon / Waray / Bikol (`ceb` `ilo` `hil` `war` `bcl`) to `rbcurzon/whisper-medium-ph`. Tagalog/auto stay on `large-v3-turbo`. Missing dialect weights error; they do not transcribe as `tl`.
 - File meta: **scrub** (GPS/serial EXIF + Where From + xattrs), Finder **comment** / Where From, **hidden** / clear custom icon, bulk date/tag on N copies, decrypt **7z** and encrypted **docx/xlsx**. Dates, tags, unlock, pdf/zip decrypt stay.
 - File meta ops: set modified/created date (EXIF or a datetime), Finder tags on Mac, unlock (quarantine + lock), zip decrypt. **Show in Finder** so tags/dates survive (browser download strips xattrs).

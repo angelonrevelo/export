@@ -25,7 +25,7 @@ version.
 
 | Source | Outputs |
 |---|---|
-| YouTube, Facebook (public), Vimeo, SoundCloud, Bandcamp, Twitch, Reddit, TED, Dailymotion, PeerTube, Mixcloud, +~1800 more sites via [yt-dlp](https://github.com/yt-dlp/yt-dlp) | `mp3`, `mp4`, **`notes`** (NoteGPT-style markdown), `kit` (zip of txt+srt+vtt+notes), `txt` / `srt` / `vtt`, `pdf` / `docx` / `epub` (transcript as a document), `captioned` (burned-in subs), `frames`, `subs` |
+| YouTube, Facebook (public), Vimeo, SoundCloud, Bandcamp, Twitch, Reddit, TED, Dailymotion, PeerTube, Mixcloud, +~1800 more sites via [yt-dlp](https://github.com/yt-dlp/yt-dlp) | `mp3`, `mp4`, **`notes`** (NoteGPT-style markdown), `kit` (zip of txt+srt+vtt+notes), `txt` / `srt` / `vtt`, `words` (word-level JSON), `pdf` / `docx` / `epub` (transcript as a document), `captioned` (burned-in subs), `frames`, `subs` |
 | Image-rich URLs (Wikimedia Commons, Reddit galleries, Pinterest, etc.) via [gallery-dl](https://github.com/mikf/gallery-dl) | `images` (single file or zip) |
 | **Login-walled** (Instagram, locked X, private FB groups) | Set `EXPORT_YTDLP_BROWSER=chrome` to read cookies from your logged-in browser |
 | **IP-blocked** (TikTok, Rumble) | Set `EXPORT_HTTP_PROXY=socks5://127.0.0.1:9050` (Tor) or any residential proxy |
@@ -35,8 +35,8 @@ version.
 | Input type | Convert to | Other operations |
 |---|---|---|
 | **Image** (`.jpg .jpeg .png .webp .avif .heic .heif .tiff .bmp .gif .ico .jp2 .psd .tga .pcx .eps .icns .jxl .svg` + camera RAW `.dng .cr2 .cr3 .nef .arw .raf .orf .rw2 .pef .srw`) | `jpeg, png, webp, avif, jxl, tiff, bmp, gif, ico, icns, jp2, pdf, txt (OCR via Tesseract, auto language), nobg (transparent PNG via rembg), svg (vectorize via vtracer)`. Also via OCR→pandoc chain: `docx, md, html, rtf, epub, odt, tex`. JXL and RAW need the optional `.[media]` extra. | `shrink` (with quality slider) |
-| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif .mpg .mpeg .vob .asf .mxf`) | Direct: `mp4, mov, webm, mkv, gif, png` (one still frame — pictures of frames, not a transcript), `mp3, m4a, m4b, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram`, `txt, srt, vtt, notes, kit` (Whisper — local multilingual `large-v3-turbo` or Groq), `captioned` (burn-in subs), `frames` (zip of 1 fps PNGs, cap 120), `subs` (embedded stream or Whisper fallback), `pdf / docx / epub` (transcript as a document). Convert-to in the UI is the **reachable set** (composed hops, e.g. video → `png` → `jpeg`), not only this family list. `.gif` is both image and video. | `shrink` (libx264 re-encode with quality slider — universal playback) |
-| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma .amr .3ga .m4b .ac3 .caf`) | `mp3, m4a, m4b, wav, flac, ogg, opus, aac, txt, srt, vtt, notes, kit (Whisper), denoise (noisereduce), stems (Demucs), audiogram, pdf / docx / epub` (transcript as a document) | — |
+| **Video** (`.mp4 .mov .webm .mkv .avi .m4v .flv .wmv .3gp .ts .mts .m2ts .ogv .gif .mpg .mpeg .vob .asf .mxf`) | Direct: `mp4, mov, webm, mkv, gif, png` (one still frame — pictures of frames, not a transcript), `mp3, m4a, m4b, wav, flac, ogg, opus, aac` (audio extraction via ffmpeg `-vn`), `audiogram`, `txt, srt, vtt, notes, kit` (Whisper — local multilingual `large-v3-turbo` or Groq), `words` (word-level `_words.json`, see below), `captioned` (burn-in subs), `frames` (zip of 1 fps PNGs, cap 120), `subs` (embedded stream or Whisper fallback), `pdf / docx / epub` (transcript as a document). Convert-to in the UI is the **reachable set** (composed hops, e.g. video → `png` → `jpeg`), not only this family list. `.gif` is both image and video. | `shrink` (libx264 re-encode with quality slider — universal playback) |
+| **Audio** (`.mp3 .m4a .wav .flac .ogg .aac .opus .aiff .aif .wma .amr .3ga .m4b .ac3 .caf`) | `mp3, m4a, m4b, wav, flac, ogg, opus, aac, txt, srt, vtt, notes, kit, words (Whisper), denoise (noisereduce), stems (Demucs), audiogram, pdf / docx / epub` (transcript as a document) | — |
 | **PDF** (`.pdf`) | `png, jpeg, webp, txt (auto-OCR fallback, auto language), md, notes, docx, html, epub, rtf, odt, tex, pdfa (searchable PDF/A via OCRmyPDF with the detected language pack), mp3/m4a/wav (audiobook via TTS, voice matched to detected language), audiogram` | `shrink`, `merge`, `split`, `rotate`, `watermark`, `encrypt`, `decrypt` |
 | **Documents** (`.md .markdown .html .htm .rtf .epub .txt .tex .org .rst .ipynb .adoc .asciidoc .textile .docbook .fb2`) | `md, html, docx, rtf, epub, txt, odt, tex, pptx (Pandoc slideshow), pdf, mp3, m4a, wav (TTS via macOS say or piper-tts)` | — |
 | **Office** (`.docx .doc .pptx .ppt .xlsx .xls .odp .ods .odt`) | `pdf` (LibreOffice headless), `png/jpeg/webp` (each page/slide rasterized at 200 DPI via office→pdf→image, multi-page → zip). For `.docx / .odt / .pptx` (pandoc-readable): `md, html, rtf, epub, txt, odt, tex` direct via pandoc. For all office formats: `txt` via office→pdf→text chain, plus `mp3/m4a/wav` (audiobook via TTS), `audiogram` (waveform mp4 of the TTS render). | — |
@@ -44,6 +44,23 @@ version.
 | **Comic** (`.cbz`) | `pdf` (zip of images → multi-page PDF, page order = zip order) | — |
 | **Subtitle** (`.srt .vtt .ass .ssa .sub .sbv`) | `srt, vtt, ass, ssa, sub, sbv` (cross-conversion via pysubs2). Also: `txt / md / notes` (transcript dumps; notes groups paragraphs by ≥1.5 s gap between cues), `docx / rtf / epub / odt / tex / html / pdf` (printable transcript via pandoc), `mp3 / m4a / wav` (TTS read-aloud), `audiogram` (waveform mp4 of the TTS render). | — |
 | **Font** (`.ttf .otf .woff .woff2`) | `ttf, otf, woff, woff2` (container conversion via fontTools — TTF↔OTF is a no-op, woff/woff2 wrap or unwrap). Also: `png / jpeg / webp` specimen — renders the font name + a large AaBbCc preview + two pangrams as an image (woff/woff2 routed through a fontTools TTF intermediate so older Pillow builds still work). | — |
+
+### Word-level transcript (`words`)
+
+Audio/video (upload or URL) → `{stem}_words.json`:
+
+```json
+{ "language": "ceb", "word": [ { "text": "Maayong", "start": 0.12, "end": 0.58, "confidence": 0.93 } ] }
+```
+
+Seconds from the start of the input (3 decimals), singular keys. Local
+faster-whisper runs with `word_timestamps=True` on both `large-v3-turbo` and the
+pinned PH dialect model (`rbcurzon/whisper-medium-ph`); `confidence` is the
+word probability. Groq asks for `timestamp_granularities[]=word`; Groq words
+carry no probability, so `confidence` is `null`. Any segment that comes back
+without word times (fallback) has its span shared across its words by
+character length, `confidence: null`. Never translated — `translate_to` does
+not apply, a translation has no spoken time per word.
 
 ### File meta (dates, tags, unlock, scrub, comment, hidden)
 

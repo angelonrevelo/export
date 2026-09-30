@@ -14,7 +14,7 @@ from collections import deque
 # Offered as convert-to targets but not walked as graph nodes. Animated /
 # bundle / effect outputs are dead-ends; the still-frame bridge is png.
 TERMINAL_FORMAT = frozenset({
-    "kit", "captioned", "frames", "subs", "notes", "translate",
+    "kit", "captioned", "frames", "subs", "notes", "translate", "words",
     "nobg", "stems", "denoise", "audiogram", "pdfa",
     "gif", "ico", "icns",
 })
@@ -117,7 +117,7 @@ def direct_target(kind: str) -> frozenset[str]:
         )
     if kind == "video":
         return frozenset(
-            J.VIDEO_TO_GIF | J.VIDEO_TO_VIDEO | J.WHISPER_OUTPUTS | {"txt"}
+            J.VIDEO_TO_GIF | J.VIDEO_TO_VIDEO | J.WHISPER_OUTPUTS | J.WHISPER_WORDS | {"txt"}
             | J.TRANSCRIPT_KIT | J.VIDEO_CAPTIONED | J.VIDEO_FRAMES | J.VIDEO_SUBS
             | {"pdf", "docx", "epub"} | J.AUDIO_TO_VIDEO | J.AUDIO_FORMATS
             | J.TRANSLATE_OUTPUT
@@ -125,7 +125,7 @@ def direct_target(kind: str) -> frozenset[str]:
         )
     if kind == "audio":
         return frozenset(
-            J.AUDIO_FORMATS | J.WHISPER_OUTPUTS | {"txt"} | J.TRANSCRIPT_KIT
+            J.AUDIO_FORMATS | J.WHISPER_OUTPUTS | J.WHISPER_WORDS | {"txt"} | J.TRANSCRIPT_KIT
             | J.AUDIO_DENOISE | J.AUDIO_STEMS | J.AUDIO_TO_VIDEO
             | {"pdf", "docx", "epub"} | J.TRANSLATE_OUTPUT
         )
