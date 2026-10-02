@@ -264,6 +264,12 @@ effect as not setting it.
 | `EXPORT_CLEANUP_INTERVAL_SECONDS` | `900` (15 min) | How often the cleanup loop sweeps. |
 | `EXPORT_DOWNLOAD_AUTODELETE` | (off) | When `1` / `true` / `yes`, the output file + job dir are deleted the *instant* the download stream finishes. Maximum-ephemeral mode. |
 
+### Cross-origin browser apps
+
+| Env var | Default | Notes |
+|---|---|---|
+| `EXPORT_CORS_ORIGIN` | (unset = no CORS) | Comma-separated exact origins (`http://127.0.0.1:10100,https://cut.example`) whose pages may call the API directly — e.g. cuttingboard's **Companion** (import a link, word-level transcription). Allowed origins may send `X-Password` + `Content-Type`; a preflight asking for private-network access (public https page → `localhost:8500`) gets `Access-Control-Allow-Private-Network: true`. Cookies are never allowed. Unset keeps today's same-origin-only behaviour. |
+
 ### Folder watch
 
 | Env var | Default | Notes |

@@ -72,6 +72,7 @@ from .jobs import (
     MERGEABLE_FORMATS,
     _open_raster,
 )
+from .cors import CorsAllowList
 from .meta import META_OP, is_darwin, reveal, run_meta_job
 from .language import (
     PH_DIALECT_CODE,
@@ -186,6 +187,11 @@ async def rate_limit_mutate(request: Request, call_next):
         except RateLimited as e:
             return JSONResponse({"detail": str(e)}, status_code=429)
     return await call_next(request)
+
+
+# Opt-in CORS (EXPORT_CORS_ORIGIN) for a browser app on another origin, e.g.
+# cuttingboard's companion. Added last so it is outermost: 401/429 carry CORS.
+app.add_middleware(CorsAllowList)
 
 
 class CreateJob(BaseModel):
