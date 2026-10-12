@@ -869,6 +869,25 @@ mod tests {
     }
 
     #[test]
+    fn four_named_segments_stay_on_the_cleartext_client() {
+        assert_eq!(
+            parse_media_playlist(
+                "#EXTM3U\n#EXTINF:1,\nhttps://cdn.example/a.ts\n#EXTINF:1,\nb.ts\n#EXTINF:1,\nc.ts\n#EXTINF:1,\nd.ts\n"
+            ),
+            Err(Error::Unsupported)
+        );
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n#EXTINF:1,\nc.ts\n#EXTINF:1,\nd.ts\n",
+        )
+        .unwrap();
+        assert_eq!(playlist.segments.len(), 4);
+        assert_eq!(
+            Fetcher::default().get_segments(&playlist),
+            Err(Error::BadTag)
+        );
+    }
+
+    #[test]
     fn coalesced_span_is_one_range_get() {
         assert_eq!(
             parse_media_playlist(
