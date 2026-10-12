@@ -35,3 +35,13 @@ Same release profile and one thread. The input is the 7,197-byte Annex B file: t
 - release p50: 762 µs, p99: 944 µs on the run taken immediately after linking. Four later runs on that binary were p50 758–785 µs and p99 902–923 µs. One more run of that binary, after the wasm library build, was p50 967 µs and p99 1,361 µs
 
 `scripts/check-identify-seq160.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 160×160, and decoded 8 frames.
+
+## 320×240
+
+Same release profile and one thread. The input is the 19,337-byte 320×240 Constrained Baseline I-frame, copied in as bytes. One `avc1` sample. Same level 1.1 slice as the smaller I-frames. 200 calls after 20 warmup.
+
+- input: 19,337 bytes
+- output: 19,953 bytes
+- release p50: 1,833 µs, p99: 3,082 µs on the run taken immediately after linking. Four later runs on that binary were p50 1,807–1,981 µs and p99 2,016–3,044 µs
+
+`scripts/check-identify-320.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 320×240, one frame.
