@@ -419,9 +419,9 @@ fn rtf_paragraphs() -> Vec<u8> {
     let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}");
     for i in 0..200 {
         if i % 2 == 0 {
-            s.push_str(&format!("Paragraph {i} of the generated rtf file.\\par"));
+            s.push_str(&format!("Paragraph {i} of the generated rtf file.\\par\n"));
         } else {
-            s.push_str(&format!("{{\\b Paragraph {i} bold.}}\\par"));
+            s.push_str(&format!("{{\\b Paragraph {i} bold.}}\\par\n"));
         }
     }
     s.push('}');
