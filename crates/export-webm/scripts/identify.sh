@@ -17,7 +17,8 @@ vorbis=$(mktemp "${TMPDIR:-/tmp}/export-webm-copyb.XXXXXX.webm")
 both=$(mktemp "${TMPDIR:-/tmp}/export-webm-copyab.XXXXXX.webm")
 av=$(mktemp "${TMPDIR:-/tmp}/export-webm-copyav.XXXXXX.webm")
 av_large=$(mktemp "${TMPDIR:-/tmp}/export-webm-copylargeav.XXXXXX.webm")
-trap 'rm -f "$small" "$large" "$vp8" "$vp8_two" "$vp8_4096" "$vp8_460800" "$vp9" "$vp9_4096" "$audio" "$vorbis" "$both" "$av" "$av_large"' EXIT INT TERM
+three=$(mktemp "${TMPDIR:-/tmp}/export-webm-copythree.XXXXXX.webm")
+trap 'rm -f "$small" "$large" "$vp8" "$vp8_two" "$vp8_4096" "$vp8_460800" "$vp9" "$vp9_4096" "$audio" "$vorbis" "$both" "$av" "$av_large" "$three"' EXIT INT TERM
 
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$small" 2x2
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$large" large
@@ -32,6 +33,7 @@ cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example copy_fi
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$both" opus-vorbis
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$av" vp8-opus
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$av_large" vp8-460800-opus
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$three" vp8-460800-opus-vorbis
 
 # `ffmpeg -i` exits 1 when no output is requested. Rejection is a missing
 # container line, not that exit code.
@@ -98,3 +100,10 @@ printf '%s\n' "$av_large_log"
 printf '%s\n' "$av_large_log" | grep -E 'Video: vp8[, ]' >/dev/null
 printf '%s\n' "$av_large_log" | grep -E 'Audio: opus[, ]' >/dev/null
 echo "codec av_large $(printf '%s\n' "$av_large_log" | grep -E '(Video: vp8|Audio: opus)[, ]')"
+
+three_log=$(ffmpeg -hide_banner -i "$three" 2>&1 || true)
+printf '%s\n' "$three_log"
+printf '%s\n' "$three_log" | grep -E 'Video: vp8[, ]' >/dev/null
+printf '%s\n' "$three_log" | grep -E 'Audio: opus[, ]' >/dev/null
+printf '%s\n' "$three_log" | grep -E 'Audio: vorbis[, ]' >/dev/null
+echo "codec three $(printf '%s\n' "$three_log" | grep -E '(Video: vp8|Audio: opus|Audio: vorbis)[, ]')"
