@@ -115,6 +115,17 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 763 ns |
 
+An eighth generated file widens that area by one cell, still with no cached
+number. A1 = 1, B1 = 2, C1 = 3, and D1 = 4. The reader adds them. The value
+is **10**. `xls → csv` prints `1,2,3,4,10`. Any other uncached expression is
+still refused.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 881 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
