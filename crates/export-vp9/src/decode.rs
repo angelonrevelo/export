@@ -10,15 +10,9 @@ const BLOCK_8X8: usize = 3;
 const BLOCK_16X16: usize = 6;
 const BLOCK_32X32: usize = 9;
 const BLOCK_64X64: usize = 12;
-const DC_PRED: i32 = 0;
-const PARTITION_NONE: i32 = 0;
 const PARTITION_SPLIT: i32 = 3;
 
-const INTRA_MODE_TREE: [i16; 18] = [
-    0, 2, -9, 4, -1, 6, 8, 12, -2, 10, -4, -5, -3, 14, -8, 16, -6, -7,
-];
 const PARTITION_TREE: [i16; 6] = [0, 2, -1, 4, -2, -3];
-const BINARY_TREE: [i16; 2] = [0, -1];
 const TOKEN_TREE: [i16; 20] = [
     0, 2, -1, 4, 6, 10, -2, 8, -3, -4, 12, 14, -5, -6, 16, 18, -7, -8, -9, -10,
 ];
@@ -34,11 +28,11 @@ struct Pic {
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
-    above_nz: [[u8; 32]; 3],
-    left_nz: [[u8; 32]; 3],
-    skips: [u8; 256],
-    above_part: [u8; 16],
-    left_part: [u8; 16],
+    above_nz: [[u8; 64]; 3],
+    left_nz: [[u8; 64]; 3],
+    skips: [u8; 1024],
+    above_part: [u8; 32],
+    left_part: [u8; 32],
 }
 
 /// Decode the VP9 payload of one supported keyframe.
@@ -46,7 +40,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     if bytes.is_empty() {
         return Err(Error::Truncated);
     }
-    if bytes.len() > 256 {
+    if bytes.len() > 512 {
         return Err(Error::Unsupported);
     }
     if bytes[bytes.len() - 1] & 0xe0 == 0xc0 {
@@ -87,7 +81,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     }
     if !matches!(
         (width, height),
-        (8, 8) | (16, 16) | (32, 32) | (64, 64) | (128, 128)
+        (8, 8) | (16, 16) | (32, 32) | (64, 64) | (128, 128) | (256, 256)
     ) {
         return Err(Error::Unsupported);
     }
@@ -163,11 +157,11 @@ fn decode_tile(
         y: vec![0; width * height],
         u: vec![0; chroma],
         v: vec![0; chroma],
-        above_nz: [[0; 32]; 3],
-        left_nz: [[0; 32]; 3],
-        skips: [0; 256],
-        above_part: [0; 16],
-        left_part: [0; 16],
+        above_nz: [[0; 64]; 3],
+        left_nz: [[0; 64]; 3],
+        skips: [0; 1024],
+        above_part: [0; 32],
+        left_part: [0; 32],
     };
     let mut sb_row = 0;
     while sb_row < pic.mi {
@@ -201,11 +195,19 @@ fn decode_partition(
     if row >= pic.mi || col >= pic.mi {
         return Ok(());
     }
+    if bsize == BLOCK_8X8 {
+        let ctx = partition_ctx(pic, bsize, row, col, 1)?;
+        if bools.read(KF_PARTITION[ctx][0])? != 0 {
+            return Err(Error::Unsupported);
+        }
+        decode_block(bools, pic, row, col)?;
+        update_partition(pic, row, col, BLOCK_8X8, 1)?;
+        return Ok(());
+    }
     let num8 = match bsize {
         BLOCK_64X64 => 8,
         BLOCK_32X32 => 4,
         BLOCK_16X16 => 2,
-        BLOCK_8X8 => 1,
         _ => return Err(Error::Unsupported),
     };
     let half = num8 >> 1;
@@ -226,14 +228,6 @@ fn decode_partition(
         return Err(Error::Unsupported);
     };
 
-    if bsize == BLOCK_8X8 {
-        if partition != PARTITION_NONE {
-            return Err(Error::Unsupported);
-        }
-        decode_block(bools, pic, row, col)?;
-        update_partition(pic, row, col, BLOCK_8X8, num8)?;
-        return Ok(());
-    }
     if partition != PARTITION_SPLIT {
         return Err(Error::Unsupported);
     }
@@ -293,17 +287,11 @@ fn decode_block(
     col: usize,
 ) -> Result<(), Error> {
     let skip_ctx = neighbor_skip(pic, row, col)?;
-    let skip = bools.tree(&BINARY_TREE, |_| SKIP_PROB[skip_ctx])?;
+    let skip = bools.read(SKIP_PROB[skip_ctx])?;
     *pic.skips
         .get_mut(row * pic.mi + col)
-        .ok_or(Error::Unsupported)? = u8::from(skip != 0);
-    let above_mode = DC_PRED;
-    let left_mode = DC_PRED;
-    let y_mode = bools.tree(&INTRA_MODE_TREE, |node| {
-        KF_Y_MODE[above_mode as usize][left_mode as usize][node]
-    })?;
-    let uv_mode = bools.tree(&INTRA_MODE_TREE, |node| KF_UV_MODE[y_mode as usize][node])?;
-    if y_mode != DC_PRED || uv_mode != DC_PRED {
+        .ok_or(Error::Unsupported)? = skip;
+    if bools.read(KF_Y_MODE[0][0][0])? != 0 || bools.read(KF_UV_MODE[0][0])? != 0 {
         return Err(Error::Unsupported);
     }
     residual(bools, pic, row, col, skip != 0)?;
@@ -368,7 +356,7 @@ fn transform(
     }
     let x4 = x >> 2;
     let y4 = y >> 2;
-    if plane >= 3 || x4 >= 32 || y4 >= 32 {
+    if plane >= 3 || x4 >= 64 || y4 >= 64 {
         return Err(Error::Unsupported);
     }
     pic.above_nz[plane][x4] = nonzero;

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Write one IVF keyframe this crate decodes.
 
-The picture is 8x8, 16x16, 32x32, 64x64, or 128x128, profile 0, 8-bit 4:2:0, lossless, DC predicted.
+The picture is 8x8 through 256x256, profile 0, 8-bit 4:2:0, lossless, DC predicted.
 On the 8x8 and 16x16 frames, each 8x8 block's first luma 4x4 carries a
 positive FOUR token. The 32x32 frame is one keyframe as well: four of its
 8x8 blocks carry that token and the other twelve are skipped. The 64x64
 frame is one keyframe: four blocks are coded and the rest are skipped.
-The 128x128 frame is one keyframe too, four superblocks, four coded blocks. Loop filter,
+The 128x128 frame is one keyframe too, four superblocks, four coded blocks.
+The 256x256 frame is one keyframe: sixteen superblocks, four coded blocks. Loop filter,
 segmentation, and probability updates are off. Default size 8 keeps the
 original file bytes.
 """
@@ -297,6 +298,72 @@ def write_tile_128(encoder: BoolEncoder) -> None:
             walk(sb_row, sb_col, 64)
 
 
+# Top-left 8x8 of each quadrant of superblocks.
+CODED_256 = {(0, 0), (0, 16), (16, 0), (16, 16)}
+
+
+def write_tile_256(encoder: BoolEncoder) -> None:
+    """One intra 256x256. Sixteen superblocks, still a single keyframe."""
+    above = [0] * 32
+    left = [0] * 32
+    skips = [[0] * 32 for _ in range(32)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 32 or col >= 32:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 32
+        has_cols = col + half < 32
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_256:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in (0, 8, 16, 24):
+        for i in range(32):
+            left[i] = 0
+        for sb_col in (0, 8, 16, 24):
+            walk(sb_row, sb_col, 64)
+
+
 def tile(size: int) -> bytes:
     encoder = BoolEncoder()
     encoder.write(128, 0)
@@ -323,6 +390,8 @@ def tile(size: int) -> bytes:
         write_tile_64(encoder)
     elif size == 128:
         write_tile_128(encoder)
+    elif size == 256:
+        write_tile_256(encoder)
     elif size == 16:
         # Keyframe partition context 4, split: three 1-bits.
         encoder.write(149, 1)
@@ -389,8 +458,8 @@ def main() -> None:
     args = sys.argv[1:]
     size = 8
     if args and args[0] == "--size":
-        if len(args) < 2 or args[1] not in ("8", "16", "32", "64", "128"):
-            raise SystemExit("usage: gen-keyframe.py [--size 8|16|32|64|128] [path]")
+        if len(args) < 2 or args[1] not in ("8", "16", "32", "64", "128", "256"):
+            raise SystemExit("usage: gen-keyframe.py [--size 8|16|32|64|128|256] [path]")
         size = int(args[1])
         args = args[2:]
     destination = pathlib.Path(args[0]) if args else None
