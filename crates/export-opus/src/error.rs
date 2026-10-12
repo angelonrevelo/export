@@ -9,8 +9,8 @@ pub enum Error {
     /// or is not the one mono 48 kHz 20 ms frame this crate accepts.
     BadToc,
     /// Multistream, in-band FEC, a stereo packet other than the one prepared
-    /// 20 ms packet, or PCM other than silence and the one half-scale 440 Hz
-    /// frame.
+    /// 20 ms packet, or PCM other than silence, the one half-scale 440 Hz
+    /// frame, and that frame's quarter-scale right channel.
     Unsupported,
 }
 

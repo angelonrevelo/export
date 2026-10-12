@@ -43,6 +43,13 @@ pub fn sine_third_frame() -> [i16; FRAME_SAMPLES] {
     sine_third::SINE_FRAME_3
 }
 
+/// Stereo PCM this crate can encode: left half-scale 440 Hz, right quarter-scale.
+///
+/// Any other pair is rejected. This is not a song encoder.
+pub fn stereo_source() -> ([i16; FRAME_SAMPLES], [i16; FRAME_SAMPLES]) {
+    (sine_frame::SINE_SOURCE, stereo_frame::STEREO_RIGHT_SOURCE)
+}
+
 /// PCM sample rate for the one frame this crate handles.
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
 
@@ -98,7 +105,9 @@ mod tests {
 
     #[test]
     fn prepared_stereo_packet_decodes_two_channels() {
-        let stereo = encode_stereo_frame();
+        let (left, right) = stereo_source();
+        let stereo = encode_stereo_frame(&left, &right).unwrap();
+        assert_eq!(stereo.as_slice(), stereo_frame::STEREO_PACKET.as_slice());
         assert_eq!(stereo.len(), 160);
         assert_eq!(stereo[0] & 0x04, 0x04);
         let decoded = decode(&stereo, 1, false).unwrap();
@@ -113,6 +122,9 @@ mod tests {
         assert!(mean_square(&pcm.right) > 4_000 * 4_000);
         assert_eq!(decode(&stereo, 2, false), Err(Error::Unsupported));
         assert_eq!(decode(&stereo, 1, true), Err(Error::Unsupported));
+        let mut other = right;
+        other[0] = other[0].wrapping_add(1);
+        assert_eq!(encode_stereo_frame(&left, &other), Err(Error::Unsupported));
     }
 
     #[test]

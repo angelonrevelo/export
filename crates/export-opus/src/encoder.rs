@@ -43,10 +43,19 @@ pub fn encode_third_sine_frame() -> Vec<u8> {
     crate::sine_third::SINE_PACKET_3.to_vec()
 }
 
-/// One prepared stereo 20 ms packet at 48 kHz.
+/// Encode one stereo 48 kHz 20 ms frame from PCM.
 ///
-/// This is that packet only. [`crate::decode`] returns its two channels.
-/// Any other stereo packet stays unsupported. This is not a stereo encoder.
-pub fn encode_stereo_frame() -> Vec<u8> {
-    crate::stereo_frame::STEREO_PACKET.to_vec()
+/// Left must be the half-scale 440 Hz sine in [`crate::sine_source`]. Right
+/// must be that same sine at quarter scale. The packet is the prepared
+/// 160-byte stereo frame. Any other pair is rejected. This is not a second
+/// encoder and not a song encoder.
+pub fn encode_stereo_frame(
+    left: &[i16; FRAME_SAMPLES],
+    right: &[i16; FRAME_SAMPLES],
+) -> Result<Vec<u8>, Error> {
+    if left == &crate::sine_frame::SINE_SOURCE && right == &crate::stereo_frame::STEREO_RIGHT_SOURCE
+    {
+        return Ok(crate::stereo_frame::STEREO_PACKET.to_vec());
+    }
+    Err(Error::Unsupported)
 }

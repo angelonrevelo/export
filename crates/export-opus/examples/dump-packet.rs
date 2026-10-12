@@ -11,7 +11,7 @@
 
 use export_opus::{
     decode, encode, encode_second_sine_frame, encode_stereo_frame, encode_third_sine_frame,
-    sine_followed_frame, sine_third_frame, Pcm, FRAME_SAMPLES,
+    sine_followed_frame, sine_third_frame, stereo_source, Pcm, FRAME_SAMPLES,
 };
 use std::env;
 use std::fs;
@@ -94,7 +94,14 @@ fn expect_mono(packet: &[u8]) -> [i16; FRAME_SAMPLES] {
 fn dump_stereo(mut args: impl Iterator<Item = String>) -> ExitCode {
     let packet_path = args.next().unwrap_or_else(|| "stereo.opus".to_string());
     let pcm_path = args.next().unwrap_or_else(|| "stereo.pcm".to_string());
-    let packet = encode_stereo_frame();
+    let (source_left, source_right) = stereo_source();
+    let packet = match encode_stereo_frame(&source_left, &source_right) {
+        Ok(packet) => packet,
+        Err(err) => {
+            eprintln!("stereo encode failed: {err}");
+            return ExitCode::from(1);
+        }
+    };
     let (left, right) = match decode(&packet, 1, false) {
         Ok(Pcm::Stereo(pcm)) => (pcm.left, pcm.right),
         Ok(Pcm::Mono(_)) => {

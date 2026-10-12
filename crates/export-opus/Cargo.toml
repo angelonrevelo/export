@@ -34,6 +34,11 @@ name = "sine-third"
 path = "benches/sine_third.rs"
 harness = false
 
+[[bench]]
+name = "stereo"
+path = "benches/stereo.rs"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "thin"
