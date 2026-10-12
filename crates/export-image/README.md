@@ -96,6 +96,12 @@ Four-frame animation, a later release run on 16×16 frames. The two-frame row ab
 | --- | --- | --- | --- | --- | --- |
 | four-frame VP8 animation encode, 16×16 (output 306 bytes) | 40 | 39.5 µs | 52.4 µs | 77.75 (p99 58.67) | file MB/s p50 7.75; 59 allocs; 57,617.19 allocs/MP |
 
+64×64 two-frame animation, a later release run. It uses the same keyframe encoder; 64 is a multiple of 16, so no new entropy coder. The 16×16 rows above were not replaced. `decode_webp_animation` returned both frames. `decode_webp` on the file still returns `Unsupported`.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| two-frame VP8 animation encode, 64×64 (output 200 bytes) | 40 | 114.2 µs | 128.4 µs | 215.19 (p99 191.42) | file MB/s p50 1.75; 36 allocs; 4,394.53 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
