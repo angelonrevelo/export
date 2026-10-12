@@ -1,9 +1,9 @@
 use export_sheet::{
     convert_bytes, generated_biff_xls, generated_biff_xls_numeric_column,
     generated_biff_xls_sum_cache, generated_biff_xls_sum_uncached,
-    generated_biff_xls_sum_uncached_area, generated_biff_xls_sum_uncached_area_four,
-    generated_biff_xls_sum_uncached_four, generated_biff_xls_sum_uncached_three,
-    generated_biff_xls_two_numbers, Format, Options,
+    generated_biff_xls_sum_uncached_area, generated_biff_xls_sum_uncached_area_column,
+    generated_biff_xls_sum_uncached_area_four, generated_biff_xls_sum_uncached_four,
+    generated_biff_xls_sum_uncached_three, generated_biff_xls_two_numbers, Format, Options,
 };
 
 #[test]
@@ -91,6 +91,14 @@ fn uncached_sum_of_a_four_cell_range_is_ten() {
     let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
     assert_eq!(stats.rows, 1);
     assert_eq!(csv, b"1,2,3,4,10\n");
+}
+
+#[test]
+fn uncached_sum_of_column_a1_a3_is_six() {
+    let file = generated_biff_xls_sum_uncached_area_column();
+    let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
+    assert_eq!(stats.rows, 4);
+    assert_eq!(csv, b"1\n2\n3\n6\n");
 }
 
 #[test]

@@ -36,7 +36,8 @@
 //! four numeric cells with no cached number is those four cells added. A SUM of
 //! one contiguous three-cell range with no cached number is those three cells
 //! added. A SUM of one contiguous four-cell range with no cached number is
-//! those four cells added. Any other uncached expression is refused. A file that is not BIFF
+//! those four cells added. A SUM of the column A1:A3 with no cached number is
+//! those three cells added. Any other uncached expression is refused. A file that is not BIFF
 //! is refused. `CONTINUE`,
 //! rich shared strings, and encryption are refused rather than guessed.
 
@@ -57,6 +58,7 @@ pub use xls::generated_biff_xls_numeric_column;
 pub use xls::generated_biff_xls_sum_cache;
 pub use xls::generated_biff_xls_sum_uncached;
 pub use xls::generated_biff_xls_sum_uncached_area;
+pub use xls::generated_biff_xls_sum_uncached_area_column;
 pub use xls::generated_biff_xls_sum_uncached_area_four;
 pub use xls::generated_biff_xls_sum_uncached_four;
 pub use xls::generated_biff_xls_sum_uncached_three;

@@ -71,6 +71,11 @@ pub fn generated_biff_xls_sum_uncached_area_four() -> Vec<u8> {
     wrap_ole(&workbook_sum_uncached_area_four())
 }
 
+/// A1 = 1, A2 = 2, A3 = 3, A4 = SUM of the column A1:A3 with no cached number.
+pub fn generated_biff_xls_sum_uncached_area_column() -> Vec<u8> {
+    wrap_ole(&workbook_sum_uncached_area_column())
+}
+
 pub(crate) fn to_delim<R: BufRead, W: Write>(
     mut input: R,
     output: &mut W,
@@ -374,6 +379,51 @@ fn formula_sum_uncached_area_four(row: u16, col: u16) -> Vec<u8> {
         0x00, 0x00, // last row
         0x00, 0x00, // first column, A
         0x03, 0x00, // last column, D
+        0x42, 0x01, 0x04, 0x00, // PtgFuncVar value, 1 arg, SUM
+    ];
+    let mut data = Vec::with_capacity(22 + rgce.len());
+    data.extend_from_slice(&row.to_le_bytes());
+    data.extend_from_slice(&col.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF]);
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
+    data.extend_from_slice(&rgce);
+    data
+}
+
+fn workbook_sum_uncached_area_column() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = dimensions();
+    dims[4..8].copy_from_slice(&4u32.to_le_bytes());
+    dims[10..12].copy_from_slice(&1u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    push_rec(&mut out, 0x0203, &number_cell(0, 0, 1.0));
+    push_rec(&mut out, 0x0203, &number_cell(1, 0, 2.0));
+    push_rec(&mut out, 0x0203, &number_cell(2, 0, 3.0));
+    push_rec(&mut out, 0x0006, &formula_sum_uncached_area_column(3, 0));
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
+/// SUM(A1:A3) with an empty formula value. The same area token, running down column A.
+fn formula_sum_uncached_area_column(row: u16, col: u16) -> Vec<u8> {
+    let rgce = [
+        0x45, // PtgArea value
+        0x00, 0x00, // first row, 1
+        0x02, 0x00, // last row, 3
+        0x00, 0x00, // first column, A
+        0x00, 0x00, // last column, A
         0x42, 0x01, 0x04, 0x00, // PtgFuncVar value, 1 arg, SUM
     ];
     let mut data = Vec::with_capacity(22 + rgce.len());
@@ -1567,6 +1617,58 @@ mod tests {
             i += 4 + len;
         }
         let err = parse_workbook(&wider).unwrap_err();
+        assert!(err.message().contains("no cached number"), "{err}");
+        let mut other = stream;
+        let mut i = 0;
+        while i + 4 <= other.len() {
+            let op = u16::from_le_bytes(other[i..i + 2].try_into().unwrap());
+            if op == 0x0006 {
+                other[i + 4 + 22 + 11] = 5;
+                break;
+            }
+            let len = u16::from_le_bytes(other[i + 2..i + 4].try_into().unwrap()) as usize;
+            i += 4 + len;
+        }
+        let err = parse_workbook(&other).unwrap_err();
+        assert!(err.message().contains("no cached number"), "{err}");
+    }
+
+    #[test]
+    fn uncached_sum_adds_one_three_cell_column() {
+        let stream = workbook_sum_uncached_area_column();
+        let formula = record(&stream, 0x0006);
+        assert_eq!(formula.len(), 35);
+        assert_eq!(formula[6], 0x03);
+        assert_eq!(
+            u16::from_le_bytes(formula[12..14].try_into().unwrap()),
+            0xFFFF
+        );
+        assert_eq!(
+            &formula[22..],
+            &[0x45, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42, 0x01, 0x04, 0x00,]
+        );
+        let rows = parse_workbook(&stream).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec!["1".to_string()],
+                vec!["2".to_string()],
+                vec!["3".to_string()],
+                vec!["6".to_string()]
+            ]
+        );
+        let mut longer = stream.clone();
+        let mut i = 0;
+        while i + 4 <= longer.len() {
+            let op = u16::from_le_bytes(longer[i..i + 2].try_into().unwrap());
+            if op == 0x0006 {
+                longer[i + 4 + 22 + 3] = 4;
+                break;
+            }
+            let len = u16::from_le_bytes(longer[i + 2..i + 4].try_into().unwrap()) as usize;
+            i += 4 + len;
+        }
+        let err = parse_workbook(&longer).unwrap_err();
         assert!(err.message().contains("no cached number"), "{err}");
         let mut other = stream;
         let mut i = 0;
