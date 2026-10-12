@@ -913,6 +913,18 @@ pub(crate) fn from_lines_with_two_images(
     )?])
 }
 
+/// One-page text PDF that paints three FlateDecode image XObjects, then the text.
+pub(crate) fn from_lines_with_three_images(
+    lines: &[Line],
+    pictures: [(u32, u32, &[u8]); 3],
+) -> Result<Vec<u8>> {
+    let mut packed = Vec::with_capacity(3);
+    for (width, height, rgb) in pictures {
+        packed.push((width, height, flate_image(width, height, rgb)?));
+    }
+    assemble(vec![page_with_three_images(lines, &packed)?])
+}
+
 fn flate_image(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
     let pixels = (width as usize)
         .checked_mul(height as usize)
@@ -1133,6 +1145,80 @@ fn page_with_two_images(
         objs: vec![stream, page, first, second],
         page: 1,
     })
+}
+
+fn page_with_three_images(lines: &[Line], pictures: &[(u32, u32, Vec<u8>)]) -> Result<Graph> {
+    let (w0, h0, _) = &pictures[0];
+    let (w1, h1, _) = &pictures[1];
+    let (w2, h2, _) = &pictures[2];
+    let y1 = MARGIN + *h0 as f32;
+    let y2 = y1 + *h1 as f32;
+    let mut content = format!(
+        "q {w0} 0 0 {h0} {MARGIN:.2} {MARGIN:.2} cm /Im1 Do Q\nq {w1} 0 0 {h1} {MARGIN:.2} {y1:.2} cm /Im2 Do Q\nq {w2} 0 0 {h2} {MARGIN:.2} {y2:.2} cm /Im3 Do Q\nBT\n"
+    );
+    let mut y = PAGE_H as f32 - MARGIN;
+    for line in lines {
+        let lead = if line.leading > 0.0 { line.leading } else { 14.0 };
+        let size = line.spans.first().map(|s| s.size).unwrap_or(11.0);
+        y -= lead;
+        let baseline = y + (lead - size).max(0.0) * 0.2;
+        content.push_str(&format!("1 0 0 1 {MARGIN:.2} {baseline:.2} Tm\n"));
+        for span in &line.spans {
+            let font = match span.font {
+                1 => "F2",
+                2 => "F3",
+                3 => "F4",
+                _ => "F1",
+            };
+            content.push_str(&format!("/{font} {size:.2} Tf\n", size = span.size));
+            content.push_str(&pdf_string(&span.text));
+            content.push_str(" Tj\n");
+        }
+    }
+    content.push_str("ET\n");
+    let data = content.into_bytes();
+    let stream = Obj::Stream {
+        dict: vec![("Length".into(), Obj::Int(data.len() as i64))],
+        data,
+    };
+    let fonts = Obj::Dict(vec![
+        ("F1".into(), helvetica("Helvetica")),
+        ("F2".into(), helvetica("Helvetica-Bold")),
+        ("F3".into(), helvetica("Helvetica-Oblique")),
+        ("F4".into(), helvetica("Helvetica-BoldOblique")),
+    ]);
+    let page = Obj::Dict(vec![
+        ("Type".into(), Obj::Name("Page".into())),
+        (
+            "MediaBox".into(),
+            Obj::Arr(vec![
+                Obj::Int(0),
+                Obj::Int(0),
+                Obj::Int(PAGE_W),
+                Obj::Int(PAGE_H),
+            ]),
+        ),
+        ("Contents".into(), Obj::Ref(0)),
+        (
+            "Resources".into(),
+            Obj::Dict(vec![
+                ("Font".into(), fonts),
+                (
+                    "XObject".into(),
+                    Obj::Dict(vec![
+                        ("Im1".into(), Obj::Ref(2)),
+                        ("Im2".into(), Obj::Ref(3)),
+                        ("Im3".into(), Obj::Ref(4)),
+                    ]),
+                ),
+            ]),
+        ),
+    ]);
+    let mut objs = vec![stream, page];
+    for (width, height, flate) in pictures {
+        objs.push(flate_image_obj(*width, *height, flate));
+    }
+    Ok(Graph { objs, page: 1 })
 }
 
 fn flate_image_obj(width: u32, height: u32, flate: &[u8]) -> Obj {

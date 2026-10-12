@@ -53,8 +53,10 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
 /// image. Two text shapes plus one 8-bit DIB picture become a text PDF when
 /// both strings are in the text and the picture is an image. One text shape
 /// plus two 8-bit DIB pictures becomes a text PDF when the string is in the
-/// text and both pictures are images. Other bit depths stay a miss. The
-/// published 2,560-byte one-shape file stays a miss.
+/// text and both pictures are images. One text shape plus three 8-bit DIB
+/// pictures becomes a text PDF when the string is in the text and all three
+/// pictures are images. Other bit depths stay a miss. The published
+/// 2,560-byte one-shape file stays a miss.
 pub fn ppt_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let (input_bytes, bytes) = load_file(src)?;
     let texts = match parse_ppt(&bytes) {
@@ -178,6 +180,15 @@ fn write_picture_pdf<W: Write>(
             second_rgb,
         )
         .map_err(|err| miss(input_bytes, &err.message))?
+    } else if pictures.len() == 3 && texts.len() == 1 {
+        let (w0, h0, rgb0) = &pictures[0];
+        let (w1, h1, rgb1) = &pictures[1];
+        let (w2, h2, rgb2) = &pictures[2];
+        crate::pdf::from_lines_with_three_images(
+            &lines,
+            [(*w0, *h0, rgb0.as_slice()), (*w1, *h1, rgb1.as_slice()), (*w2, *h2, rgb2.as_slice())],
+        )
+        .map_err(|err| miss(input_bytes, &err.message))?
     } else {
         return Ok(None);
     };
@@ -279,7 +290,7 @@ fn list_text_picture(body: &[u8]) -> Option<(Vec<String>, Vec<PictureRgb>)> {
             RT_PICTURE => {
                 if pending
                     || texts.is_empty()
-                    || pictures.len() == 2
+                    || pictures.len() == 3
                     || rec.ver != 0
                     || rec.instance != PICTURE_INSTANCE
                 {
@@ -679,6 +690,26 @@ pub fn ppt_text_two_indexed_document(text: &str) -> Result<Vec<u8>> {
     pack_cfb(&document_with_pictures(
         &[text.as_bytes()],
         &[&first_blip, &second_blip],
+    ))
+}
+
+/// Compound file with one text shape and three 8-bit DIB pictures.
+pub fn ppt_text_three_indexed_document(text: &str) -> Result<Vec<u8>> {
+    if !plain_shape(text) {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    let mut blips = Vec::with_capacity(3);
+    for add in [0u8, 1, 2] {
+        let dib = encode_dib8_index(80, 64, add).ok_or_else(|| Error::new("picture is not a dib"))?;
+        let mut blip = vec![0u8; 17];
+        blip[0] = 0xA1;
+        blip[16] = 0xFF;
+        blip.extend(dib);
+        blips.push(blip);
+    }
+    pack_cfb(&document_with_pictures(
+        &[text.as_bytes()],
+        &[&blips[0], &blips[1], &blips[2]],
     ))
 }
 
@@ -1509,9 +1540,56 @@ mod tests {
     }
 
     #[test]
-    fn three_pictures_stay_a_miss() {
+    fn one_text_and_three_eight_bit_pictures_become_pdf() {
+        let text = three_indexed_picture_text();
+        let file = ppt_text_three_indexed_document(&text).unwrap();
+        for banned in [2560, 5632, 6656, 7168, 7680, 8704, 9216, 9728, 14336, 14848] {
+            assert_ne!(file.len(), banned);
+        }
+        let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        let got = crate::pdf::plain_text(&pdf).unwrap();
+        assert!(got.contains(&text), "{got}");
+        let (width, height, first_rgb) = expected_indexed_rgb_add(0);
+        let (_, _, second_rgb) = expected_indexed_rgb_add(1);
+        let (_, _, third_rgb) = expected_indexed_rgb_add(2);
+        assert_ne!(first_rgb, second_rgb);
+        assert_ne!(second_rgb, third_rgb);
+        assert_ne!(first_rgb, third_rgb);
+        assert!(crate::pdf::contains_image(&pdf, width, height, &first_rgb).unwrap());
+        assert!(crate::pdf::contains_image(&pdf, width, height, &second_rgb).unwrap());
+        assert!(crate::pdf::contains_image(&pdf, width, height, &third_rgb).unwrap());
+        assert!(pdf.windows(8).any(|w| w == b"/Im1 Do "));
+        assert!(pdf.windows(8).any(|w| w == b"/Im2 Do "));
+        assert!(pdf.windows(8).any(|w| w == b"/Im3 Do "));
+        let two = ppt_text_two_indexed_document(&two_indexed_picture_text()).unwrap();
+        let two_pdf = crate::convert::convert("ppt", "pdf", &two).unwrap();
+        assert_eq!(two.len(), 14848);
+        assert_eq!(two_pdf.len(), 2816);
+        let (first, second) = two_indexed_slide_text();
+        let shapes = ppt_two_text_indexed_document(&first, &second).unwrap();
+        let shapes_pdf = crate::convert::convert("ppt", "pdf", &shapes).unwrap();
+        assert_eq!(shapes.len(), 9728);
+        assert_eq!(shapes_pdf.len(), 3085);
+        let nibble = ppt_text_nibble_document(&nibble_slide_text()).unwrap();
+        let nibble_pdf = crate::convert::convert("ppt", "pdf", &nibble).unwrap();
+        assert_eq!(nibble.len(), 9216);
+        assert_eq!(nibble_pdf.len(), 2469);
+    }
+
+    fn three_indexed_picture_text() -> String {
+        let mut text = String::new();
+        for i in 0..12 {
+            text.push_str(&format!(
+                "Triple indexed shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        text
+    }
+
+    #[test]
+    fn four_pictures_stay_a_miss() {
         let blip = tiny_indexed_blip(0);
-        let stream = document_with_pictures(&[b"One shape."], &[&blip, &blip, &blip]);
+        let stream = document_with_pictures(&[b"One shape."], &[&blip, &blip, &blip, &blip]);
         let file = pack_cfb(&stream).unwrap();
         let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
