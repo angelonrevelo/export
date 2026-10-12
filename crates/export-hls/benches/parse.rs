@@ -2,7 +2,8 @@
 //!
 //! Parse timings and the bulk local-stack GETs run on one thread. The
 //! one-segment, two-segment, four-segment, eight-segment, map-and-eight-segment,
-//! map-and-sixteen-segment, sixteen-segment, sixteen-range, coalesced-range,
+//! map-and-sixteen-segment, map-and-thirty-two-segment, sixteen-segment,
+//! sixteen-range, coalesced-range,
 //! and split-range fetches call the library client and use one local accept
 //! thread beside the client.
 //! Loopback GETs run only here, on 127.0.0.1. They are not CDN downloads.
@@ -121,6 +122,14 @@ fn main() {
         Ok(report) => println!("{report}"),
         Err(err) => {
             eprintln!("local stack map-and-sixteen-segment GET failed: {err}");
+            std::process::exit(1);
+        }
+    }
+
+    match local_stack_map_and_thirty_two_segment_row() {
+        Ok(report) => println!("{report}"),
+        Err(err) => {
+            eprintln!("local stack map-and-thirty-two-segment GET failed: {err}");
             std::process::exit(1);
         }
     }
@@ -905,6 +914,111 @@ fn local_stack_map_and_sixteen_segment_row() -> Result<String, Box<dyn std::erro
     let p99 = percentile(&sorted, 0.99);
     Ok(format!(
         "local stack map-and-sixteen-segment GET connections=1 bytes={PAYLOAD_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+    ))
+}
+
+/// One media playlist names an `#EXT-X-MAP` init segment and thirty-two media
+/// segments on one address. The init file and the thirty-two media files are
+/// fetched with [`Fetcher::get_segments`] on one local-stack connection.
+///
+/// Loopback is allowed only here. `check_hop` still runs inside the client
+/// before the connect and again on any redirect. The bodies are raw text,
+/// not a transcode. The reported byte count is the init body plus the
+/// thirty-two media bodies.
+fn local_stack_map_and_thirty_two_segment_row() -> Result<String, Box<dyn std::error::Error>> {
+    const INIT_BYTES: usize = 1024;
+    const SEGMENT_BYTES: usize = 64 * 1024;
+    const COUNT: usize = 32;
+    const PAYLOAD_BYTES: usize = INIT_BYTES + SEGMENT_BYTES * COUNT;
+    let init = vec![b'i'; INIT_BYTES];
+    let media: Vec<Vec<u8>> = (0..COUNT)
+        .map(|index| vec![b'a'.wrapping_add(index as u8); SEGMENT_BYTES])
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let init_url = format!("http://127.0.0.1:{port}/init.mp4");
+    let urls: Vec<String> = (0..COUNT)
+        .map(|index| format!("http://127.0.0.1:{port}/seg{index}.ts"))
+        .collect();
+    if check_hop(&init_url, ConnectPolicy::default()) != Err(Error::Blocked) {
+        return Err("loopback init was accepted without the bench opt-in".into());
+    }
+    for url in &urls {
+        if check_hop(url, ConnectPolicy::default()) != Err(Error::Blocked) {
+            return Err("loopback segment was accepted without the bench opt-in".into());
+        }
+    }
+    let mut playlist_text = format!(
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:10\n#EXT-X-MAP:URI=\"{init_url}\"\n"
+    );
+    for url in &urls {
+        playlist_text.push_str("#EXTINF:10.0,\n");
+        playlist_text.push_str(url);
+        playlist_text.push('\n');
+    }
+    playlist_text.push_str("#EXT-X-ENDLIST\n");
+    let playlist = parse_media_playlist(&playlist_text)?;
+    if playlist.segments.len() != COUNT {
+        return Err("playlist did not name thirty-two cleartext segments".into());
+    }
+    let parsed_init = playlist
+        .init
+        .as_ref()
+        .ok_or("playlist did not name an init segment")?;
+    if parsed_init.uri != init_url || parsed_init.byte_range.is_some() {
+        return Err("init URI did not stay a whole-file map".into());
+    }
+    for (index, segment) in playlist.segments.iter().enumerate() {
+        if segment.uri != urls[index] || segment.map.as_ref() != Some(parsed_init) {
+            return Err("media segment did not keep the shared init map".into());
+        }
+    }
+    let mut paths = Vec::with_capacity(COUNT + 1);
+    paths.push("/init.mp4".to_string());
+    for index in 0..COUNT {
+        paths.push(format!("/seg{index}.ts"));
+    }
+    let mut bodies = Vec::with_capacity(COUNT + 1);
+    bodies.push(init);
+    bodies.extend(media);
+    let fetcher = Fetcher {
+        policy: ConnectPolicy::new(true),
+        timeout: Duration::from_secs(2),
+        max_redirects: 5,
+        max_body_bytes: 8 * 1024 * 1024,
+    };
+    let warmup = 5;
+    let iters = 100;
+    let samples = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            serve_ordered_cleartext(listener, &paths, &bodies, warmup + iters);
+        });
+        let mut samples = Vec::with_capacity(iters);
+        for index in 0..(warmup + iters) {
+            let started = Instant::now();
+            let got = fetcher
+                .get_segments(&playlist)
+                .expect("init and thirty-two cleartext segments");
+            let elapsed = started.elapsed().as_nanos() as f64;
+            let payload: usize = got.iter().map(Vec::len).sum();
+            assert_eq!(got.len(), COUNT + 1);
+            for (part, body) in got.iter().zip(bodies.iter()) {
+                assert_eq!(part, body);
+            }
+            assert_eq!(payload, PAYLOAD_BYTES);
+            if index >= warmup {
+                samples.push(elapsed);
+            }
+            std::hint::black_box(payload);
+        }
+        samples
+    });
+    let mut sorted = samples;
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let p50 = percentile(&sorted, 0.50);
+    let p99 = percentile(&sorted, 0.99);
+    Ok(format!(
+        "local stack map-and-thirty-two-segment GET connections=1 bytes={PAYLOAD_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
 }
 
