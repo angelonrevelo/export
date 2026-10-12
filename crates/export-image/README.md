@@ -150,6 +150,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | VP8 animation decode, 64×64 canvas, 16×16 painted at (16, 32) | 40 | 64.9 µs | 95.5 µs | 378.40 (p99 257.44) | file MB/s p50 2.93; 14 allocs; 1,708.98 allocs/MP |
 
+`decode_webp` of that same 190-byte file, a later release run. It returns the composited 64×64 canvas. Those pixels match the painted overlay. p50 is 66.4 µs, under the 116 µs cap, so this return stays. Pixel MB/s uses that one canvas. A non-animation still decode of the canvas was unchanged, and the origin-zero animation still returns `Unsupported`. The animation-decode row above and the encode rows (190 bytes at 57.1 µs and 58.0 µs) were not replaced.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| `decode_webp`, 64×64 canvas, 16×16 painted at (16, 32) | 40 | 66.4 µs | 91.7 µs | 185.03 (p99 134.07) | file MB/s p50 2.86; 14 allocs; 3,417.97 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
