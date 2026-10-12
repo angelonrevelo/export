@@ -1,0 +1,36 @@
+[package]
+name = "export-opus"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "One Opus packet: mono, 48 kHz, one 20 ms frame."
+readme = "README.md"
+publish = false
+
+# Standalone crate. An empty workspace table keeps this package out of any
+# parent workspace so the root manifest does not need to change.
+[workspace]
+
+[lib]
+name = "export_opus"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[example]]
+name = "dump-packet"
+path = "examples/dump-packet.rs"
+
+[[bench]]
+name = "packet"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
