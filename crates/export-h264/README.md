@@ -2,7 +2,7 @@
 
 One baseline H.264 I-frame, and one P-frame after it. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
 
-This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. A zero-motion P-frame can follow it, one shifted picture can use quarter-pel motion (16, 0), and eight pictures can chain those choices from the previous reconstruction. It does not link or spawn ffmpeg.
+This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. A zero-motion P-frame can follow it, one shifted picture can use quarter-pel motion (16, 0), and eight pictures can chain those choices from the previous reconstruction. Sixteen 160×160 pictures use that same chain. It does not link or spawn ffmpeg.
 
 Chroma residual is the DC coefficient of each 4×4 block. Luma residual is a full 4×4 transform. Deblocking is off so a decoder's pixels are the inverse transform.
 
@@ -85,3 +85,12 @@ Same release profile and QP. The I-frame bytes are the 6,432-byte picture above,
 - mean absolute error, ffmpeg decode versus all eight sources: 3.3421. The I-frame half is still 3.3912. The seven P-frames are 3.3846, 3.3598, 3.3598, 3.3247, 3.3247, 3.2958, and 3.2958
 
 The ffmpeg decode matches the encoder reconstruction. `scripts/check-sequence160.sh` may run ffmpeg only to decode that file.
+
+## Sixteen 160×160 pictures
+
+Same profile and QP. One I-frame and fifteen P-frames. The hold-and-shift pattern of the eight-picture file continues. The I-frame bytes are still the 6,432-byte picture. 200 calls after 20 warmup.
+
+- output: 7814 bytes
+- release p50: 2632 µs on the recorded run. Three later runs on that binary were 2593–2704 µs
+
+ffmpeg decoded all 16 pictures and matched the encoder reconstruction. Mean absolute error versus the sources was 3.2864. The I-frame half is still 3.3912. `scripts/check-sixteen160.sh` may run ffmpeg only to decode that file.

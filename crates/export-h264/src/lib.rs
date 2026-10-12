@@ -5,7 +5,7 @@
 //! slice, and one QP covers each frame. I-frame prediction is intra DC.
 //! [`encode_ip`] writes one P slice with motion zero and that I-frame as its
 //! only reference. [`encode_ip_motion`] uses one shared 16×16 vector instead.
-//! [`encode_sequence`] writes that I-frame plus up to seven P-frames. Each
+//! [`encode_sequence`] writes that I-frame plus up to fifteen P-frames. Each
 //! P-frame references the previous reconstruction and uses either zero motion
 //! or one shared vector.
 //! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
@@ -270,7 +270,7 @@ pub struct EncodedSequence {
     pub qp: u8,
 }
 
-/// I-frame, then one to seven P-frames.
+/// I-frame, then one to fifteen P-frames.
 ///
 /// Each P-frame is predicted from the previous picture's reconstruction.
 /// The last P-frame is not itself a reference. A single P-frame with the same
@@ -285,7 +285,7 @@ pub fn encode_sequence(
     if matches!(opts.picture, Picture::Bipredicted) {
         return Err(Error::BipredictedFrame);
     }
-    if predicted.is_empty() || predicted.len() > 7 {
+    if predicted.is_empty() || predicted.len() > 15 {
         return Err(Error::Count);
     }
     for frame in predicted {
@@ -442,18 +442,23 @@ fn shift_frame(src: &Yuv420, dx_luma: i32) -> Yuv420 {
 /// The first, third, fifth, and seventh P-frames hold still. The others move
 /// four luma samples left and use [`SHIFTED_MV`].
 pub fn fixture_32x32_eight() -> (Yuv420, Vec<PredictedFrame>) {
-    eight_from(fixture_32x32())
+    sequence_from(fixture_32x32(), 7)
 }
 
 /// Eight 160×160 pictures, with the same hold-and-shift pattern as [`fixture_32x32_eight`].
 pub fn fixture_160x160_eight() -> (Yuv420, Vec<PredictedFrame>) {
-    eight_from(fixture_160x160())
+    sequence_from(fixture_160x160(), 7)
 }
 
-fn eight_from(intra: Yuv420) -> (Yuv420, Vec<PredictedFrame>) {
+/// Sixteen 160×160 pictures. Same hold-and-shift pattern, continued for fifteen P-frames.
+pub fn fixture_160x160_sixteen() -> (Yuv420, Vec<PredictedFrame>) {
+    sequence_from(fixture_160x160(), 15)
+}
+
+fn sequence_from(intra: Yuv420, pframes: usize) -> (Yuv420, Vec<PredictedFrame>) {
     let mut picture = intra.clone();
-    let mut predicted = Vec::with_capacity(7);
-    for index in 0..7 {
+    let mut predicted = Vec::with_capacity(pframes);
+    for index in 0..pframes {
         let motion = if index % 2 == 1 {
             picture = shift_frame(&picture, 4);
             SHIFTED_MV

@@ -1,8 +1,8 @@
 use export_h264::{
     encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_160x160_eight,
-    fixture_160x160_predicted, fixture_160x160_shifted, fixture_32x32, fixture_32x32_eight,
-    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
-    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
+    fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_32x32,
+    fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error,
+    EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
 };
 
 #[test]
@@ -212,7 +212,7 @@ fn eight_pictures_keep_the_iframe_prefix() {
             picture: intra.clone(),
             motion: Motion { mvx: 0, mvy: 0 },
         };
-        8
+        16
     ];
     assert_eq!(
         encode_sequence(&intra, &too_many, &opts).unwrap_err(),
@@ -380,6 +380,39 @@ fn larger_sequence_keeps_the_iframe_prefix() {
         )
         .unwrap_err(),
         Error::SecondPass
+    );
+}
+
+#[test]
+fn sixteen_pictures_keep_the_iframe() {
+    let opts = EncodeOptions::default();
+    let (intra, predicted) = fixture_160x160_sixteen();
+    assert_eq!(predicted.len(), 15);
+    let alone = encode(&intra, &opts).unwrap();
+    assert_eq!(alone.annex_b.len(), 6432);
+    let eight = encode_sequence(&intra, &fixture_160x160_eight().1, &opts).unwrap();
+    assert_eq!(eight.annex_b.len(), 7197);
+    let sequence = encode_sequence(&intra, &predicted, &opts).unwrap();
+    assert_eq!(sequence.annex_b.len(), 7814);
+    assert_eq!(sequence.reconstructed.len(), 16);
+    assert_eq!(&sequence.annex_b[..6432], &alone.annex_b[..]);
+    assert_ne!(&sequence.annex_b[..7197], &eight.annex_b[..]);
+    let mut sum = 0.0;
+    for (src, rec) in predicted.iter().zip(sequence.reconstructed.iter().skip(1)) {
+        sum += mean_absolute_error(&src.picture, rec);
+    }
+    let mae = sum / 15.0;
+    assert!(mae < 8.0, "sixteen mae {mae}");
+    let too_many = vec![
+        PredictedFrame {
+            picture: intra.clone(),
+            motion: Motion { mvx: 0, mvy: 0 },
+        };
+        16
+    ];
+    assert_eq!(
+        encode_sequence(&intra, &too_many, &opts).unwrap_err(),
+        Error::Count
     );
 }
 
