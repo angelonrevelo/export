@@ -1,7 +1,8 @@
 //! ASS/SSA dialogue cues. One `{\b1}`...`{\b0}` pair on a dialogue line is kept,
 //! so that span stays bold. On a line that does not keep that bold pair, one
 //! `{\i1}`...`{\i0}` pair is kept. On a line that keeps neither, one
-//! `{\u1}`...`{\u0}` pair is kept. Every other override is stripped.
+//! `{\u1}`...`{\u0}` pair is kept. On a line that keeps none of those, one
+//! `{\s1}`...`{\s0}` pair is kept. Every other override is stripped.
 //! Style, actor, and margin fields are not preserved. That is the honest limit.
 
 use crate::parse::{Cue, Error};
@@ -141,6 +142,8 @@ fn strip_overrides(text: &str) -> String {
     let mut italic_kept = false;
     let mut underline_open = false;
     let mut underline_kept = false;
+    let mut strike_open = false;
+    let mut strike_kept = false;
     while i < bytes.len() {
         if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
             if let Some(rel) = bytes[i + 2..].iter().position(|&b| b == b'}') {
@@ -172,6 +175,24 @@ fn strip_overrides(text: &str) -> String {
                     out.push_str(tag);
                     underline_open = false;
                     underline_kept = true;
+                } else if !bold_kept
+                    && !italic_kept
+                    && !underline_kept
+                    && !strike_kept
+                    && !strike_open
+                    && tag == "{\\s1}"
+                {
+                    strike_open = true;
+                    out.push_str(tag);
+                } else if !bold_kept
+                    && !italic_kept
+                    && !underline_kept
+                    && strike_open
+                    && tag == "{\\s0}"
+                {
+                    out.push_str(tag);
+                    strike_open = false;
+                    strike_kept = true;
                 }
                 i = end;
                 continue;
@@ -210,16 +231,32 @@ fn strip_overrides(text: &str) -> String {
             drop_tag(&mut out, "{\\u1}");
             drop_tag(&mut out, "{\\u0}");
         }
+        if strike_open || strike_kept {
+            drop_tag(&mut out, "{\\s1}");
+            drop_tag(&mut out, "{\\s0}");
+        }
     } else if italic_kept {
         if underline_open || underline_kept {
             drop_tag(&mut out, "{\\u1}");
             drop_tag(&mut out, "{\\u0}");
+        }
+        if strike_open || strike_kept {
+            drop_tag(&mut out, "{\\s1}");
+            drop_tag(&mut out, "{\\s0}");
+        }
+    } else if underline_kept {
+        if strike_open || strike_kept {
+            drop_tag(&mut out, "{\\s1}");
+            drop_tag(&mut out, "{\\s0}");
         }
     } else if italic_open {
         drop_tag(&mut out, "{\\i1}");
     }
     if !bold_kept && !italic_kept && underline_open {
         drop_tag(&mut out, "{\\u1}");
+    }
+    if !bold_kept && !italic_kept && !underline_kept && strike_open {
+        drop_tag(&mut out, "{\\s1}");
     }
     out
 }
@@ -303,5 +340,26 @@ mod tests {
         let again = parse_ass(&written).unwrap();
         assert_eq!(again, cues);
         assert_eq!(again[3].text, "Plain cue");
+    }
+
+    #[test]
+    fn keeps_one_strikeout_pair_and_earlier_lines() {
+        let input = "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\an8}Hello {\\b1}there{\\b0} {\\i1}pal{\\i0} {\\b1}two{\\b0}\nDialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,{\\an8}Hello {\\i1}there{\\i0} {\\u1}pal{\\u0} {\\i1}two{\\i0}\nDialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,{\\an8}Hello {\\u1}there{\\u0} {\\s1}pal{\\s0} {\\u1}two{\\u0}\nDialogue: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,{\\an8}Hello {\\s1}there{\\s0} {\\a1}pal{\\a2} {\\s1}two{\\s0}\nDialogue: 0,0:00:05.00,0:00:06.00,Default,,0,0,0,,Plain cue\n";
+        let cues = parse_ass(input).unwrap();
+        assert_eq!(cues[0].text, "Hello {\\b1}there{\\b0} pal two");
+        assert_eq!(cues[1].text, "Hello {\\i1}there{\\i0} pal two");
+        assert_eq!(cues[2].text, "Hello {\\u1}there{\\u0} pal two");
+        assert_eq!(cues[3].text, "Hello {\\s1}there{\\s0} pal two");
+        assert_eq!(cues[4].text, "Plain cue");
+        let written = cues_to_ass(&cues);
+        assert!(written.contains("{\\b1}there{\\b0}"));
+        assert!(written.contains("{\\i1}there{\\i0}"));
+        assert!(written.contains("{\\u1}there{\\u0}"));
+        assert!(written.contains("{\\s1}there{\\s0}"));
+        assert!(!written.contains("{\\a"));
+        assert!(!written.contains("{\\an"));
+        let again = parse_ass(&written).unwrap();
+        assert_eq!(again, cues);
+        assert_eq!(again[4].text, "Plain cue");
     }
 }
