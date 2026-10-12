@@ -31,7 +31,8 @@ row=vp8_460800 samples=400 input_bytes=460960 output_bytes=460960 p50_ns=2084673
 # p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
 row=vp9 samples=2000 input_bytes=533 output_bytes=184 p50_ns=5557 p99_ns=7607 mb_s=95.915
 
-# One VP9 block whose payload is 4096 bytes. ffmpeg names the remux `Video: vp9`.
-# The payload is copied and is not decoded.
+# Padding. One VP9 block whose payload is the small VP9 frame followed by zero
+# bytes out to 4096. This is not a larger encoded picture. ffmpeg names the remux
+# `Video: vp9`. The payload is copied and is not decoded.
 # p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
 row=vp9_4096 samples=2000 input_bytes=4253 output_bytes=4253 p50_ns=15253 p99_ns=19775 mb_s=278.830

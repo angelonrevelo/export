@@ -80,8 +80,9 @@ fn vp8_padded_webm(payload_len: usize) -> Vec<u8> {
     remux(&movie).expect("padded vp8 webm")
 }
 
-/// One WebM block whose payload is 4096 bytes and begins with the VP9 frame
-/// from [`vp9_webm`]. The payload is copied and is not decoded.
+/// Padding. One WebM block whose payload is the small VP9 frame from
+/// [`vp9_webm`] followed by zero bytes out to 4096. This is not a larger
+/// encoded picture. The payload is copied and is not decoded.
 pub fn vp9_4096_webm() -> Vec<u8> {
     let parsed = demux(vp9_webm()).expect("one-block vp9 fixture");
     let frame = &parsed.blocks[0].payload;
