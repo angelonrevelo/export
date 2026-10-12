@@ -1314,4 +1314,32 @@ fn main() {
         mb_s(huge_pixels * 3.0, p50),
         allocs as f64 / (huge_pixels / 1_000_000.0),
     );
+
+    // Same gradient, next edge 3072×2304. Same cap. The 1536×1152 loop above is unchanged.
+    let vast = gradient(3072, 2304);
+    let vast_png = encode_png(&vast).unwrap();
+    for _ in 0..2 {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&vast_png, target, &mut c).unwrap();
+    }
+    let (p50, p99) = time_n(12, || {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&vast_png, target, &mut c).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let mut c = ShrinkCache::new();
+    let vast_out = shrink_png(&vast_png, target, &mut c).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let smaller = vast_out.bytes.len() < vast_png.len();
+    let vast_pixels = 3072.0 * 2304.0;
+    println!(
+        "shrink_png3072 file_bytes={} out_bytes={} samples=12 p50_us={:.1} p99_us={:.1} smaller={smaller} copied={} pixel_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        vast_png.len(),
+        vast_out.bytes.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        vast_out.copied,
+        mb_s(vast_pixels * 3.0, p50),
+        allocs as f64 / (vast_pixels / 1_000_000.0),
+    );
 }
