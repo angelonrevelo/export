@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::error::Error;
-use crate::model::{ByteRange, MediaPlaylist};
+use crate::model::{ByteRange, Map, MediaPlaylist};
 use crate::parse::parse_media_playlist;
 use crate::policy::ConnectPolicy;
 use crate::urlcheck::{check_media_uri, parse_http_url, HttpUrl};
@@ -58,20 +58,20 @@ impl Fetcher {
 
     /// Fetch every segment named by one media playlist with this cleartext client.
     ///
-    /// Each URI is a whole-URI GET, in playlist order. `#EXT-X-BYTERANGE` is
-    /// ignored. Segments that resolve to the same checked address share one
-    /// connection. `https` URIs are unsupported. This method does not run
-    /// yt-dlp or any other program. An empty segment list returns
-    /// [`Error::BadTag`].
+    /// Each media URI is a whole-URI GET, in playlist order. `#EXT-X-BYTERANGE`
+    /// on a media segment is ignored. A distinct `#EXT-X-MAP` is fetched once,
+    /// before the media segments it covers. A map `BYTERANGE` is requested;
+    /// a map with no range is a whole-URI GET. URIs that resolve to the same
+    /// checked address share one connection. `https` URIs are unsupported.
+    /// This method does not run yt-dlp or any other program. An empty segment
+    /// list returns [`Error::BadTag`].
     pub fn get_segments(&self, playlist: &MediaPlaylist) -> Result<Vec<Vec<u8>>, Error> {
-        if playlist.segments.is_empty() {
-            return Err(Error::BadTag);
-        }
-        let mut bodies = Vec::with_capacity(playlist.segments.len());
+        let jobs = segment_jobs(playlist)?;
+        let mut bodies = Vec::with_capacity(jobs.len());
         let mut live: Option<LiveConn> = None;
-        for (index, segment) in playlist.segments.iter().enumerate() {
-            let close_after = index + 1 == playlist.segments.len();
-            bodies.push(self.exchange_reusing(&segment.uri, None, close_after, &mut live)?);
+        for (index, (url, range)) in jobs.iter().enumerate() {
+            let close_after = index + 1 == jobs.len();
+            bodies.push(self.exchange_reusing(url, *range, close_after, &mut live)?);
         }
         Ok(bodies)
     }
@@ -332,6 +332,29 @@ fn read_http_exchange(
 struct LiveConn {
     stream: TcpStream,
     addr: SocketAddr,
+}
+
+/// Media GETs in playlist order. Each distinct `#EXT-X-MAP` is inserted once,
+/// immediately before the first media segment that uses it.
+fn segment_jobs(playlist: &MediaPlaylist) -> Result<Vec<(&str, Option<ByteRange>)>, Error> {
+    if playlist.segments.is_empty() {
+        return Err(Error::BadTag);
+    }
+    let mut jobs = Vec::with_capacity(playlist.segments.len() + 1);
+    let mut previous: Option<&Map> = None;
+    for segment in &playlist.segments {
+        if let Some(map) = segment.map.as_ref() {
+            let same = previous.is_some_and(|prior| prior == map);
+            if !same {
+                jobs.push((map.uri.as_str(), map.byte_range));
+                previous = Some(map);
+            }
+        } else {
+            previous = None;
+        }
+        jobs.push((segment.uri.as_str(), None));
+    }
+    Ok(jobs)
 }
 
 fn follow_hops(
@@ -903,6 +926,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(playlist.segments.len(), 8);
+        assert_eq!(
+            Fetcher::default().get_segments(&playlist),
+            Err(Error::BadTag)
+        );
+    }
+
+    #[test]
+    fn map_init_is_fetched_before_the_media_segments() {
+        let mut https_playlist =
+            String::from("#EXTM3U\n#EXT-X-MAP:URI=\"https://cdn.example/init.mp4\"\n");
+        for index in 0..8 {
+            https_playlist.push_str(&format!("#EXTINF:1,\n{index}.ts\n"));
+        }
+        assert_eq!(
+            parse_media_playlist(&https_playlist),
+            Err(Error::Unsupported)
+        );
+        let mut text = String::from("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n");
+        for index in 0..8 {
+            text.push_str(&format!("#EXTINF:1,\n{index}.ts\n"));
+        }
+        let playlist = parse_media_playlist(&text).unwrap();
+        assert_eq!(playlist.segments.len(), 8);
+        let init = playlist.init.as_ref().expect("map");
+        assert_eq!(init.uri, "init.mp4");
+        assert!(init.byte_range.is_none());
+        assert!(playlist
+            .segments
+            .iter()
+            .all(|segment| segment.map.as_ref() == Some(init)));
         assert_eq!(
             Fetcher::default().get_segments(&playlist),
             Err(Error::BadTag)
