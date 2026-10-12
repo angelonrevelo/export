@@ -416,11 +416,12 @@ fn local_stack_segment_row() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 /// One media playlist names two cleartext segments. Both are fetched with
-/// [`Fetcher::get_segments`] on the local stack, not a CDN.
+/// [`Fetcher::get_segments`] on one local-stack connection, not a CDN.
 ///
 /// Loopback is allowed only here. `check_hop` still runs inside the client
-/// before each connect. The bodies are raw text, not a transcode. The
-/// reported byte count is the sum of the two segment bodies.
+/// before the connect and again on any redirect. The bodies are raw text,
+/// not a transcode. The reported byte count is the sum of the two segment
+/// bodies.
 fn local_stack_two_segment_row() -> Result<String, Box<dyn std::error::Error>> {
     const FIRST_BYTES: usize = 64 * 1024;
     const SECOND_BYTES: usize = 64 * 1024;
@@ -456,7 +457,7 @@ fn local_stack_two_segment_row() -> Result<String, Box<dyn std::error::Error>> {
     let iters = 100;
     let samples = std::thread::scope(|scope| {
         scope.spawn(|| {
-            serve_two_cleartext_segments(listener, &first, &second, 2 * (warmup + iters));
+            serve_two_cleartext_segments(listener, &first, &second, warmup + iters);
         });
         let mut samples = Vec::with_capacity(iters);
         for index in 0..(warmup + iters) {
@@ -482,7 +483,7 @@ fn local_stack_two_segment_row() -> Result<String, Box<dyn std::error::Error>> {
     let p50 = percentile(&sorted, 0.50);
     let p99 = percentile(&sorted, 0.99);
     Ok(format!(
-        "local stack two-segment GET bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+        "local stack two-segment GET connections=1 bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
 }
 
@@ -790,12 +791,12 @@ fn serve_two_cleartext_segments(
     listener: TcpListener,
     first: &[u8],
     second: &[u8],
-    accepts: usize,
+    connections: usize,
 ) {
     listener.set_nonblocking(true).expect("nonblocking accept");
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut served = 0;
-    while served < accepts && Instant::now() < deadline {
+    while served < connections && Instant::now() < deadline {
         match listener.accept() {
             Ok((mut sock, _)) => {
                 sock.set_nonblocking(false).expect("blocking socket");
@@ -803,20 +804,34 @@ fn serve_two_cleartext_segments(
                     .expect("read timeout");
                 sock.set_write_timeout(Some(Duration::from_secs(2)))
                     .expect("write timeout");
-                let request = read_http_request(&mut sock).expect("segment request");
-                let body = if request.starts_with("GET /seg0.ts ") {
-                    first
-                } else if request.starts_with("GET /seg1.ts ") {
-                    second
-                } else {
-                    panic!("unexpected segment path");
-                };
-                let header = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n",
-                    body.len()
-                );
-                sock.write_all(header.as_bytes()).expect("segment header");
-                sock.write_all(body).expect("segment body");
+                for request_index in 0..2 {
+                    let request = read_http_request(&mut sock)
+                        .expect("second segment did not reuse the connection");
+                    if request_index == 0 {
+                        assert!(
+                            request.contains("Connection: keep-alive\r\n"),
+                            "first segment closed the connection"
+                        );
+                    }
+                    let body = if request.starts_with("GET /seg0.ts ") {
+                        first
+                    } else if request.starts_with("GET /seg1.ts ") {
+                        second
+                    } else {
+                        panic!("unexpected segment path");
+                    };
+                    let persistence = if request_index == 0 {
+                        "keep-alive"
+                    } else {
+                        "close"
+                    };
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: {persistence}\r\nContent-Type: text/plain\r\n\r\n",
+                        body.len()
+                    );
+                    sock.write_all(header.as_bytes()).expect("segment header");
+                    sock.write_all(body).expect("segment body");
+                }
                 served += 1;
             }
             Err(err) if waited(&err) => std::hint::spin_loop(),

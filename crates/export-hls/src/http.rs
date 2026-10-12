@@ -58,16 +58,20 @@ impl Fetcher {
 
     /// Fetch every segment named by one media playlist with this cleartext client.
     ///
-    /// Each URI is requested with [`Fetcher::get_segment`], in playlist order.
-    /// `https` URIs are unsupported. This method does not run yt-dlp or any
-    /// other program. An empty segment list returns [`Error::BadTag`].
+    /// Each URI is a whole-URI GET, in playlist order. `#EXT-X-BYTERANGE` is
+    /// ignored. Segments that resolve to the same checked address share one
+    /// connection. `https` URIs are unsupported. This method does not run
+    /// yt-dlp or any other program. An empty segment list returns
+    /// [`Error::BadTag`].
     pub fn get_segments(&self, playlist: &MediaPlaylist) -> Result<Vec<Vec<u8>>, Error> {
         if playlist.segments.is_empty() {
             return Err(Error::BadTag);
         }
         let mut bodies = Vec::with_capacity(playlist.segments.len());
-        for index in 0..playlist.segments.len() {
-            bodies.push(self.get_segment(playlist, index)?);
+        let mut live: Option<LiveConn> = None;
+        for (index, segment) in playlist.segments.iter().enumerate() {
+            let close_after = index + 1 == playlist.segments.len();
+            bodies.push(self.exchange_reusing(&segment.uri, None, close_after, &mut live)?);
         }
         Ok(bodies)
     }
@@ -116,7 +120,7 @@ impl Fetcher {
         let mut live: Option<LiveConn> = None;
         for (index, (url, range)) in jobs.iter().enumerate() {
             let close_after = index + 1 == jobs.len();
-            bodies.push(self.exchange_reusing(url, *range, close_after, &mut live)?);
+            bodies.push(self.exchange_reusing(url, Some(*range), close_after, &mut live)?);
         }
         Ok(bodies)
     }
@@ -124,7 +128,7 @@ impl Fetcher {
     fn exchange_reusing(
         &self,
         start: &str,
-        range: ByteRange,
+        range: Option<ByteRange>,
         close_after: bool,
         live: &mut Option<LiveConn>,
     ) -> Result<Vec<u8>, Error> {
@@ -137,8 +141,7 @@ impl Fetcher {
                 .map(|open| open.addr == hop.addr)
                 .unwrap_or(false);
             if !same {
-                let stream =
-                    TcpStream::connect_timeout(&hop.addr, self.timeout).map_err(io_err)?;
+                let stream = TcpStream::connect_timeout(&hop.addr, self.timeout).map_err(io_err)?;
                 stream
                     .set_read_timeout(Some(self.timeout))
                     .map_err(io_err)?;
@@ -151,7 +154,7 @@ impl Fetcher {
                 });
             }
             let open = live.as_mut().expect("connection");
-            write_http_get_close(&mut open.stream, &hop.url, Some(range), close_after)?;
+            write_http_get_close(&mut open.stream, &hop.url, range, close_after)?;
             open.stream.flush().map_err(io_err)?;
             let (message, server_close) =
                 read_http_exchange(&mut open.stream, self.max_body_bytes)?;
