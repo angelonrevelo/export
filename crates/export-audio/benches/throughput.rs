@@ -382,6 +382,15 @@ fn main() {
     });
     report("aligned_encode", "miss", aligned_pcm_len, &aligned_encode);
     println!("aligned_bytes {}", aligned_flac.len());
+    let aligned_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&aligned_flac).expect("decode aligned"));
+    });
+    report(
+        "aligned_decode",
+        "miss",
+        aligned_flac.len() as u64,
+        &aligned_decode,
+    );
 
     let aligned_st = aligned_stereo();
     let aligned_st_flac = encode(&aligned_st).expect("encode aligned stereo");
