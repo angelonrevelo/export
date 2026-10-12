@@ -4,9 +4,11 @@
 //! is constant, verbatim, or fixed order 0..=4, with a single Rice partition
 //! or an unencoded residual. One LPC candidate (order 11, or the subset cap
 //! when that is lower, at precision 12) replaces that fixed predictor only
-//! when the written subframe is strictly shorter. `encode` does not write a
-//! seek table. `encode_with_seek_table` adds one seekpoint per block. The
-//! decoder also accepts stereo decorrelation, wasted bits, and Rice partitions.
+//! when the written subframe is strictly shorter. A subframe whose samples
+//! share low zero bits stores those samples shifted and writes that wasted-bit
+//! count. `encode` does not write a seek table. `encode_with_seek_table` adds
+//! one seekpoint per block. The decoder also accepts stereo decorrelation,
+//! wasted bits, and Rice partitions.
 
 use crate::crc::{crc8, crc16};
 use crate::error::{Error, Result};
@@ -1176,29 +1178,56 @@ enum Coded {
     },
 }
 
+fn common_wasted(samples: &[i32], bps: u32) -> u32 {
+    if bps <= 1 {
+        return 0;
+    }
+    let mut k = bps - 1;
+    for &s in samples {
+        let zeros = (s as u32).trailing_zeros();
+        if zeros == 0 {
+            return 0;
+        }
+        if zeros < k {
+            k = zeros;
+        }
+    }
+    k
+}
+
 fn write_subframe(w: &mut BitWriter, samples: &[i32], bps: u32, rate: u32) {
-    let (mut coded, fixed_bits) = choose(samples, bps);
+    let wasted = common_wasted(samples, bps);
+    if wasted == 0 {
+        write_stored_subframe(w, samples, bps, rate, 0);
+        return;
+    }
+    let shifted: Vec<i32> = samples.iter().map(|s| s >> wasted).collect();
+    write_stored_subframe(w, &shifted, bps - wasted, rate, wasted);
+}
+
+fn write_stored_subframe(w: &mut BitWriter, samples: &[i32], bps: u32, rate: u32, wasted: u32) {
+    let (mut coded, fixed_bits) = choose(samples, bps, wasted);
     if matches!(coded, Coded::Fixed { .. }) {
         debug_assert_eq!(
-            coded_bit_len(samples, bps, &coded) as u64,
+            coded_bit_len(samples, bps, wasted, &coded) as u64,
             fixed_bits,
             "fixed bit estimate drifted"
         );
-        if let Some(lpc) = smaller_lpc(samples, bps, rate, fixed_bits) {
+        if let Some(lpc) = smaller_lpc(samples, bps, rate, fixed_bits, wasted) {
             coded = lpc;
         }
     }
-    write_coded(w, samples, bps, &coded);
+    write_coded(w, samples, bps, wasted, &coded);
 }
 
-fn write_coded(w: &mut BitWriter, samples: &[i32], bps: u32, coded: &Coded) {
+fn write_coded(w: &mut BitWriter, samples: &[i32], bps: u32, wasted: u32, coded: &Coded) {
     match coded {
         Coded::Constant(s) => {
-            write_sub_header(w, 0);
+            write_sub_header(w, 0, wasted);
             w.write_signed(*s, bps);
         }
         Coded::Verbatim => {
-            write_sub_header(w, 1);
+            write_sub_header(w, 1, wasted);
             for &s in samples {
                 w.write_signed(s, bps);
             }
@@ -1209,10 +1238,10 @@ fn write_coded(w: &mut BitWriter, samples: &[i32], bps: u32, coded: &Coded) {
             param,
         } => {
             let Some(residual) = fixed_residual(samples, *order) else {
-                write_verbatim(w, samples, bps);
+                write_verbatim(w, samples, bps, wasted);
                 return;
             };
-            write_sub_header(w, 8 + *order as u32);
+            write_sub_header(w, 8 + *order as u32, wasted);
             for &s in &samples[..*order] {
                 w.write_signed(s, bps);
             }
@@ -1226,10 +1255,10 @@ fn write_coded(w: &mut BitWriter, samples: &[i32], bps: u32, coded: &Coded) {
             param,
         } => {
             let Some(residual) = lpc_residual(samples, coeff, *shift) else {
-                write_verbatim(w, samples, bps);
+                write_verbatim(w, samples, bps, wasted);
                 return;
             };
-            write_sub_header(w, 31 + coeff.len() as u32);
+            write_sub_header(w, 31 + coeff.len() as u32, wasted);
             for &s in &samples[..coeff.len()] {
                 w.write_signed(s, bps);
             }
@@ -1243,31 +1272,40 @@ fn write_coded(w: &mut BitWriter, samples: &[i32], bps: u32, coded: &Coded) {
     }
 }
 
-fn write_verbatim(w: &mut BitWriter, samples: &[i32], bps: u32) {
-    write_sub_header(w, 1);
+fn write_verbatim(w: &mut BitWriter, samples: &[i32], bps: u32, wasted: u32) {
+    write_sub_header(w, 1, wasted);
     for &s in samples {
         w.write_signed(s, bps);
     }
 }
 
-fn coded_bit_len(samples: &[i32], bps: u32, coded: &Coded) -> usize {
+fn coded_bit_len(samples: &[i32], bps: u32, wasted: u32, coded: &Coded) -> usize {
     let mut w = BitWriter::new();
-    write_coded(&mut w, samples, bps, coded);
+    write_coded(&mut w, samples, bps, wasted, coded);
     w.bit_len()
 }
 
-fn write_sub_header(w: &mut BitWriter, kind: u32) {
+fn write_sub_header(w: &mut BitWriter, kind: u32, wasted: u32) {
     w.write_bits(0, 1);
     w.write_bits(kind, 6);
-    w.write_bits(0, 1);
+    if wasted == 0 {
+        w.write_bits(0, 1);
+        return;
+    }
+    w.write_bits(1, 1);
+    if wasted > 1 {
+        w.write_bits(0, wasted - 1);
+    }
+    w.write_bits(1, 1);
 }
 
-fn choose(samples: &[i32], bps: u32) -> (Coded, u64) {
+fn choose(samples: &[i32], bps: u32, wasted: u32) -> (Coded, u64) {
+    let header = 8 + u64::from(wasted);
     if samples.iter().all(|s| *s == samples[0]) {
-        return (Coded::Constant(samples[0]), 8 + u64::from(bps));
+        return (Coded::Constant(samples[0]), header + u64::from(bps));
     }
-    // Costs include the 8-bit subframe header, so they match a written subframe.
-    let verbatim = 8 + samples.len() as u64 * u64::from(bps);
+    // Costs include the subframe header, so they match a written subframe.
+    let verbatim = header + samples.len() as u64 * u64::from(bps);
     let mut best_cost = verbatim;
     let mut best = Coded::Verbatim;
     let max_order = 4.min(samples.len().saturating_sub(1));
@@ -1277,9 +1315,9 @@ fn choose(samples: &[i32], bps: u32) -> (Coded, u64) {
         };
         let (param, rice) = best_rice(&residual);
         let warm = u64::from(bps) * order as u64;
-        let rice_cost = 18 + rice + warm;
+        let rice_cost = 18 + u64::from(wasted) + rice + warm;
         let width = signed_width(&residual);
-        let esc_cost = 23 + u64::from(width) * residual.len() as u64 + warm;
+        let esc_cost = 23 + u64::from(wasted) + u64::from(width) * residual.len() as u64 + warm;
         if esc_cost < rice_cost && esc_cost < best_cost {
             best_cost = esc_cost;
             best = Coded::Fixed {
@@ -1309,14 +1347,14 @@ fn lpc_order_cap(rate: u32, len: usize) -> usize {
 /// strictly shorter. A wider search on this fixture encoded in about 474 ms,
 /// past the time budget, so orders and precisions that are not this one are
 /// not tried. Constant and verbatim are left alone.
-fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed_bits: u64) -> Option<Coded> {
+fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed_bits: u64, wasted: u32) -> Option<Coded> {
     let max_order = lpc_order_cap(rate, samples.len());
     let order = 11.min(max_order);
     if order == 0 || samples.len() <= order {
         return None;
     }
     let precision = 12u32;
-    let prefix = 17 + order as u64 * (u64::from(bps) + u64::from(precision));
+    let prefix = 17 + u64::from(wasted) + order as u64 * (u64::from(bps) + u64::from(precision));
     if fixed_bits <= prefix + 15 {
         return None;
     }
@@ -1372,7 +1410,7 @@ fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed_bits: u64) -> Option<
         param,
     };
     debug_assert_eq!(
-        coded_bit_len(samples, bps, &coded) as u64,
+        coded_bit_len(samples, bps, wasted, &coded) as u64,
         total,
         "lpc bit estimate drifted"
     );
@@ -1622,9 +1660,9 @@ mod tests {
                 ((t * 0.17).sin() * 9000.0 + (t * 0.04).sin() * 2500.0).round() as i32
             })
             .collect();
-        let (picked, bits) = choose(&samples, 16);
-        assert_eq!(coded_bit_len(&samples, 16, &picked) as u64, bits);
-        let lpc = smaller_lpc(&samples, 16, 44_100, bits);
+        let (picked, bits) = choose(&samples, 16, 0);
+        assert_eq!(coded_bit_len(&samples, 16, 0, &picked) as u64, bits);
+        let lpc = smaller_lpc(&samples, 16, 44_100, bits, 0);
         assert!(
             lpc.is_some(),
             "a two-tone sine should beat the fixed predictor"
@@ -1729,11 +1767,24 @@ mod tests {
         assert!(pcm.samples.iter().all(|s| s % 4 == 0));
         assert!(pcm.samples.iter().any(|s| s % 8 != 0));
         let bytes = encode(&pcm).unwrap();
+        assert_eq!(bytes.len(), 2_215);
+        assert_eq!(first_subframe_wasted(&bytes), 2);
         let back = decode(&bytes).unwrap();
         assert_eq!(back.channels, 1);
         assert_eq!(back.bits, 16);
         assert_eq!(back.sample_rate, 44_100);
         assert_eq!(back.samples, pcm.samples);
+    }
+
+    fn first_subframe_wasted(bytes: &[u8]) -> u32 {
+        assert_eq!(&bytes[0..4], b"fLaC");
+        assert_eq!(bytes[42], 0xff);
+        assert_eq!(bytes[43], 0xf8);
+        let mut br = BitReader::at(bytes, 48);
+        assert_eq!(br.read_bits(1).unwrap(), 0);
+        let _kind = br.read_bits(6).unwrap();
+        assert_eq!(br.read_bits(1).unwrap(), 1, "wasted-bits flag");
+        br.read_unary().unwrap() + 1
     }
 
     fn mono_wide() -> Pcm {
@@ -2101,14 +2152,14 @@ mod tests {
     #[test]
     fn hand_built_constant_verbatim_and_fixed() {
         let constant = build_mono(16, &[7; 16], |w, _| {
-            write_sub_header(w, 0);
+            write_sub_header(w, 0, 0);
             w.write_signed(7, 16);
         });
         assert_eq!(decode(&constant).unwrap().samples, vec![7; 16]);
 
         let verb: Vec<i32> = (0..16).map(|i| i - 8).collect();
         let verbatim = build_mono(16, &verb, |w, samples| {
-            write_sub_header(w, 1);
+            write_sub_header(w, 1, 0);
             for &s in samples {
                 w.write_signed(s, 16);
             }
@@ -2117,7 +2168,7 @@ mod tests {
 
         let fixed: Vec<i32> = (0..16).collect();
         let framed = build_mono(16, &fixed, |w, samples| {
-            write_sub_header(w, 9);
+            write_sub_header(w, 9, 0);
             w.write_signed(samples[0], 16);
             let residual = fixed_residual(samples, 1).unwrap();
             write_residual(w, &residual, 0, None);
@@ -2127,7 +2178,7 @@ mod tests {
         let linear: Vec<i32> = (0..16).collect();
         let lpc = build_mono(16, &linear, |w, samples| {
             // LPC order 2, coeffs 4 and -2, shift 1, same as fixed order 2.
-            write_sub_header(w, 33);
+            write_sub_header(w, 33, 0);
             w.write_signed(samples[0], 16);
             w.write_signed(samples[1], 16);
             w.write_bits(3, 4);

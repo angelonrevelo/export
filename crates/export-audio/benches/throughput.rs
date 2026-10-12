@@ -353,6 +353,7 @@ fn main() {
     assert_eq!(aligned_back.samples, aligned.samples, "aligned block is not exact");
     assert_eq!(aligned_back.channels, 1);
     assert_eq!(aligned_back.bits, 16);
+    assert_eq!(aligned_flac.len(), 2_215);
     assert!(aligned.samples.iter().all(|s| s % 4 == 0));
     assert!(aligned.samples.iter().any(|s| s % 8 != 0));
     let aligned_pcm_len = (aligned.samples.len() * 2) as u64;
