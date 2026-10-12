@@ -16,10 +16,12 @@
 //! page is 9438 ns p50 and 10426 ns p99.
 //! A 32×32 DeviceGray page is 1675 bytes in and out. Release split of that
 //! page is 9206 ns p50 and 12724 ns p99.
+//! A 16×16 DeviceCMYK page is 1675 bytes in and out. Release split of that
+//! page is 9985 ns p50 and 10489 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
-//! page or the gray page, and fonts other than the built-in Helvetica
-//! are not preserved. A truncated file, an
+//! page, the gray page, or the 16×16 CMYK page, and fonts other than the
+//! built-in Helvetica are not preserved. A truncated file, an
 //! xref offset that does not land on an object, an xref stream, or an
 //! unsupported image is an error.
 
@@ -53,10 +55,32 @@ pub fn gray_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Erro
     Ok(image_file(width, height, "/DeviceGray", samples))
 }
 
+/// Edge, in pixels, of the one uncompressed CMYK page this crate keeps.
+pub const CMYK_EDGE: u32 = 16;
+
+/// One classic-xref page holding one uncompressed 8-bit DeviceCMYK image.
+///
+/// `samples` is row-major CMYK, length `width * height * 4`. Width and
+/// height are both [`CMYK_EDGE`].
+pub fn cmyk_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Error> {
+    checked_cmyk_len(width, height, samples.len())?;
+    Ok(image_file(width, height, "/DeviceCMYK", samples))
+}
+
 /// Width, height, and row-major RGB samples of the one supported RGB page.
 pub fn rgb_samples(pdf: &[u8]) -> Result<(u32, u32, Vec<u8>), Error> {
     match one_rgb_page(pdf)? {
         Some(image) if image.space == SampleSpace::Rgb => {
+            Ok((image.width, image.height, image.samples))
+        }
+        _ => Err(Error::BadPdf),
+    }
+}
+
+/// Width, height, and row-major samples of the one supported CMYK page.
+pub fn cmyk_samples(pdf: &[u8]) -> Result<(u32, u32, Vec<u8>), Error> {
+    match one_rgb_page(pdf)? {
+        Some(image) if image.space == SampleSpace::Cmyk => {
             Ok((image.width, image.height, image.samples))
         }
         _ => Err(Error::BadPdf),
@@ -113,6 +137,7 @@ pub fn split(pdf: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
         let page = match image.space {
             SampleSpace::Rgb => rgb_pdf(image.width, image.height, &image.samples)?,
             SampleSpace::Gray => gray_pdf(image.width, image.height, &image.samples)?,
+            SampleSpace::Cmyk => cmyk_pdf(image.width, image.height, &image.samples)?,
         };
         return Ok(vec![page]);
     }
@@ -361,6 +386,7 @@ fn text_from_stream(body: &[u8]) -> String {
 enum SampleSpace {
     Rgb,
     Gray,
+    Cmyk,
 }
 
 struct RgbPage {
@@ -402,6 +428,20 @@ fn wrap_stream(body: &[u8]) -> Vec<u8> {
     obj.extend_from_slice(body);
     obj.extend_from_slice(b"endstream");
     obj
+}
+
+fn checked_cmyk_len(width: u32, height: u32, len: usize) -> Result<(), Error> {
+    if width != CMYK_EDGE || height != CMYK_EDGE {
+        return Err(Error::BadPdf);
+    }
+    let need = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(Error::BadPdf)?;
+    if len != need {
+        return Err(Error::BadPdf);
+    }
+    Ok(())
 }
 
 fn checked_gray_len(width: u32, height: u32, len: usize) -> Result<(), Error> {
@@ -555,7 +595,8 @@ fn rgb_image(body: &[u8]) -> Result<RgbPage, Error> {
         return Err(Error::BadPdf);
     }
     let gray = name_is(dict, b"/ColorSpace", b"/DeviceGray");
-    if !gray && !name_is(dict, b"/ColorSpace", b"/DeviceRGB") {
+    let cmyk = name_is(dict, b"/ColorSpace", b"/DeviceCMYK");
+    if !gray && !cmyk && !name_is(dict, b"/ColorSpace", b"/DeviceRGB") {
         return Err(Error::BadPdf);
     }
     let bits = direct_int(dict, b"/BitsPerComponent").ok_or(Error::BadPdf)?;
@@ -567,6 +608,15 @@ fn rgb_image(body: &[u8]) -> Result<RgbPage, Error> {
     let height = u32::try_from(direct_int(dict, b"/Height").ok_or(Error::BadPdf)?)
         .map_err(|_| Error::BadPdf)?;
     let samples = stream_bytes(body)?;
+    if cmyk {
+        checked_cmyk_len(width, height, samples.len())?;
+        return Ok(RgbPage {
+            width,
+            height,
+            samples: samples.to_vec(),
+            space: SampleSpace::Cmyk,
+        });
+    }
     if gray {
         checked_gray_len(width, height, samples.len())?;
         return Ok(RgbPage {
@@ -963,8 +1013,8 @@ fn is_name_char(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        finish, gray_pdf, gray_samples, merge, page_count, rgb_pdf, rgb_samples, split, text_pdf,
-        wrap_stream, Error, GRAY_EDGE, RGB_MAX_EDGE,
+        cmyk_pdf, cmyk_samples, finish, gray_pdf, gray_samples, merge, page_count, rgb_pdf,
+        rgb_samples, split, text_pdf, wrap_stream, Error, CMYK_EDGE, GRAY_EDGE, RGB_MAX_EDGE,
     };
 
     #[test]
@@ -1103,6 +1153,40 @@ mod tests {
             "",
             GRAY_EDGE + 1,
             GRAY_EDGE,
+            &wide,
+            "/Im0 5 0 R",
+        );
+        assert_eq!(page_count(&wide_pdf).unwrap(), 1);
+        assert_eq!(split(&wide_pdf), Err(Error::BadPdf));
+    }
+
+    #[test]
+    fn split_keeps_cmyk_pixels() {
+        let mut samples = vec![0u8; (CMYK_EDGE * CMYK_EDGE * 4) as usize];
+        for (i, byte) in samples.iter_mut().enumerate() {
+            *byte = (i * 13 + 7) as u8;
+        }
+        let pdf = cmyk_pdf(CMYK_EDGE, CMYK_EDGE, &samples).unwrap();
+        assert_eq!(page_count(&pdf).unwrap(), 1);
+        assert_eq!(rgb_samples(&pdf).unwrap_err(), Error::BadPdf);
+        assert_eq!(gray_samples(&pdf).unwrap_err(), Error::BadPdf);
+        let (w, h, direct) = cmyk_samples(&pdf).unwrap();
+        assert_eq!((w, h, direct), (CMYK_EDGE, CMYK_EDGE, samples.clone()));
+        let pages = split(&pdf).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0], pdf);
+        assert_eq!(cmyk_samples(&pages[0]).unwrap().2, samples);
+        assert_eq!(
+            cmyk_pdf(CMYK_EDGE, CMYK_EDGE - 1, &samples[..960]).unwrap_err(),
+            Error::BadPdf
+        );
+        let wide = vec![0u8; ((CMYK_EDGE + 1) * CMYK_EDGE * 4) as usize];
+        let wide_pdf = image_file_with(
+            "/DeviceCMYK",
+            8,
+            "",
+            CMYK_EDGE + 1,
+            CMYK_EDGE,
             &wide,
             "/Im0 5 0 R",
         );

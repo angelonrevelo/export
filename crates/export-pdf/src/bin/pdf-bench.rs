@@ -1,22 +1,22 @@
-//! Release latency for a split of one 16×16 gray page.
+//! Release latency for a split of one 16×16 CMYK page.
 //!
 //! ```text
 //! cargo run --release -p export-pdf --bin pdf-bench
 //! ```
 
-use export_pdf::{gray_pdf, gray_samples, split, GRAY_EDGE};
+use export_pdf::{cmyk_pdf, cmyk_samples, split, CMYK_EDGE};
 use std::time::Instant;
 
 fn main() {
-    let width = GRAY_EDGE;
-    let height = GRAY_EDGE;
-    let mut samples = vec![0u8; (width * height) as usize];
+    let width = CMYK_EDGE;
+    let height = CMYK_EDGE;
+    let mut samples = vec![0u8; (width * height * 4) as usize];
     for (i, byte) in samples.iter_mut().enumerate() {
         *byte = (i * 13 + 7) as u8;
     }
-    let pdf = gray_pdf(width, height, &samples).expect("gray page");
+    let pdf = cmyk_pdf(width, height, &samples).expect("cmyk page");
     let pages = split(&pdf).expect("split");
-    let (got_w, got_h, got) = gray_samples(&pages[0]).expect("samples");
+    let (got_w, got_h, got) = cmyk_samples(&pages[0]).expect("samples");
     if pages.len() != 1 || got_w != width || got_h != height || got != samples {
         eprintln!("pixels differ");
         std::process::exit(1);
@@ -48,7 +48,7 @@ fn main() {
     let p50 = times[(times.len() - 1) / 2];
     let p99 = times[(times.len() - 1) * 99 / 100];
     let check = split(&pdf).expect("split");
-    let (_, _, after) = gray_samples(&check[0]).expect("samples");
+    let (_, _, after) = cmyk_samples(&check[0]).expect("samples");
     if after != samples {
         eprintln!("pixels differ");
         std::process::exit(1);
