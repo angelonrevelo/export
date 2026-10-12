@@ -1,0 +1,43 @@
+[package]
+name = "export-translate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Zero-dependency en↔es and en↔tl transfer translator. Not NLLB."
+
+[[bin]]
+name = "export-translate-bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "export-translate-paragraph"
+path = "src/bin/paragraph-bench.rs"
+
+[[bin]]
+name = "export-translate-tl"
+path = "src/bin/tl-bench.rs"
+
+[[bin]]
+name = "export-translate-tl-pctl"
+path = "src/bin/tl-pctl.rs"
+
+[[bin]]
+name = "export-translate-tl-six"
+path = "src/bin/tl-six.rs"
+
+[[bin]]
+name = "export-translate-tl-twelve"
+path = "src/bin/tl-twelve.rs"
+
+[[bin]]
+name = "export-translate-tl-twentyfour"
+path = "src/bin/tl-twentyfour.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

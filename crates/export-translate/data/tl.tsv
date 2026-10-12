@@ -1,0 +1,471 @@
+# en	tl	kind	flags
+# Function words, pronouns, then content. First surface wins on the way back to English.
+the	ang	det	sub=the
+a	isang	det	sub=a
+an	isang	det	sub=a
+this	ang	det	sub=the
+these	ang	det	sub=the,plural
+those	ang	det	sub=the,plural
+that	na	fn	sub=that
+to	sa	prep	drop
+of	ng	prep	drop
+and	at	conj
+or	o	conj
+but	pero	conj
+because	dahil	conj
+so	kaya	conj
+if	kung	conj
+not	hindi	fn	sub=not
+at	sa	prep	drop
+in	sa	prep	drop
+on	sa	prep	drop
+into	sa	prep	drop
+for	para	prep
+with	kasama	prep
+from	mula sa	prep	drop
+about	tungkol sa	prep	drop
+before	bago	prep
+after	pagkatapos ng	prep	drop
+during	habang	prep
+under	sa ilalim ng	prep	drop
+over	sa ibabaw ng	prep	drop
+between	sa pagitan ng	prep	drop
+without	walang	prep
+will	*	aux	sub=will
+do	*	aux	sub=do
+be	*	cop
+is	*	cop
+am	*	cop
+are	*	cop
+can	maaari	au
+should	dapat	au
+must	dapat	au
+she	siya	pro	ang=siya,gen=niya,obl=kanya
+he	siya	pro	ang=siya,gen=niya,obl=kanya
+i	ako	pro	ang=ako,gen=ko,obl=akin
+you	ka	pro	ang=ka,gen=mo,obl=iyo
+we	tayo	pro	ang=tayo,gen=natin,obl=atin
+they	sila	pro	ang=sila,gen=nila,obl=kanila
+it	ito	pro	ang=ito,gen=nito,obl=ito
+me	ako	pro	ang=ako,gen=ko,obl=akin
+him	siya	pro	ang=siya,gen=niya,obl=kanya
+us	kami	pro	ang=kami,gen=namin,obl=amin
+them	sila	pro	ang=sila,gen=nila,obl=kanila
+her	siya	pro	ang=siya,gen=niya,obl=kanya
+my	ko	poss	gen=ko
+your	mo	poss	gen=mo
+his	niya	poss	gen=niya
+its	nito	poss	gen=nito
+our	natin	poss	gen=natin
+their	nila	poss	gen=nila
+# verbs
+talk	usap	mag	recip,saobj
+speak	usap	mag	recip,saobj
+call	tawag	um	saobj
+meet	kita	mag
+go	punta	um
+come	dating	um
+arrive	dating	um
+eat	kain	um
+drink	inom	um
+write	sulat	um
+run	takbo	um
+sit	upo	um
+stand	tayo	um
+leave	alis	um
+return	balik	um
+buy	bili	um
+help	tulong	um
+stop	tigil	um
+live	tira	um
+pull	hila	um
+push	tulak	um
+follow	sunod	um
+reply	sagot	um
+move	galaw	um
+ride	sakay	um
+hope	asa	um	saobj
+walk	lakad	mag
+work	trabaho	mag
+try	subok	mag
+start	simula	mag
+begin	simula	mag
+wait	hintay	mag
+study	aral	mag
+play	laro	mag
+ask	tanong	mag
+cook	luto	mag
+clean	linis	mag
+pay	bayad	mag
+change	bago	mag
+sell	benta	mag
+drive	maneho	mag
+teach	turo	mag
+love	mahal	mag
+plan	plano	mag
+decide	desisyon	mag
+continue	patuloy	mag
+offer	alok	mag
+say	sabi	irr	focus=ng,comp,inf=sabihin,perf=sinabi,impf=sinasabi,cont=sasabihin
+tell	sabi	irr	focus=ng,comp,inf=sabihin,perf=sinabi,impf=sinasabi,cont=sasabihin
+finish	tapos	irr	focus=ng,inf=tapusin,perf=tinapos,impf=tinatapos,cont=tatapusin
+send	padala	irr	focus=ng,inf=ipadala,perf=ipinadala,impf=ipinapadala,cont=ipapadala
+miss	ligta	irr	focus=ng,inf=kaligtaan,perf=nakaligtaan,impf=nakaliligtaan,cont=makaliligtaan
+open	bukas	irr	focus=ng,inf=buksan,perf=binuksan,impf=binubuksan,cont=bubuksan
+close	sara	irr	focus=ng,inf=isara,perf=isinara,impf=isinasara,cont=isasara
+see	kita	irr	focus=ng,inf=makita,perf=nakita,impf=nakikita,cont=makikita
+give	bigay	irr	focus=ng,inf=ibigay,perf=ibinigay,impf=ibinibigay,cont=ibibigay
+bring	dala	irr	focus=ng,inf=dalhin,perf=dinala,impf=dinadala,cont=dadalhin
+make	gawa	irr	focus=ng,inf=gawin,perf=ginawa,impf=ginagawa,cont=gagawin
+take	kuha	irr	focus=ng,inf=kunin,perf=kinuha,impf=kinukuha,cont=kukunin
+get	kuha	irr	focus=ng,inf=makuha,perf=nakuha,impf=nakukuha,cont=makukuha
+read	basa	irr	focus=ng,inf=basahin,perf=binasa,impf=binabasa,cont=babasahin
+understand	intindi	irr	focus=ng,inf=maintindihan,perf=naintindihan,impf=naiintindihan,cont=maiintindihan
+remember	tanda	irr	focus=ng,inf=tandaan,perf=tinandaan,impf=tinatandaan,cont=tatandaan
+forget	limot	irr	focus=ng,inf=kalimutan,perf=nakalimutan,impf=nakakalimutan,cont=makakalimutan
+hear	dinig	irr	focus=ng,inf=marinig,perf=narinig,impf=naririnig,cont=maririnig
+feel	dama	irr	focus=ng,inf=maramdaman,perf=naramdaman,impf=nararamdaman,cont=mararamdaman
+find	hanap	irr	focus=ng,inf=hanapin,perf=hinanap,impf=hinahanap,cont=hahanapin
+hold	hawak	irr	focus=ng,inf=hawakan,perf=hinawakan,impf=hinahawakan,cont=hahawakan
+put	lagay	irr	focus=ng,inf=ilagay,perf=inilagay,impf=inilalagay,cont=ilalagay
+let	haya	irr	focus=ng,inf=hayaan,perf=hinayaan,impf=hinahayaan,cont=hahayaan
+show	kita	irr	focus=ng,inf=ipakita,perf=ipinakita,impf=ipinapakita,cont=ipapakita
+use	gamit	irr	focus=ng,inf=gamitin,perf=ginamit,impf=ginagamit,cont=gagamitin
+keep	panatili	irr	focus=ng,inf=panatilihin,perf=pinanatili,impf=pinananatili,cont=papanatilihin
+sleep	tulog	irr	inf=matulog,perf=natulog,impf=natutulog,cont=matutulog
+listen	kinig	irr	inf=makinig,perf=nakinig,impf=nakikinig,cont=makikinig
+watch	nood	irr	inf=manood,perf=nanood,impf=nanonood,cont=manonood
+win	talo	irr	inf=manalo,perf=nanalo,impf=nananalo,cont=mananalo
+die	patay	irr	inf=mamatay,perf=namatay,impf=namamatay,cont=mamamatay
+learn	tuto	irr	inf=matuto,perf=natuto,impf=natututo,cont=matututo
+believe	tiwala	irr	saobj,inf=maniwala,perf=naniwala,impf=naniniwala,cont=maniniwala
+need	kailangan	pseudo
+want	gusto	pseudo
+like	gusto	pseudo
+know	alam	pseudo	focus=ng
+think	sa palagay	cw
+# nouns
+person	tao	n
+people	tao	n	plural
+time	oras	n
+hour	oras	n
+day	araw	n
+sun	araw	n
+year	taon	n
+week	linggo	n
+sunday	Linggo	n
+monday	Lunes	n
+tuesday	Martes	n
+wednesday	Miyerkules	n
+thursday	Huwebes	n
+friday	Biyernes	n
+saturday	Sabado	n
+man	lalaki	n
+men	lalaki	n	plural
+woman	babae	n
+women	babae	n	plural
+child	bata	n
+children	bata	n	plural
+boy	lalaki	n
+girl	babae	n
+world	mundo	n
+life	buhay	n
+hand	kamay	n
+part	bahagi	n
+place	lugar	n
+area	erya	n
+case	kaso	n
+point	punto	n
+government	gobyerno	n
+company	kumpanya	n
+number	numero	n
+group	grupo	n
+problem	problema	n
+fact	katotohanan	n
+water	tubig	n
+room	kuwarto	n
+money	pera	n
+story	kuwento	n
+book	aklat	n
+eye	mata	n
+job	trabaho	n
+word	salita	n
+business	negosyo	n
+issue	isyu	n
+side	gilid	n
+kind	uri	n
+head	ulo	n
+house	bahay	n
+service	serbisyo	n
+friend	kaibigan	n
+father	ama	n
+mother	ina	n
+parent	magulang	n
+power	kapangyarihan	n
+game	laro	n
+line	linya	n
+end	dulo	n
+member	kasapi	n
+law	batas	n
+car	kotse	n
+city	lungsod	n
+community	komunidad	n
+name	pangalan	n
+president	presidente	n
+team	koponan	n
+minute	minuto	n
+idea	ideya	n
+body	katawan	n
+information	impormasyon	n
+back	likod	n
+face	mukha	n
+level	antas	n
+office	opisina	n
+door	pinto	n
+health	kalusugan	n
+art	sining	n
+war	digmaan	n
+history	kasaysayan	n
+party	partido	n
+result	resulta	n
+morning	umaga	n
+night	gabi	n
+reason	dahilan	n
+moment	sandali	n
+air	hangin	n
+teacher	guro	n
+education	edukasyon	n
+foot	paa	n
+age	edad	n
+music	musika	n
+market	palengke	n
+death	kamatayan	n
+experience	karanasan	n
+student	estudyante	n
+family	pamilya	n
+food	pagkain	n
+school	paaralan	n
+question	tanong	n
+answer	sagot	n
+home	tahanan	n
+month	buwan	n
+weather	panahon	n
+meeting	pulong	n
+report	ulat	n
+note	tala	n
+train	tren	n
+file	dokumento	n
+bread	tinapay	n
+system	sistema	n
+program	programa	n
+state	estado	n
+class	klase	n
+phone	telepono	n
+computer	kompyuter	n
+message	mensahe	n
+news	balita	n
+paper	papel	n
+street	kalye	n
+road	daan	n
+station	istasyon	n
+hospital	ospital	n
+doctor	doktor	n
+price	presyo	n
+store	tindahan	n
+table	mesa	n
+chair	upuan	n
+window	bintana	n
+key	susi	n
+letter	liham	n
+language	wika	n
+voice	boses	n
+sound	tunog	n
+light	ilaw	n
+picture	larawan	n
+song	kanta	n
+mind	isip	n
+church	simbahan	n
+river	ilog	n
+sea	dagat	n
+mountain	bundok	n
+tree	puno	n
+flower	bulaklak	n
+animal	hayop	n
+dog	aso	n
+cat	pusa	n
+bird	ibon	n
+fish	isda	n
+rice	kanin	n
+coffee	kape	n
+tea	tsaa	n
+milk	gatas	n
+fruit	prutas	n
+clothes	damit	n
+shoe	sapatos	n
+data	datos	n
+example	halimbawa	n
+decision	desisyon	n
+action	aksyon	n
+event	kaganapan	n
+support	suporta	n
+process	proseso	n
+effect	epekto	n
+country	bansa	n
+research	pananaliksik	n
+difference	pagkakaiba	n
+position	posisyon	n
+organization	organisasyon	n
+development	pag-unlad	n
+value	halaga	n
+activity	gawain	n
+control	kontrol	n
+policy	patakaran	n
+right	karapatan	n
+user	tagagamit	n
+email	email	n
+internet	internet	n
+bag	bag	n
+film	pelikula	n
+god	diyos	n
+horse	kabayo	n
+vegetable	gulay	n
+shirt	kamiseta	n
+wall	dingding	n
+floor	sahig	n
+patient	pasyente	n
+rate	singil	n
+one	isa	n
+two	dalawa	n
+three	tatlo	n
+four	apat	n
+five	lima	n
+six	anim	n
+seven	pito	n
+eight	walo	n
+nine	siyam	n
+ten	sampu	n
+# adjectives
+good	mabuti	adj
+new	bago	adj
+first	una	adj
+late	huli	adj
+last	huli	adj
+long	mahaba	adj
+great	mahusay	adj
+little	maliit	adj
+small	maliit	adj
+big	malaki	adj
+large	malaki	adj
+high	mataas	adj
+low	mababa	adj
+old	luma	adj
+young	bata	adj
+important	mahalaga	adj
+bad	masama	adj
+early	maaga	adj
+hard	mahirap	adj
+poor	dukha	adj
+easy	madali	adj
+hot	mainit	adj
+cold	malamig	adj
+true	totoo	adj
+real	totoo	adj
+wrong	mali	adj
+happy	masaya	adj
+ready	handa	adj
+sure	sigurado	adj
+clear	malinaw	adj
+full	puno	adj
+empty	hungkag	adj
+strong	malakas	adj
+weak	mahina	adj
+fast	mabilis	adj
+quick	mabilis	adj
+slow	mabagal	adj
+nice	maganda	adj
+beautiful	maganda	adj
+pretty	maganda	adj
+ugly	pangit	adj
+rich	mayaman	adj
+free	libre	adj
+possible	posible	adj
+special	espesyal	adj
+simple	simple	adj
+serious	seryoso	adj
+final	pinal	adj
+main	pangunahin	adj
+whole	buo	adj
+short	maikli	adj
+dark	madilim	adj
+white	puti	adj
+black	itim	adj
+red	pula	adj
+blue	asul	adj
+green	berde	adj
+different	iba	adj
+same	pareho	adj
+next	susunod	adj
+second	pangalawa	adj
+third	pangatlo	adj
+best	pinakamahusay	adj
+own	sarili	adj
+certain	tiyak	adj
+recent	kamakailan	adj
+current	kasalukuyan	adj
+past	nakaraan	adj
+foreign	banyaga	adj
+common	karaniwan	adj
+natural	natural	adj
+personal	personal	adj
+successful	matagumpay	adj
+dead	patay	adj
+alive	buhay	adj
+alone	mag-isa	adj
+enough	sapat	adj
+public	pampubliko	adj
+private	pribado	adj
+local	lokal	adj
+national	pambansa	adj
+human	pantao	adj
+available	bakante	adj
+medical	medikal	adj
+financial	pinansyal	adj
+political	pampulitika	adj
+social	panlipunan	adj
+international	internasyonal	adj
+# adverbs
+yesterday	kahapon	adv
+tomorrow	bukas	adv
+today	ngayon	adv
+now	ngayon	adv
+later	mamaya	adv
+always	palagi	adv
+often	madalas	adv
+sometimes	minsan	adv
+again	muli	adv
+already	na	adv
+very	napaka	adv
+really	talaga	adv
+still	pa	adv
+also	din	adv
+too	rin	adv
+only	lamang	adv
+here	dito	adv
+there	doon	adv
+outside	sa labas	adv
+inside	sa loob	adv
+soon	malapit	adv
+quickly	mabilis	adv
+slowly	dahan-dahan	adv
+together	magkasama	adv
+maybe	marahil	adv
+just	lang	adv
+even	kahit	adv
+never	kailanman	adv
+away	malayo	adv
+where	saan	fn
+when	kailan	fn
+what	ano	fn
+who	sino	fn
+why	bakit	fn
+how	paano	fn

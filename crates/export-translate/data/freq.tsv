@@ -1,0 +1,808 @@
+# en	es	kind	flags
+# Frequent lemmas for transcripts, subtitles, OCR, and notes.
+# kind: nm nf var ver vir vi ao ae ai at av fn au cw
+# flags: ie ue ei iar uar zco samepl nogen pl=WORD
+talk	hablar	var
+speak	hablar	var
+say	decir	vi
+tell	decir	vi
+need	necesitar	var
+finish	terminar	var
+send	enviar	var	iar
+miss	perder	ver	ie
+lose	perder	ver	ie
+think	creer	ver
+believe	creer	ver
+know	saber	vi
+want	querer	vi
+work	trabajar	var
+call	llamar	var
+ask	preguntar	var
+answer	responder	ver
+try	intentar	var
+use	usar	var
+help	ayudar	var
+wait	esperar	var
+hope	desear	var
+wish	desear	var
+start	empezar	var	ie
+stop	parar	var
+like	gustar	var
+love	amar	var
+hate	odiar	var
+live	vivir	vir
+stay	quedar	var
+learn	aprender	ver
+study	estudiar	var
+remember	recordar	var	ue
+forget	olvidar	var
+decide	decidir	vir
+understand	entender	ver	ie
+explain	explicar	var
+describe	describir	vir
+write	escribir	vir
+read	leer	vi
+listen	escuchar	var
+hear	oír	vi
+eat	comer	ver
+drink	beber	ver
+sleep	dormir	vir	ue
+wake	despertar	var	ie
+run	correr	ver
+walk	caminar	var
+buy	comprar	var
+pay	pagar	var
+spend	gastar	var
+sell	vender	ver
+meet	encontrar	var	ue
+find	encontrar	var	ue
+include	incluir	vir
+continue	continuar	var	uar
+create	crear	var
+add	añadir	vir
+remove	quitar	var
+change	cambiar	var
+follow	seguir	vir	ei
+allow	permitir	vir
+let	dejar	var
+offer	ofrecer	ver	zco
+provide	proporcionar	var
+consider	considerar	var
+seem	parecer	ver	zco
+feel	sentir	vir	ie
+become	transformar	var
+show	mostrar	var	ue
+move	mover	ver	ue
+sit	sentar	var	ie
+close	cerrar	var	ie
+win	ganar	var
+pass	pasar	var
+happen	ocurrir	vir
+mean	significar	var
+fail	fallar	var
+break	romper	ver
+cut	cortar	var
+build	construir	vi
+grow	crecer	ver	zco
+fall	caer	vi
+choose	elegir	vir	ei
+catch	atrapar	var
+kill	matar	var
+die	morir	vir	ue
+bring	traer	vi
+keep	mantener	vi
+hold	sostener	ver
+get	obtener	vi
+put	poner	vi
+give	dar	vi
+take	tomar	var
+make	hacer	vi
+see	ver	vi
+look	mirar	var
+watch	observar	var
+go	ir	vi
+come	venir	vi
+leave	salir	vi
+return	volver	ver	ue
+arrive	llegar	var
+travel	viajar	var
+visit	visitar	var
+drive	conducir	vi
+turn	girar	var
+suggest	sugerir	vir	ei
+recommend	recomendar	var	ie
+agree	acordar	var
+discuss	discutir	vir
+mention	mencionar	var
+repeat	repetir	vir	ei
+check	revisar	var
+review	repasar	var
+prepare	preparar	var
+plan	planificar	var
+expect	esperar	var
+prefer	preferir	vir	ie
+enjoy	disfrutar	var
+worry	preocupar	var
+care	cuidar	var
+matter	importar	var
+depend	depender	ver
+record	grabar	var
+upload	subir	vir
+download	descargar	var
+print	imprimir	vir
+copy	copiar	var
+share	compartir	vir
+join	unir	vir
+invite	invitar	var
+accept	aceptar	var
+cancel	cancelar	var
+confirm	confirmar	var
+schedule	programar	var
+search	buscar	var
+save	guardar	var
+open	abrir	vir
+play	jugar	var	ue
+friend	amigo	nm
+meeting	reunión	nf
+report	informe	nm
+friday	viernes	nm	samepl
+monday	lunes	nm	samepl
+tuesday	martes	nm	samepl
+wednesday	miércoles	nm	samepl
+thursday	jueves	nm	samepl
+saturday	sábado	nm
+sunday	domingo	nm
+train	tren	nm
+note	nota	nf
+team	equipo	nm
+problem	problema	nm
+question	pregunta	nf
+time	tiempo	nm
+day	día	nm
+week	semana	nf
+month	mes	nm	pl=meses
+year	año	nm
+people	gente	nf	samepl
+person	persona	nf
+job	trabajo	nm
+task	tarea	nf
+email	correo	nm
+message	mensaje	nm
+phone	teléfono	nm
+issue	asunto	nm
+morning	mañana	nf
+night	noche	nf
+evening	tarde	nf
+hour	hora	nf
+minute	minuto	nm
+place	lugar	nm
+way	manera	nf
+thing	cosa	nf
+man	hombre	nm
+woman	mujer	nf
+boy	chico	nm
+girl	chica	nf
+family	familia	nf
+company	empresa	nf
+office	oficina	nf
+school	escuela	nf
+home	hogar	nm
+room	sala	nf
+car	coche	nm
+bus	autobús	nm
+station	estación	nf
+city	ciudad	nf
+country	país	nm	pl=países
+world	mundo	nm
+life	vida	nf
+hand	mano	nf
+eye	ojo	nm
+head	cabeza	nf
+name	nombre	nm
+number	número	nm
+part	parte	nf
+end	fin	nm
+case	caso	nm
+point	punto	nm
+group	grupo	nm
+system	sistema	nm
+program	programa	nm
+line	línea	nf
+word	palabra	nf
+example	ejemplo	nm
+fact	hecho	nm
+idea	idea	nf
+story	historia	nf
+book	libro	nm
+page	página	nf
+money	dinero	nm
+price	precio	nm
+market	mercado	nm
+business	negocio	nm
+service	servicio	nm
+product	producto	nm
+order	orden	nf
+level	nivel	nm
+area	área	nf
+government	gobierno	nm
+state	estado	nm
+law	ley	nf
+war	guerra	nf
+power	poder	nm
+member	miembro	nm
+community	comunidad	nf
+mother	madre	nf
+father	padre	nm
+student	estudiante	nm
+teacher	profesor	nm
+doctor	médico	nm
+patient	paciente	nm
+hospital	hospital	nm	pl=hospitales
+police	policía	nf
+road	carretera	nf
+street	calle	nf
+door	puerta	nf
+window	ventana	nf
+table	mesa	nf
+computer	computadora	nf
+screen	pantalla	nf
+camera	cámara	nf
+photo	foto	nf
+video	vídeo	nm
+music	música	nf
+song	canción	nf
+movie	película	nf
+game	juego	nm
+news	noticia	nf
+paper	papel	nm
+letter	carta	nf
+language	idioma	nm
+food	comida	nf
+coffee	café	nm
+breakfast	desayuno	nm
+lunch	almuerzo	nm
+dinner	cena	nf
+shop	tienda	nf
+store	almacén	nm	pl=almacenes
+client	cliente	nm
+customer	cliente	nm
+project	proyecto	nm
+deadline	plazo	nm
+budget	presupuesto	nm
+invoice	factura	nf
+contract	contrato	nm
+user	usuario	nm
+password	contraseña	nf
+account	cuenta	nf
+site	sitio	nm
+link	enlace	nm
+data	datos	nm	samepl
+image	imagen	nf	pl=imágenes
+text	texto	nm
+title	título	nm
+error	error	nm	pl=errores
+test	prueba	nf
+result	resultado	nm
+update	actualización	nf
+version	versión	nf
+feature	función	nf
+bug	defecto	nm
+fix	arreglo	nm
+code	código	nm
+app	aplicación	nf
+tool	herramienta	nf
+process	proceso	nm
+step	paso	nm
+list	lista	nf
+item	elemento	nm
+key	clave	nf
+value	valor	nm
+field	campo	nm
+button	botón	nm	pl=botones
+click	clic	nm
+view	vista	nf
+support	soporte	nm
+access	acceso	nm
+permission	permiso	nm
+role	rol	nm	pl=roles
+priority	prioridad	nf
+risk	riesgo	nm
+cost	costo	nm
+benefit	beneficio	nm
+goal	objetivo	nm
+reason	razón	nf	pl=razones
+cause	causa	nf
+effect	efecto	nm
+difference	diferencia	nf
+information	información	nf
+detail	detalle	nm
+summary	resumen	nm	pl=resúmenes
+comment	comentario	nm
+opinion	opinión	nf
+decision	decisión	nf
+agreement	acuerdo	nm
+option	opción	nf
+choice	elección	nf
+experience	experiencia	nf
+skill	habilidad	nf
+knowledge	conocimiento	nm
+research	investigación	nf
+science	ciencia	nf
+history	historia	nf
+art	arte	nm
+health	salud	nf
+safety	seguridad	nf
+security	seguridad	nf
+quality	calidad	nf
+training	capacitación	nf
+education	educación	nf
+class	clase	nf
+course	curso	nm
+lesson	lección	nf
+exam	examen	nm	pl=exámenes
+grade	calificación	nf
+homework	tarea	nf
+boss	jefe	nm
+employee	empleado	nm
+manager	gerente	nm
+colleague	colega	nm
+guest	invitado	nm
+neighbor	vecino	nm
+kid	niño	nm
+baby	bebé	nm
+animal	animal	nm	pl=animales
+dog	perro	nm
+cat	gato	nm
+bird	pájaro	nm
+tree	árbol	nm	pl=árboles
+air	aire	nm
+fire	fuego	nm
+sun	sol	nm	pl=soles
+rain	lluvia	nf
+snow	nieve	nf
+wind	viento	nm
+spring	primavera	nf
+summer	verano	nm
+autumn	otoño	nm
+winter	invierno	nm
+north	norte	nm
+south	sur	nm
+east	este	nm
+west	oeste	nm
+body	cuerpo	nm
+face	cara	nf
+voice	voz	nf	pl=voces
+heart	corazón	nm	pl=corazones
+mind	mente	nf
+moment	momento	nm
+bit	poco	nm
+side	lado	nm
+lot	montón	nm	pl=montones
+kind	tipo	nm
+sort	clase	nf
+rest	resto	nm
+front	frente	nm
+back	espalda	nf
+top	cima	nf
+bottom	fondo	nm
+center	centro	nm
+edge	borde	nm
+corner	esquina	nf
+floor	piso	nm
+wall	pared	nf	pl=paredes
+ground	suelo	nm
+sky	cielo	nm
+sea	mar	nm	pl=mares
+river	río	nm
+mountain	montaña	nf
+park	parque	nm
+bridge	puente	nm
+airport	aeropuerto	nm
+ticket	boleto	nm
+bag	bolsa	nf
+box	caja	nf
+bed	cama	nf
+chair	silla	nf
+kitchen	cocina	nf
+bathroom	baño	nm
+clothes	ropa	nf	samepl
+shoe	zapato	nm
+shirt	camisa	nf
+driver	conductor	nm
+passenger	pasajero	nm
+trip	viaje	nm
+map	mapa	nm
+address	dirección	nf
+building	edificio	nm
+apartment	apartamento	nm
+town	pueblo	nm
+village	pueblo	nm
+island	isla	nf
+border	frontera	nf
+president	presidente	nm
+minister	ministro	nm
+court	tribunal	nm	pl=tribunales
+judge	juez	nm	pl=jueces
+lawyer	abogado	nm
+crime	crimen	nm	pl=crímenes
+victim	víctima	nf
+witness	testigo	nm
+prison	cárcel	nf	pl=cárceles
+soldier	soldado	nm
+army	ejército	nm
+election	elección	nf
+vote	voto	nm
+party	partido	nm
+newspaper	periódico	nm
+article	artículo	nm
+picture	imagen	nf	pl=imágenes
+sound	sonido	nm
+color	color	nm	pl=colores
+size	tamaño	nm
+age	edad	nf
+date	fecha	nf
+birthday	cumpleaños	nm	samepl
+god	dios	nm	pl=dioses
+church	iglesia	nf
+ball	pelota	nf
+player	jugador	nm
+cup	taza	nf
+glass	vaso	nm
+bottle	botella	nf
+plate	plato	nm
+bread	pan	nm	pl=panes
+meat	carne	nf
+fish	pescado	nm
+fruit	fruta	nf
+vegetable	verdura	nf
+milk	leche	nf
+wine	vino	nm
+beer	cerveza	nf
+sugar	azúcar	nm
+salt	sal	nf
+restaurant	restaurante	nm
+hotel	hotel	nm	pl=hoteles
+bank	banco	nm
+cash	efectivo	nm
+card	tarjeta	nf
+bill	factura	nf
+tax	impuesto	nm
+salary	sueldo	nm
+interview	entrevista	nf
+resume	currículum	nm	samepl
+career	carrera	nf
+industry	industria	nf
+factory	fábrica	nf
+machine	máquina	nf
+engine	motor	nm	pl=motores
+oil	petróleo	nm
+energy	energía	nf
+medicine	medicina	nf
+drug	medicamento	nm
+pain	dolor	nm	pl=dolores
+blood	sangre	nf
+disease	enfermedad	nf
+virus	virus	nm	samepl
+vaccine	vacuna	nf
+mask	máscara	nf
+rule	regla	nf
+policy	política	nf
+right	derecho	nm
+human	humano	nm
+society	sociedad	nf
+culture	cultura	nf
+tradition	tradición	nf
+religion	religión	nf
+race	raza	nf
+gender	género	nm
+attention	atención	nf
+interest	interés	nm	pl=intereses
+feeling	sentimiento	nm
+fear	miedo	nm
+dream	sueño	nm
+truth	verdad	nf
+lie	mentira	nf
+secret	secreto	nm
+surprise	sorpresa	nf
+joke	broma	nf
+laugh	risa	nf
+smile	sonrisa	nf
+cry	llanto	nm
+noise	ruido	nm
+silence	silencio	nm
+space	espacio	nm
+future	futuro	nm
+past	pasado	nm
+present	presente	nm
+beginning	principio	nm
+middle	medio	nm
+memory	recuerdo	nm
+promise	promesa	nf
+advice	consejo	nm
+warning	advertencia	nf
+danger	peligro	nm
+accident	accidente	nm
+flood	inundación	nf
+earthquake	terremoto	nm
+storm	tormenta	nf
+heat	calor	nm	pl=calores
+cold	frío	ao
+light	luz	nf	pl=luces
+dark	oscuro	ao
+shadow	sombra	nf
+plant	planta	nf
+flower	flor	nf	pl=flores
+grass	hierba	nf
+forest	bosque	nm
+farm	granja	nf
+horse	caballo	nm
+cow	vaca	nf
+pig	cerdo	nm
+chicken	pollo	nm
+ship	barco	nm
+plane	avión	nm	pl=aviones
+bike	bicicleta	nf
+truck	camión	nm	pl=camiones
+wheel	rueda	nf
+traffic	tráfico	nm
+delay	retraso	nm
+seat	asiento	nm
+sign	señal	nf	pl=señales
+mile	milla	nf
+kilometer	kilómetro	nm
+meter	metro	nm
+kilo	kilo	nm
+half	mitad	nf
+quarter	cuarto	nm
+percent	porcentaje	nm
+total	total	nm	pl=totales
+average	promedio	nm
+rate	tasa	nf
+increase	aumento	nm
+decrease	disminución	nf
+growth	crecimiento	nm
+loss	pérdida	nf
+profit	ganancia	nf
+debt	deuda	nf
+loan	préstamo	nm
+insurance	seguro	nm
+claim	reclamo	nm
+request	solicitud	nf
+response	respuesta	nf
+deal	trato	nm
+sale	venta	nf
+audience	audiencia	nf
+public	público	ao
+press	prensa	nf
+media	medios	nm	samepl
+channel	canal	nm	pl=canales
+episode	episodio	nm
+series	serie	nf
+actor	actor	nm	pl=actores
+director	director	nm	pl=directores
+scene	escena	nf
+author	autor	nm	pl=autores
+writer	escritor	nm	pl=escritores
+reader	lector	nm	pl=lectores
+library	biblioteca	nf
+sentence	oración	nf
+paragraph	párrafo	nm
+chapter	capítulo	nm
+topic	tema	nm
+subject	tema	nm
+theme	tema	nm
+argument	argumento	nm
+evidence	evidencia	nf
+proof	prueba	nf
+source	fuente	nf
+reference	referencia	nf
+model	modelo	nm
+method	método	nm
+theory	teoría	nf
+practice	práctica	nf
+material	material	nm	pl=materiales
+wood	madera	nf
+metal	metal	nm	pl=metales
+plastic	plástico	nm
+stone	piedra	nf
+cloth	tela	nf
+leather	cuero	nm
+cotton	algodón	nm
+gold	oro	nm	pl=oros
+silver	plata	nf
+weight	peso	nm
+height	altura	nf
+length	longitud	nf
+width	ancho	nm
+depth	profundidad	nf
+speed	velocidad	nf
+strength	fuerza	nf
+temperature	temperatura	nf
+degree	grado	nm
+weather	clima	nm
+season	estación	nf
+holiday	vacaciones	nf	samepl
+vacation	vacaciones	nf	samepl
+weekend	fin	nm
+tomorrow	mañana	av
+yesterday	ayer	av
+now	ahora	av
+again	nuevamente	av
+always	siempre	av
+never	nunca	av
+often	frecuentemente	av
+sometimes	ocasionalmente	av
+still	todavía	av
+already	ya	av
+also	también	av
+here	aquí	av
+there	allí	av
+away	fuera	av
+soon	pronto	av
+later	después	av
+almost	casi	av
+maybe	quizás	av
+perhaps	quizá	av
+probably	probablemente	av
+really	realmente	av
+together	juntos	av
+alone	solo	av
+only	solamente	av
+up	arriba	av
+down	abajo	av
+well	bien	av
+ago	atrás	av
+late	tarde	at
+early	temprano	ae
+ready	listo	ae
+sure	seguro	ae
+available	disponible	ai
+possible	posible	ai
+true	verdadero	ao
+false	falso	ao
+important	importante	ai
+different	diferente	ai
+same	mismo	ao
+next	próximo	ao
+last	último	ao
+first	primero	ao
+second	segundo	ao
+third	tercero	ao
+other	otro	ao
+old	viejo	ao
+young	joven	ai	pl=jóvenes
+high	alto	ao
+low	bajo	ao
+long	largo	ao
+short	corto	ao
+great	genial	ai
+good	bueno	ao
+bad	malo	ao
+better	mejor	ai
+best	óptimo	ao
+worse	peor	ai
+little	pequeño	ao
+large	amplio	ao
+many	mucho	ao
+few	poco	ao
+several	varios	ao
+enough	suficiente	ai
+own	propio	ao
+able	capaz	ai	pl=capaces
+main	principal	ai
+whole	entero	ao
+certain	cierto	ao
+likely	probable	ai
+recent	reciente	ai
+current	actual	ai
+final	final	ai
+sorry	perdón	cw
+happy	feliz	ai	pl=felices
+sad	triste	ai
+angry	enojado	ae
+afraid	asustado	ae
+tired	cansado	ae
+sick	enfermo	ae
+fine	bien	at
+full	lleno	ae
+empty	vacío	ao
+closed	cerrado	ao
+private	privado	ao
+local	local	ai	pl=locales
+real	real	ai	pl=reales
+special	especial	ai	pl=especiales
+simple	simple	ai
+hard	difícil	ai	pl=difíciles
+easy	fácil	ai	pl=fáciles
+strong	fuerte	ai
+weak	débil	ai	pl=débiles
+clear	claro	ao
+hot	caliente	ai
+warm	cálido	ao
+fast	rápido	ao
+slow	lento	ao
+far	lejos	at
+near	cerca	at
+free	libre	ai
+wrong	equivocado	ao
+correct	correcto	ao
+english	inglés	ai
+spanish	español	ai	pl=españoles
+more	más	at
+less	menos	at
+very	muy	fn
+just	apenas	fn
+too	demasiado	fn
+even	incluso	fn
+these	estos	fn
+those	esos	fn
+this	este	fn
+that	que	fn
+our	nuestro	fn
+my	mi	fn
+your	tu	fn
+his	su	fn
+her	su	fn
+their	su	fn
+its	su	fn
+me	me	fn
+it	lo	fn
+him	lo	fn
+them	los	fn
+us	nos	fn
+what	qué	fn
+who	quién	fn
+from	desde	fn
+about	sobre	fn
+before	antes	fn
+after	después	fn
+on	en	fn
+at	en	fn
+by	por	fn
+as	como	fn
+if	si	fn
+then	entonces	fn
+so	así	fn
+because	porque	fn
+when	cuando	fn
+where	dónde	fn
+which	cuál	fn
+than	que	fn
+into	en	fn
+over	sobre	fn
+under	bajo	fn
+during	durante	fn
+without	sin	fn
+within	dentro	fn
+against	contra	fn
+between	entre	fn
+until	hasta	fn
+since	desde	fn
+around	alrededor	fn
+across	través	fn
+per	por	fn
+via	vía	fn
+according	según	fn
+can	poder	au
+will	ir	au	nogen
+should	deber	au
+have	tener	vi
+must	tener	au	nogen
+do	hacer	au	nogen
+may	poder	au	nogen
+yes	sí	cw
+no	no	cw
+ok	vale	cw
+hello	hola	cw
+thanks	gracias	cw
+please	por favor	fn
+mr	señor	nm	pl=señores
+mrs	señora	nf
+ms	señora	nf
+today	hoy	av
+outside	afuera	av
+water	agua	nf
+house	casa	nf
+child	niño	nm
+file	archivo	nm
+document	documento	nm
