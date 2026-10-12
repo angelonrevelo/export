@@ -582,6 +582,11 @@ fn read_signed(br: &mut BitReader<'_>, n: u32) -> Result<i32> {
 }
 
 fn read_subframe(br: &mut BitReader<'_>, block: usize, bps: u32) -> Result<Vec<i32>> {
+    let (kind, wasted) = read_subframe_header(br)?;
+    read_subframe_body(br, block, bps, kind, wasted)
+}
+
+fn read_subframe_header(br: &mut BitReader<'_>) -> Result<(u32, u32)> {
     if br.read_bits(1)? != 0 {
         return Err(Error::Corrupt("subframe pad"));
     }
@@ -591,6 +596,16 @@ fn read_subframe(br: &mut BitReader<'_>, block: usize, bps: u32) -> Result<Vec<i
     } else {
         0
     };
+    Ok((kind, wasted))
+}
+
+fn read_subframe_body(
+    br: &mut BitReader<'_>,
+    block: usize,
+    bps: u32,
+    kind: u32,
+    wasted: u32,
+) -> Result<Vec<i32>> {
     if wasted >= bps {
         return Err(Error::Corrupt("wasted"));
     }
@@ -1740,6 +1755,72 @@ mod tests {
 
     fn stereo_block() -> Pcm {
         stereo_pcm(4096)
+    }
+
+    fn aligned_stereo() -> Pcm {
+        let n = 4096usize;
+        let mut samples = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let ramp = ((i % 256) as i32) - 128;
+            let slow = ((i / 64) % 512) as i32 - 256;
+            let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+            let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767) & !3;
+            let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767) & !3;
+            samples.push(left);
+            samples.push(right);
+        }
+        Pcm {
+            sample_rate: 44_100,
+            channels: 2,
+            bits: 16,
+            samples,
+        }
+    }
+
+    #[test]
+    fn aligned_stereo_writes_wasted_bits_on_both_channels() {
+        let pcm = aligned_stereo();
+        assert_eq!(pcm.samples.len(), 8192);
+        let mut left = Vec::with_capacity(4096);
+        let mut right = Vec::with_capacity(4096);
+        for i in 0..4096 {
+            let l = pcm.samples[i * 2];
+            let r = pcm.samples[i * 2 + 1];
+            assert_eq!(l % 4, 0);
+            assert_eq!(r % 4, 0);
+            left.push(l);
+            right.push(r);
+        }
+        assert!(left.iter().any(|s| s % 8 != 0));
+        assert!(right.iter().any(|s| s % 8 != 0));
+        assert_ne!(left, right);
+        let bytes = encode(&pcm).unwrap();
+        assert!(
+            bytes.len() < 7_601,
+            "aligned stereo was not shorter than 7601: {}",
+            bytes.len()
+        );
+        let (left_wasted, right_wasted) = both_subframe_wasted(&bytes);
+        assert_eq!(left_wasted, 2);
+        assert_eq!(right_wasted, 2);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 2);
+        assert_eq!(back.bits, 16);
+        assert_eq!(back.sample_rate, 44_100);
+        assert_eq!(back.samples, pcm.samples);
+    }
+
+    fn both_subframe_wasted(bytes: &[u8]) -> (u32, u32) {
+        assert_eq!(&bytes[0..4], b"fLaC");
+        assert_eq!(bytes[42], 0xff);
+        assert_eq!(bytes[43], 0xf8);
+        assert_eq!(bytes[45], 0x18);
+        let mut br = BitReader::at(bytes, 48);
+        let (kind, left) = read_subframe_header(&mut br).unwrap();
+        let _ = read_subframe_body(&mut br, 4096, 16, kind, left).unwrap();
+        let (kind, right) = read_subframe_header(&mut br).unwrap();
+        let _ = read_subframe_body(&mut br, 4096, 16, kind, right).unwrap();
+        (left, right)
     }
 
     fn aligned_block() -> Pcm {

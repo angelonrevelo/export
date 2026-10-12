@@ -121,6 +121,26 @@ fn stereo_block() -> Pcm {
     stereo_pcm(4096)
 }
 
+fn aligned_stereo() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767) & !3;
+        let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767) & !3;
+        samples.push(left);
+        samples.push(right);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 2,
+        bits: 16,
+        samples,
+    }
+}
+
 fn aligned_block() -> Pcm {
     let n = 4096usize;
     let mut samples = Vec::with_capacity(n);
@@ -362,4 +382,31 @@ fn main() {
     });
     report("aligned_encode", "miss", aligned_pcm_len, &aligned_encode);
     println!("aligned_bytes {}", aligned_flac.len());
+
+    let aligned_st = aligned_stereo();
+    let aligned_st_flac = encode(&aligned_st).expect("encode aligned stereo");
+    let aligned_st_back = decode(&aligned_st_flac).expect("decode aligned stereo");
+    assert!(aligned_st_flac.len() < 7_601);
+    assert_eq!(aligned_st_back.samples, aligned_st.samples);
+    assert_eq!(aligned_st_back.channels, 2);
+    let mut channels_differ = false;
+    for i in 0..4096 {
+        assert_eq!(aligned_st.samples[i * 2] % 4, 0);
+        assert_eq!(aligned_st.samples[i * 2 + 1] % 4, 0);
+        assert_eq!(aligned_st_back.samples[i * 2], aligned_st.samples[i * 2]);
+        assert_eq!(
+            aligned_st_back.samples[i * 2 + 1],
+            aligned_st.samples[i * 2 + 1]
+        );
+        if aligned_st.samples[i * 2] != aligned_st.samples[i * 2 + 1] {
+            channels_differ = true;
+        }
+    }
+    assert!(channels_differ);
+    let aligned_st_pcm = (aligned_st.samples.len() * 2) as u64;
+    let aligned_st_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&aligned_st).expect("encode aligned stereo"));
+    });
+    report("aligned_stereo_encode", "miss", aligned_st_pcm, &aligned_st_encode);
+    println!("aligned_stereo_bytes {}", aligned_st_flac.len());
 }
