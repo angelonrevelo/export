@@ -91,6 +91,13 @@ fn main() {
             bench_zip_256mib(&dir);
             return;
         }
+        if value == "zip-512mib" {
+            println!("profile=release");
+            let dir = PathBuf::from(env_dir());
+            fs::create_dir_all(&dir).expect("bench dir");
+            bench_zip_512mib(&dir);
+            return;
+        }
     }
     let data = payload(PAYLOAD);
     let dir = PathBuf::from(env_dir());
@@ -132,6 +139,7 @@ fn main() {
     bench_zip_64mib(&dir);
     bench_zip_128mib(&dir);
     bench_zip_256mib(&dir);
+    bench_zip_512mib(&dir);
     bench_inflate();
     bench_pdf(&dir);
     bench_pdf16(&dir);
@@ -224,6 +232,37 @@ fn bench_zip_256mib(dir: &std::path::Path) {
     println!("zip_256mib_read_ms_p50={:.1}", percentile(&reads, 50.0));
     println!("zip_256mib_read_ms_p99={:.1}", percentile(&reads, 99.0));
     println!("note=256 MiB store entry, the next size after the 128 MiB entry");
+    println!("note=no zip64 and no deflate; the existing store writer and reader");
+    println!("note=write is CRC plus local header plus payload, before fsync");
+    println!("note=read follows write in-process, so the page cache may hold the file");
+    println!("note=warmup compared every payload byte; each timed read checks length and CRC");
+    println!(
+        "note=percentile is nearest-rank on milliseconds sorted ascending, so p99 is the slow tail"
+    );
+}
+
+fn bench_zip_512mib(dir: &std::path::Path) {
+    const BYTES: usize = 512 * 1024 * 1024;
+    const PASSES_512: usize = 100;
+    let data = payload(BYTES);
+    verify_store_roundtrip(&data, dir, "bench512-check.zip");
+    let mut writes = Vec::with_capacity(PASSES_512);
+    let mut reads = Vec::with_capacity(PASSES_512);
+    for _ in 0..PASSES_512 {
+        let sample = run(&data, dir);
+        assert_eq!(sample.bytes, BYTES as u64);
+        writes.push(ms(sample.write));
+        reads.push(ms(sample.read));
+    }
+    println!("zip_512mib_bytes={}", data.len());
+    println!("zip_512mib_entries=1");
+    println!("zip_512mib_method=store");
+    println!("zip_512mib_passes={PASSES_512}");
+    println!("zip_512mib_write_ms_p50={:.1}", percentile(&writes, 50.0));
+    println!("zip_512mib_write_ms_p99={:.1}", percentile(&writes, 99.0));
+    println!("zip_512mib_read_ms_p50={:.1}", percentile(&reads, 50.0));
+    println!("zip_512mib_read_ms_p99={:.1}", percentile(&reads, 99.0));
+    println!("note=512 MiB store entry, the next size after the 256 MiB entry");
     println!("note=no zip64 and no deflate; the existing store writer and reader");
     println!("note=write is CRC plus local header plus payload, before fsync");
     println!("note=read follows write in-process, so the page cache may hold the file");
