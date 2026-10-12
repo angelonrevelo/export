@@ -643,4 +643,45 @@ fn main() {
         decoded720.len(),
         decode_webp(&anim720).is_err(),
     );
+
+    // Appended four-frame 1280×720. The two-frame row above is unchanged.
+    let mut quad720 = Vec::with_capacity(4);
+    for add in [0u8, 80, 160, 40] {
+        let mut pixels = pair720[0].pixels.clone();
+        for px in pixels.chunks_exact_mut(3) {
+            px[0] = px[0].wrapping_add(add);
+        }
+        quad720.push(Raster::new(wide_w, wide_h, 3, pixels).unwrap());
+    }
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&quad720).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&quad720)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim4_720 = encode_webp_animation(&quad720).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim4_720_pixels = (wide_w as f64) * (wide_h as f64) * 4.0;
+    println!(
+        "webp_anim1280x4_encode {wide_w}x{wide_h} frames=4 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim4_720.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim4_720_pixels * 3.0, p50),
+        mb_s(anim4_720_pixels * 3.0, p99),
+        mb_s(anim4_720.len() as f64, p50),
+        allocs as f64 / (anim4_720_pixels / 1_000_000.0),
+    );
+    let decoded4_720 = decode_webp_animation(&anim4_720).unwrap();
+    let mut all_four_720 = decoded4_720.len() == 4;
+    for (got, src) in decoded4_720.iter().zip(&quad720) {
+        let still = decode_webp(&encode_webp_lossy(src).unwrap()).unwrap();
+        all_four_720 &= got.pixels == still.pixels;
+    }
+    println!(
+        "webp_anim1280x4_decode frames={} all_four={all_four_720} still_match={all_four_720} single_raster_errors={}",
+        decoded4_720.len(),
+        decode_webp(&anim4_720).is_err(),
+    );
 }
