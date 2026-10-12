@@ -2336,4 +2336,29 @@ mod tests {
         assert_eq!(plain_text(&shrunk).unwrap(), plain_text(&raw).unwrap());
         assert!(plain_text(&shrunk).unwrap().contains("PAGEONEWORD"));
     }
+
+    #[test]
+    fn shrink_markdown_flate_fixture_stays_37246_to_2659() {
+        let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
+        for i in 0..80 {
+            md.push_str(&format!(
+                "Paragraph {i} of the markdown fixture stays in the stream.\n\n"
+            ));
+        }
+        let raw = crate::convert::convert("md", "pdf", md.as_bytes()).unwrap();
+        assert_eq!(raw.len(), 37_200);
+        let missed = shrink(&raw).unwrap_err();
+        assert!(missed.message.starts_with("MISS:"), "{missed}");
+        assert!(missed.message.contains("input_b=37200"), "{missed}");
+        let flate = flate_fixture(&raw).unwrap();
+        assert_eq!(flate.len(), 37_246);
+        let shrunk = shrink(&flate).unwrap();
+        assert_eq!(shrunk.len(), 2_659);
+        assert!(shrunk.len() < flate.len());
+        assert!(flate_plain_matches(&flate, &shrunk).unwrap());
+        assert_eq!(flate_plains(&flate).unwrap(), flate_plains(&shrunk).unwrap());
+        let text = plain_text(&shrunk).unwrap();
+        assert_eq!(plain_text(&raw).unwrap(), text);
+        assert!(text.contains("Paragraph"), "{text}");
+    }
 }
