@@ -154,6 +154,7 @@ fn main() {
         "note rows_per_sec divides by {DATA_ROWS} data rows; allocs counts alloc+realloc during that one conversion, including output buffer growth"
     );
     xls_percentiles();
+    xls_two_number_percentiles();
 }
 
 fn nearest_rank(sorted: &[u128], pct: usize) -> u128 {
@@ -186,4 +187,31 @@ fn xls_percentiles() {
     let p99 = nearest_rank(&samples, 99);
     println!("xls_values 42 cat");
     println!("xls_to_csv samples={samples_n} p50_ns={p50} p99_ns={p99}");
+}
+
+fn xls_two_number_percentiles() {
+    let file = export_sheet::generated_biff_xls_two_numbers();
+    let (out, stats) =
+        export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("two-number xls is BIFF");
+    assert_eq!(stats.rows, 1);
+    assert_eq!(out, b"42,cat,7\n");
+    let samples_n = 10_000;
+    for _ in 0..200 {
+        let _ = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default());
+    }
+    let mut samples = Vec::with_capacity(samples_n);
+    for _ in 0..samples_n {
+        let started = Instant::now();
+        let got = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("two-number xls is BIFF");
+        let ns = started.elapsed().as_nanos();
+        assert_eq!(got.0, b"42,cat,7\n");
+        samples.push(ns);
+    }
+    samples.sort_unstable();
+    let p50 = nearest_rank(&samples, 50);
+    let p99 = nearest_rank(&samples, 99);
+    println!("xls_two_numbers values=42 cat 7");
+    println!("xls_two_numbers samples={samples_n} p50_ns={p50} p99_ns={p99}");
 }

@@ -2,7 +2,9 @@
 //!
 //! The file is a version-3 compound document whose `Workbook` stream holds
 //! BIFF8 records: a globals substream, one worksheet, one IEEE number, and
-//! one shared string. Anything that is not that layout is refused. There is
+//! one shared string. A second generated file adds another IEEE number in
+//! C1 and leaves B1 as that same string. Anything that is not that layout
+//! is refused. There is
 //! no writer for arbitrary sheets, and no guess for a record this parser
 //! does not know how to read when that record is one of the ones below.
 
@@ -25,6 +27,12 @@ const TEXT_VALUE: &str = "cat";
 /// The one `.xls` this crate reads: BIFF8, cell A1 = 42, cell B1 = `cat`.
 pub fn generated_biff_xls() -> Vec<u8> {
     wrap_ole(&workbook_bytes())
+}
+
+/// Same BIFF8 layout as [`generated_biff_xls`], with a second number in C1.
+/// A1 stays 42 and B1 stays `cat`.
+pub fn generated_biff_xls_two_numbers() -> Vec<u8> {
+    wrap_ole(&workbook_two_numbers())
 }
 
 pub(crate) fn to_delim<R: BufRead, W: Write>(
@@ -63,6 +71,28 @@ fn workbook_bytes() -> Vec<u8> {
     push_rec(&mut out, 0x0200, &dimensions());
     push_rec(&mut out, 0x0203, &number_cell(0, 0, NUMBER_VALUE));
     push_rec(&mut out, 0x00FD, &labelsst_cell(0, 1, 0));
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
+fn workbook_two_numbers() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    push_rec(&mut out, 0x00FC, &sst(TEXT_VALUE));
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = dimensions();
+    dims[10..12].copy_from_slice(&3u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    push_rec(&mut out, 0x0203, &number_cell(0, 0, NUMBER_VALUE));
+    push_rec(&mut out, 0x00FD, &labelsst_cell(0, 1, 0));
+    push_rec(&mut out, 0x0203, &number_cell(0, 2, 7.0));
     push_rec(&mut out, 0x000A, &[]);
     out
 }
@@ -617,5 +647,43 @@ mod tests {
         assert_eq!(&file[..8], &OLE_MAGIC);
         assert_eq!(u16::from_le_bytes(file[0x1A..0x1C].try_into().unwrap()), 3);
         assert_eq!(u16::from_le_bytes(file[0x1E..0x20].try_into().unwrap()), 9);
+    }
+
+    #[test]
+    fn two_numbers_keep_the_same_text_cell() {
+        let stream = workbook_two_numbers();
+        assert_eq!(
+            &stream[..8],
+            &[0x09, 0x08, 0x10, 0x00, 0x00, 0x06, 0x05, 0x00]
+        );
+        let numbers = records(&stream, 0x0203);
+        assert_eq!(numbers.len(), 2);
+        assert_eq!(u16::from_le_bytes(numbers[0][2..4].try_into().unwrap()), 0);
+        assert_eq!(
+            f64::from_le_bytes(numbers[0][6..14].try_into().unwrap()),
+            42.0
+        );
+        assert_eq!(u16::from_le_bytes(numbers[1][2..4].try_into().unwrap()), 2);
+        assert_eq!(
+            f64::from_le_bytes(numbers[1][6..14].try_into().unwrap()),
+            7.0
+        );
+        let text = record(&stream, 0x00FD);
+        assert_eq!(u16::from_le_bytes(text[2..4].try_into().unwrap()), 1);
+        assert_eq!(&record(&stream, 0x00FC)[8..], &[3, 0, 0, b'c', b'a', b't']);
+    }
+
+    fn records(stream: &[u8], op: u16) -> Vec<&[u8]> {
+        let mut found = Vec::new();
+        let mut i = 0;
+        while i + 4 <= stream.len() {
+            let opcode = u16::from_le_bytes(stream[i..i + 2].try_into().unwrap());
+            let len = u16::from_le_bytes(stream[i + 2..i + 4].try_into().unwrap()) as usize;
+            if opcode == op {
+                found.push(&stream[i + 4..i + 4 + len]);
+            }
+            i += 4 + len;
+        }
+        found
     }
 }

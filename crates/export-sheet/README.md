@@ -42,6 +42,16 @@ Release build, 10 000 reads of that file after 200 warmup reads, nearest rank:
 | p50 | 520 ns |
 | p99 | 1 147 ns |
 
+A second generated file keeps B1 as `cat` and adds a `NUMBER` in C1. The three
+values are **42**, **cat**, and **7**. `xls → csv` prints `42,cat,7`.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 603 ns |
+| p99 | 780 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
