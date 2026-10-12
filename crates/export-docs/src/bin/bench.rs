@@ -14,7 +14,7 @@ use export_docs::{
     ppt_text_document, ppt_text_indexed_document, ppt_text_nibble_document,
     ppt_text_picture_document, ppt_three_text_document, ppt_two_text_document,
     ppt_two_text_indexed_document, ppt_text_two_indexed_document, ppt_text_three_indexed_document,
-    pptx_raster_slide,
+    ppt_text_four_indexed_document, pptx_raster_slide,
     pptx_raster_stored_pdf, word97_document,
 };
 
@@ -2477,6 +2477,149 @@ fn ppt_indexed_three_text() -> String {
     text
 }
 
+fn report_ppt_pdf_indexed_four() {
+    let three_text = ppt_indexed_three_text();
+    let three = ppt_text_three_indexed_document(&three_text).unwrap_or_else(|err| {
+        eprintln!("ppt three 8-bit picture fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let three_pdf = convert("ppt", "pdf", &three).unwrap_or_else(|err| {
+        eprintln!("ppt three 8-bit picture pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if three.len() != 21504 || three_pdf.len() != 3421 {
+        eprintln!(
+            "ppt three 8-bit picture size changed: input_b={} output_b={}",
+            three.len(),
+            three_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let two_text = ppt_indexed_images_text();
+    let two = ppt_text_two_indexed_document(&two_text).unwrap_or_else(|err| {
+        eprintln!("ppt two 8-bit picture fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let two_pdf = convert("ppt", "pdf", &two).unwrap_or_else(|err| {
+        eprintln!("ppt two 8-bit picture pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if two.len() != 14848 || two_pdf.len() != 2816 {
+        eprintln!(
+            "ppt two 8-bit picture size changed: input_b={} output_b={}",
+            two.len(),
+            two_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let nibble_text = ppt_nibble_text();
+    let nibble = ppt_text_nibble_document(&nibble_text).unwrap_or_else(|err| {
+        eprintln!("ppt 4-bit picture fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let nibble_pdf = convert("ppt", "pdf", &nibble).unwrap_or_else(|err| {
+        eprintln!("ppt 4-bit picture pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if nibble.len() != 9216 || nibble_pdf.len() != 2469 {
+        eprintln!(
+            "ppt 4-bit picture size changed: input_b={} output_b={}",
+            nibble.len(),
+            nibble_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let text = ppt_indexed_four_text();
+    let file = ppt_text_four_indexed_document(&text).unwrap_or_else(|err| {
+        eprintln!("ppt four 8-bit picture fixture failed: {err}");
+        std::process::exit(1);
+    });
+    for banned in [2560, 5632, 6656, 7168, 7680, 8704, 9216, 9728, 14336, 14848, 21504] {
+        if file.len() == banned {
+            eprintln!(
+                "ppt four 8-bit picture fixture collided with a published file: {}",
+                file.len()
+            );
+            std::process::exit(1);
+        }
+    }
+    let (width, height, first_rgb) = indexed_rgb_add(0);
+    let (_, _, second_rgb) = indexed_rgb_add(1);
+    let (_, _, third_rgb) = indexed_rgb_add(2);
+    let (_, _, fourth_rgb) = indexed_rgb_add(3);
+    match convert("ppt", "pdf", &file) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("ppt→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            let image = pdf.windows(8).any(|w| w == b"/Im1 Do ")
+                && pdf.windows(8).any(|w| w == b"/Im2 Do ")
+                && pdf.windows(8).any(|w| w == b"/Im3 Do ")
+                && pdf.windows(8).any(|w| w == b"/Im4 Do ")
+                && pdf.windows(9).any(|w| w == b"/Width 80")
+                && pdf.windows(10).any(|w| w == b"/Height 64");
+            let first_match = pdf_image_matches(&pdf, width, height, &first_rgb).unwrap_or(false);
+            let second_match =
+                pdf_image_matches(&pdf, width, height, &second_rgb).unwrap_or(false);
+            let third_match = pdf_image_matches(&pdf, width, height, &third_rgb).unwrap_or(false);
+            let fourth_match =
+                pdf_image_matches(&pdf, width, height, &fourth_rgb).unwrap_or(false);
+            let pixels_match = first_match
+                && second_match
+                && third_match
+                && fourth_match
+                && first_rgb != second_rgb
+                && second_rgb != third_rgb
+                && third_rgb != fourth_rgb;
+            if extracted.contains(&text) && image && pixels_match {
+                let sample = measure(|| ready_bytes("ppt", "pdf", &file));
+                emit_ready("ppt→pdf indexed four", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→pdf indexed four p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={} pixels_match={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                        pixels_match,
+                    );
+                }
+            } else {
+                eprintln!(
+                    "four 8-bit pictures were not extracted into the pdf (pixels_match={pixels_match})"
+                );
+                emit_untimed(
+                    "ppt→pdf indexed four",
+                    file.len() as u64,
+                    Some(pdf.len() as u64),
+                    &format!(
+                        "MISS: pdf text, picture, or pixels (input_b={} pixels_match={})",
+                        file.len(),
+                        pixels_match
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("four 8-bit pictures could not be extracted: {err}");
+        }
+    }
+}
+
+fn ppt_indexed_four_text() -> String {
+    let mut text = String::new();
+    for i in 0..12 {
+        text.push_str(&format!(
+            "Quad indexed shape sentence {i} of the generated PowerPoint file. "
+        ));
+    }
+    text
+}
+
 fn ppt_two_indexed_text() -> (String, String) {
     let mut first = String::new();
     let mut second = String::new();
@@ -3095,6 +3238,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_pdf_indexed_three();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-pdf-pic8-four") {
+        println!("export-docs ppt four 8-bit picture pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_pdf_indexed_four();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {
