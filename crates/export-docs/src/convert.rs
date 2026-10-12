@@ -58,7 +58,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "epub", target: "html", ready: false, note: "MISS: only a generated epub whose spine is one or two xhtml files converts; other packages stay a miss" },
     Pair { source: "pptx", target: "html", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
-    Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one or two paragraphs converts; other files stay a miss" },
+    Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one, two, or three paragraphs converts; other files stay a miss" },
     Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
 ];

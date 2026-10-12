@@ -1,6 +1,6 @@
 //! Word 97 to HTML when `WordDocument` holds plain 8-bit paragraphs.
-//! Word 97 to PDF when that stream holds one or two such paragraphs, and only
-//! when the PDF text contains each of them. Any other file stays a miss.
+//! Word 97 to PDF when that stream holds one, two, or three such paragraphs, and
+//! only when the PDF text contains each of them. Any other file stays a miss.
 //! LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -40,17 +40,15 @@ pub fn doc_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
     })
 }
 
-/// One or two plain paragraphs become a text PDF. The PDF is kept only when
-/// its extracted text contains each paragraph. Every other shape stays a miss.
+/// One, two, or three plain paragraphs become a text PDF. The PDF is kept only
+/// when its extracted text contains each paragraph. Every other shape stays a miss.
 pub fn doc_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let (input_bytes, bytes, paras) = load_paragraphs(src)?;
-    if paras.is_empty() || paras.len() > 2 {
-        return Err(miss(input_bytes, "file is not one or two paragraphs"));
-    }
-    let pdf = if paras.len() == 1 {
-        one_paragraph_pdf(&paras[0])
-    } else {
-        two_paragraph_pdf(&paras[0], &paras[1])
+    let pdf = match paras.len() {
+        1 => one_paragraph_pdf(&paras[0]),
+        2 => two_paragraph_pdf(&paras[0], &paras[1]),
+        3 => three_paragraph_pdf(&paras[0], &paras[1], &paras[2]),
+        _ => return Err(miss(input_bytes, "file is not one, two, or three paragraphs")),
     }
     .map_err(|err| miss(input_bytes, &err.message))?;
     let extracted = crate::pdf::plain_text(&pdf).map_err(|err| miss(input_bytes, &err.message))?;
@@ -105,6 +103,11 @@ fn one_paragraph_pdf(text: &str) -> Result<Vec<u8>> {
 
 fn two_paragraph_pdf(first: &str, second: &str) -> Result<Vec<u8>> {
     let lines = [pdf_line(first), pdf_line(second)];
+    crate::pdf::from_lines(&lines)
+}
+
+fn three_paragraph_pdf(first: &str, second: &str, third: &str) -> Result<Vec<u8>> {
+    let lines = [pdf_line(first), pdf_line(second), pdf_line(third)];
     crate::pdf::from_lines(&lines)
 }
 
@@ -687,17 +690,60 @@ mod tests {
         let one = text.find("One").unwrap();
         let two = text.find("Two & three").unwrap();
         assert!(one < two, "{text}");
-        let doc = word97_document(&["One", "Two", "Three"]).unwrap();
+        let mut first = String::new();
+        let mut second = String::new();
+        for i in 0..200 {
+            first.push_str(&format!("Alpha {i} of the first generated paragraph. "));
+            second.push_str(&format!("Beta {i} of the second generated paragraph. "));
+        }
+        let doc = word97_document(&[&first, &second]).unwrap();
+        assert_eq!(doc.len(), 19456);
+        let pdf = crate::convert::convert("doc", "pdf", &doc).unwrap();
+        assert_eq!(pdf.len(), 18296);
+        let text = crate::pdf::plain_text(&pdf).unwrap();
+        assert!(text.contains(&first) && text.contains(&second), "{text}");
+    }
+
+    #[test]
+    fn three_paragraphs_become_pdf_with_all() {
+        let doc = word97_document(&["One", "Two & three", "Gamma"]).unwrap();
+        let pdf = crate::convert::convert("doc", "pdf", &doc).unwrap();
+        let text = crate::pdf::plain_text(&pdf).unwrap();
+        let one = text.find("One").unwrap();
+        let two = text.find("Two & three").unwrap();
+        let gamma = text.find("Gamma").unwrap();
+        assert!(one < two && two < gamma, "{text}");
+        let mut first = String::new();
+        let mut second = String::new();
+        let mut third = String::new();
+        for i in 0..150 {
+            first.push_str(&format!("Alpha {i} of the first generated paragraph. "));
+            second.push_str(&format!("Beta {i} of the second generated paragraph. "));
+            third.push_str(&format!("Gamma {i} of the third generated paragraph. "));
+        }
+        let doc = word97_document(&[&first, &second, &third]).unwrap();
+        assert_ne!(doc.len(), 2560);
+        let pdf = crate::convert::convert("doc", "pdf", &doc).unwrap();
+        let text = crate::pdf::plain_text(&pdf).unwrap();
+        let a = text.find(&first).unwrap();
+        let b = text.find(&second).unwrap();
+        let c = text.find(&third).unwrap();
+        assert!(a < b && b < c, "{text}");
+        let doc = word97_document(&["A", "B", "C", "D"]).unwrap();
         let err = crate::convert::convert("doc", "pdf", &doc).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{}", err.message);
-        assert!(err.message.contains("not one or two"), "{}", err.message);
+        assert!(err.message.contains("not one, two, or three"), "{}", err.message);
         assert!(
             err.message.contains(&format!("input_b={}", doc.len())),
             "{}",
             err.message
         );
-        let err = crate::convert::convert("doc", "pdf", b"not a doc").unwrap_err();
+        let mut enc = word97_document(&["Hi"]).unwrap();
+        let pos = enc.windows(2).position(|w| w == [0xEC, 0xA5]).unwrap();
+        enc[pos + 0x0B] = 0x01;
+        assert_eq!(enc.len(), 2560);
+        let err = crate::convert::convert("doc", "pdf", &enc).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{}", err.message);
-        assert!(err.message.contains("input_b=9"), "{}", err.message);
+        assert!(err.message.contains("input_b=2560"), "{}", err.message);
     }
 }
