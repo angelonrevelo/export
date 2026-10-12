@@ -149,6 +149,57 @@ fn four_thousand_sample_wav_matches_the_plain_pcm_s16le_file() {
 }
 
 #[test]
+fn four_thousand_sample_wav_matches_title_hello() {
+    let mut samples = Vec::with_capacity(4096);
+    for i in 0..4096i32 {
+        let s = ((i % 200) - 100) * 40 + (i * i) % 30;
+        samples.push(s.clamp(-32_768, 32_767));
+    }
+    let pcm = export_audio::Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    };
+    let flac = with_title(&export_audio::encode(&pcm).unwrap(), "Hello");
+    assert_eq!(export_audio::title(&flac).as_deref(), Some("Hello"));
+    let Output::Fresh { data, .. } = export(&flac, Job::ToWav, &mut Dedup::new()).unwrap() else {
+        panic!("expected a fresh wav");
+    };
+    assert_eq!(data.len(), 8284);
+    assert_eq!(
+        &data[36..84],
+        b"LIST(\x00\x00\x00INFOINAM\x06\x00\x00\x00Hello\x00ISFT\x0e\x00\x00\x00Lavf60.16.100\x00"
+    );
+    assert_eq!(
+        hex(&hash(&data)),
+        "3092475ff3a2161a1c04feabcceba55dc18186680049c83722c18d63c8b8637d"
+    );
+}
+
+fn with_title(flac: &[u8], title: &str) -> Vec<u8> {
+    assert_eq!(&flac[..5], b"fLaC\x80");
+    let comment = format!("TITLE={title}");
+    let text = comment.as_bytes();
+    let mut body = Vec::new();
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    body.extend_from_slice(text);
+    let mut out = Vec::with_capacity(flac.len() + 4 + body.len());
+    out.extend_from_slice(b"fLaC\x00");
+    out.extend_from_slice(&flac[5..42]);
+    let len = body.len();
+    out.push(0x84);
+    out.push((len >> 16) as u8);
+    out.push((len >> 8) as u8);
+    out.push(len as u8);
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&flac[42..]);
+    out
+}
+
+#[test]
 fn reader_hashes_in_one_pass_and_honors_the_cap() {
     let pcm = tone(64, 1);
     let flac = export_audio::encode(&pcm).unwrap();

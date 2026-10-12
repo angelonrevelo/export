@@ -28,9 +28,7 @@ pub enum Output {
         data: Vec<u8>,
     },
     /// This digest was ingested already. The codec did not run.
-    Duplicate {
-        digest: [u8; 32],
-    },
+    Duplicate { digest: [u8; 32] },
 }
 
 pub fn export(bytes: &[u8], job: Job, dedup: &mut Dedup) -> Result<Output> {
@@ -49,7 +47,9 @@ pub fn export_reader<R: Read>(
     let mut buf = Vec::new();
     let mut chunk = [0u8; 64 * 1024];
     loop {
-        let n = reader.read(&mut chunk).map_err(|_| Error::Corrupt("read"))?;
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|_| Error::Corrupt("read"))?;
         if n == 0 {
             break;
         }
@@ -94,7 +94,10 @@ fn export_hashed(bytes: &[u8], digest: [u8; 32], job: Job, dedup: &mut Dedup) ->
         Job::ToWav => match kind {
             Kind::Flac => {
                 let pcm = flac::decode(bytes)?;
-                wav::encode(&pcm)?
+                match flac::title(bytes) {
+                    Some(title) => wav::encode_with_title(&pcm, Some(&title))?,
+                    None => wav::encode(&pcm)?,
+                }
             }
             Kind::Mp3 => return Err(Error::Unsupported("MP3")),
             Kind::Aac => return Err(Error::Unsupported("AAC")),

@@ -10,7 +10,7 @@
 //! one seekpoint per block. The decoder also accepts stereo decorrelation,
 //! wasted bits, and Rice partitions.
 
-use crate::crc::{crc8, crc16};
+use crate::crc::{crc16, crc8};
 use crate::error::{Error, Result};
 use crate::md5::Md5;
 
@@ -85,11 +85,7 @@ impl<'a> BitReader<'a> {
         let loaded = (end_byte - start_byte) * 8;
         let skip = self.pos % 8;
         let shift = loaded - skip - n as usize;
-        let mask = if n == 32 {
-            u32::MAX
-        } else {
-            (1u32 << n) - 1
-        };
+        let mask = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
         let v = ((acc >> shift) as u32) & mask;
         self.pos = end;
         Ok(v)
@@ -179,11 +175,7 @@ impl BitWriter {
         if n == 0 || n > 32 {
             return;
         }
-        let mask = if n == 32 {
-            u32::MAX
-        } else {
-            (1u32 << n) - 1
-        };
+        let mask = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
         self.write_bits(v as u32 & mask, n);
     }
 
@@ -203,6 +195,78 @@ impl BitWriter {
     fn bit_len(&self) -> usize {
         self.buf.len() * 8 + self.nbit as usize
     }
+}
+
+/// Vorbis `TITLE` from the first comment block, if the text is UTF-8 and not empty.
+pub fn title(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 4 || &bytes[0..4] != b"fLaC" {
+        return None;
+    }
+    let mut pos = 4usize;
+    let mut found = None;
+    loop {
+        if pos + 4 > bytes.len() {
+            return found;
+        }
+        let last = bytes[pos] & 0x80 != 0;
+        let kind = bytes[pos] & 0x7f;
+        let len = ((u32::from(bytes[pos + 1]) << 16)
+            | (u32::from(bytes[pos + 2]) << 8)
+            | u32::from(bytes[pos + 3])) as usize;
+        pos += 4;
+        if pos + len > bytes.len() {
+            return found;
+        }
+        if kind == 4 && found.is_none() {
+            found = vorbis_title(&bytes[pos..pos + len]);
+        }
+        pos += len;
+        if last {
+            break;
+        }
+    }
+    found
+}
+
+fn vorbis_title(body: &[u8]) -> Option<String> {
+    if body.len() < 8 {
+        return None;
+    }
+    let vendor = u32::from_le_bytes(body[0..4].try_into().ok()?) as usize;
+    let mut pos = 4usize.checked_add(vendor)?;
+    if pos + 4 > body.len() {
+        return None;
+    }
+    let count = u32::from_le_bytes(body[pos..pos + 4].try_into().ok()?) as usize;
+    pos += 4;
+    for _ in 0..count {
+        if pos + 4 > body.len() {
+            return None;
+        }
+        let len = u32::from_le_bytes(body[pos..pos + 4].try_into().ok()?) as usize;
+        pos += 4;
+        if pos + len > body.len() {
+            return None;
+        }
+        let comment = &body[pos..pos + len];
+        pos += len;
+        if let Some(value) = title_value(comment) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn title_value(comment: &[u8]) -> Option<String> {
+    let eq = comment.iter().position(|byte| *byte == b'=')?;
+    if !comment[..eq].eq_ignore_ascii_case(b"TITLE") {
+        return None;
+    }
+    let value = &comment[eq + 1..];
+    if value.is_empty() {
+        return None;
+    }
+    String::from_utf8(value.to_vec()).ok()
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Pcm> {
@@ -720,11 +784,7 @@ fn read_residual(br: &mut BitReader<'_>, block: usize, order: usize) -> Result<V
 
 fn read_rice(br: &mut BitReader<'_>, param: u32) -> Result<i32> {
     let q = br.read_unary()?;
-    let r = if param == 0 {
-        0
-    } else {
-        br.read_bits(param)?
-    };
+    let r = if param == 0 { 0 } else { br.read_bits(param)? };
     let u = (u64::from(q))
         .checked_shl(param)
         .ok_or(Error::Corrupt("rice"))?
@@ -745,9 +805,7 @@ fn restore_fixed(mut data: Vec<i32>, residual: &[i32], order: usize) -> Result<V
             0 => 0i64,
             1 => i64::from(data[i - 1]),
             2 => 2 * i64::from(data[i - 1]) - i64::from(data[i - 2]),
-            3 => {
-                3 * i64::from(data[i - 1]) - 3 * i64::from(data[i - 2]) + i64::from(data[i - 3])
-            }
+            3 => 3 * i64::from(data[i - 1]) - 3 * i64::from(data[i - 2]) + i64::from(data[i - 3]),
             4 => {
                 4 * i64::from(data[i - 1]) - 6 * i64::from(data[i - 2]) + 4 * i64::from(data[i - 3])
                     - i64::from(data[i - 4])
@@ -759,7 +817,12 @@ fn restore_fixed(mut data: Vec<i32>, residual: &[i32], order: usize) -> Result<V
     Ok(data)
 }
 
-fn restore_lpc(mut data: Vec<i32>, residual: &[i32], coeff: &[i32], shift: i32) -> Result<Vec<i32>> {
+fn restore_lpc(
+    mut data: Vec<i32>,
+    residual: &[i32],
+    coeff: &[i32],
+    shift: i32,
+) -> Result<Vec<i32>> {
     let order = coeff.len();
     if data.len() != order {
         return Err(Error::Corrupt("order"));
@@ -896,7 +959,11 @@ fn encode_with(pcm: &Pcm, nominal: usize, seek_table: bool) -> Result<Vec<u8>> {
     if !pcm.samples.iter().all(|s| sample_fits(*s, pcm.bits)) {
         return Err(Error::Corrupt("sample"));
     }
-    let cap = if pcm.sample_rate <= 48_000 { 4608 } else { 16384 };
+    let cap = if pcm.sample_rate <= 48_000 {
+        4608
+    } else {
+        16384
+    };
     let nominal = nominal.clamp(16, cap).min(per);
     let blocks = plan_blocks(per, nominal);
     let mut frames = Vec::new();
@@ -1183,7 +1250,11 @@ fn push_utf8(out: &mut Vec<u8>, n: u64) {
 enum Coded {
     Constant(i32),
     Verbatim,
-    Fixed { order: usize, escape: Option<u32>, param: u32 },
+    Fixed {
+        order: usize,
+        escape: Option<u32>,
+        param: u32,
+    },
     Lpc {
         precision: u32,
         shift: i32,
@@ -1362,7 +1433,13 @@ fn lpc_order_cap(rate: u32, len: usize) -> usize {
 /// strictly shorter. A wider search on this fixture encoded in about 474 ms,
 /// past the time budget, so orders and precisions that are not this one are
 /// not tried. Constant and verbatim are left alone.
-fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed_bits: u64, wasted: u32) -> Option<Coded> {
+fn smaller_lpc(
+    samples: &[i32],
+    bps: u32,
+    rate: u32,
+    fixed_bits: u64,
+    wasted: u32,
+) -> Option<Coded> {
     let max_order = lpc_order_cap(rate, samples.len());
     let order = 11.min(max_order);
     if order == 0 || samples.len() <= order {
@@ -1730,7 +1807,11 @@ mod tests {
             samples,
         };
         let bytes = encode(&pcm).unwrap();
-        assert!(bytes.len() > 4000, "expected a wide residual, got {}", bytes.len());
+        assert!(
+            bytes.len() > 4000,
+            "expected a wide residual, got {}",
+            bytes.len()
+        );
         round_trip(&pcm);
     }
 
@@ -2189,7 +2270,9 @@ mod tests {
 
     #[test]
     fn escape_residual_round_trip() {
-        let samples: Vec<i32> = (0..32).map(|i| if i % 2 == 0 { 30_000 } else { -30_000 }).collect();
+        let samples: Vec<i32> = (0..32)
+            .map(|i| if i % 2 == 0 { 30_000 } else { -30_000 })
+            .collect();
         round_trip(&Pcm {
             sample_rate: 44_100,
             channels: 1,
@@ -2295,7 +2378,17 @@ mod tests {
         frame.extend_from_slice(&w.finish());
         let sum = crc16(&frame);
         frame.extend_from_slice(&sum.to_be_bytes());
-        let info = write_streaminfo(block, block, frame.len() as u32, frame.len() as u32, 44_100, 1, 16, samples.len() as u64, md5);
+        let info = write_streaminfo(
+            block,
+            block,
+            frame.len() as u32,
+            frame.len() as u32,
+            44_100,
+            1,
+            16,
+            samples.len() as u64,
+            md5,
+        );
         let mut out = Vec::new();
         out.extend_from_slice(b"fLaC");
         out.push(0x80);

@@ -84,15 +84,13 @@ pub fn decode(data: &[u8]) -> Result<Pcm> {
     })
 }
 
-/// 34-byte `LIST`/`INFO`/`ISFT` chunk placed before `data` on 16-bit PCM.
-/// The 26-byte body is `ISFT` = `Lavf60.16.100`. Source tags are not copied.
-const PCM_S16LE_LIST: &[u8] = &[
-    b'L', b'I', b'S', b'T', 0x1a, 0x00, 0x00, 0x00, b'I', b'N', b'F', b'O', b'I', b'S', b'F', b'T',
-    0x0e, 0x00, 0x00, 0x00, b'L', b'a', b'v', b'f', b'6', b'0', b'.', b'1', b'6', b'.', b'1', b'0',
-    b'0', 0x00,
-];
-
 pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
+    encode_with_title(pcm, None)
+}
+
+/// 16-bit PCM WAV. `title` is written as `INAM` before `ISFT` (`Lavf60.16.100`).
+/// An empty title is omitted. Other source tags are not copied.
+pub fn encode_with_title(pcm: &Pcm, title: Option<&str>) -> Result<Vec<u8>> {
     let width = match pcm.bits {
         8 => 1usize,
         16 => 2,
@@ -105,7 +103,11 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     }
     let frames = pcm.samples.len() / channels;
     let data_len = frames * channels * width;
-    let list = if pcm.bits == 16 { PCM_S16LE_LIST } else { &[] };
+    let list = if pcm.bits == 16 {
+        info_list(title)
+    } else {
+        Vec::new()
+    };
     let mut out = Vec::with_capacity(44 + list.len() + data_len);
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&((36 + list.len() + data_len) as u32).to_le_bytes());
@@ -119,7 +121,7 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&((channels * width) as u16).to_le_bytes());
     out.extend_from_slice(&u16::from(pcm.bits).to_le_bytes());
-    out.extend_from_slice(list);
+    out.extend_from_slice(&list);
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data_len as u32).to_le_bytes());
     for frame in 0..frames {
@@ -145,4 +147,31 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+/// `LIST`/`INFO` placed before `data`. `ISFT` is `Lavf60.16.100`.
+/// A title is `INAM`, NUL-terminated, padded to an even field length.
+fn info_list(title: Option<&str>) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(b"INFO");
+    if let Some(title) = title.filter(|text| !text.is_empty()) {
+        let mut text = title.as_bytes().to_vec();
+        text.push(0);
+        push_info(&mut body, b"INAM", &text);
+    }
+    push_info(&mut body, b"ISFT", b"Lavf60.16.100\x00");
+    let mut out = Vec::with_capacity(8 + body.len());
+    out.extend_from_slice(b"LIST");
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+fn push_info(body: &mut Vec<u8>, id: &[u8; 4], data: &[u8]) {
+    body.extend_from_slice(id);
+    body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    body.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        body.push(0);
+    }
 }
