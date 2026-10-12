@@ -99,6 +99,18 @@ The next size after that 256 MiB entry. One store entry, existing writer and rea
 | Read p50 | 1,166.2 ms |
 | Read p99 | 1,210.4 ms |
 
+### 1024 MiB store entry
+
+The next size after that 512 MiB entry. One store entry, existing writer and reader, no Zip64 and no deflate. 100 measured passes after one warmup that compared every payload byte. Write is CRC, local header, and payload, before fsync. Read follows write in-process, so the page cache may hold the file, and each timed read checks length and CRC. Percentiles are nearest-rank on milliseconds sorted ascending, so p99 is the slow tail. The 512 MiB, 256 MiB, 128 MiB, 64 MiB, and 32 MiB rows above are unchanged.
+
+| | |
+|---|---|
+| Bytes | 1,073,741,824 |
+| Write p50 | 2,812.4 ms |
+| Write p99 | 3,219.6 ms |
+| Read p50 | 2,352.1 ms |
+| Read p99 | 2,601.6 ms |
+
 ### New paths
 
 Median of 5 measured passes after one warmup, from `./target/release/pack-bench` on this tree. Allocation counts did not move across those passes.
