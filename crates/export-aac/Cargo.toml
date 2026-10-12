@@ -3,7 +3,7 @@ name = "export-aac"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
-description = "Encode and decode one mono AAC-LC ADTS frame at 44.1 kHz"
+description = "Encode and decode mono AAC-LC ADTS frames at 44.1 kHz. Not a song encoder."
 publish = false
 license = "MIT OR Apache-2.0"
 
@@ -13,6 +13,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "one-frame"
 path = "src/bin/one_frame.rs"
+
+[[bin]]
+name = "second-frame"
+path = "src/bin/second_frame.rs"
 
 [dependencies]
 

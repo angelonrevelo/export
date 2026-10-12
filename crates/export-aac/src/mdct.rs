@@ -7,6 +7,8 @@
 
 const N: usize = 1024;
 const WINDOW: usize = 2048;
+/// FFmpeg's float AAC IMDCT is 2^15 quieter than the 2/N pairing.
+const FFMPEG_IMDCT_QUIET: f64 = 32768.0;
 
 fn window_at(n: usize) -> f64 {
     (std::f64::consts::PI / WINDOW as f64 * (n as f64 + 0.5)).sin()
@@ -40,7 +42,7 @@ fn mdct(x: &[f64; WINDOW]) -> [f64; N] {
 fn imdct(spec: &[f64; N]) -> [f64; WINDOW] {
     let mut y = [0.0; WINDOW];
     let pi_over_n = std::f64::consts::PI / N as f64;
-    let scale = 1.0 / N as f64;
+    let scale = 1.0 / (N as f64 * FFMPEG_IMDCT_QUIET);
     for (n, sample) in y.iter_mut().enumerate() {
         let time = n as f64 + 512.5;
         let step = time * pi_over_n;
@@ -71,10 +73,10 @@ pub fn analysis(block: &[f64; WINDOW]) -> [f64; N] {
         windowed[n] = block[n] * window_at(n);
     }
     let mut spec = mdct(&windowed);
-    // Decoder IMDCT uses 2/N. The extra 2 here is the analysis gain that
-    // makes sine-window overlap-add reconstruct the PCM.
+    // Decoder IMDCT uses 2/N, then divides by [`FFMPEG_IMDCT_QUIET`].
+    // The extra 2 makes sine-window overlap-add reconstruct the PCM.
     for bin in &mut spec {
-        *bin *= 2.0;
+        *bin *= 2.0 * FFMPEG_IMDCT_QUIET;
     }
     spec
 }
@@ -82,17 +84,13 @@ pub fn analysis(block: &[f64; WINDOW]) -> [f64; N] {
 /// IMDCT, sine window, overlap-add with a zero previous frame.
 /// Returns the 1024 samples a decoder emits for a lone frame.
 pub fn synthesis_one_frame(spec: &[f64; N]) -> [f64; N] {
-    let im = imdct(spec);
-    let mut out = [0.0; N];
-    for n in 0..N {
-        out[n] = window_at(n) * im[n];
-    }
-    out
+    let mut overlap = [0.0; N];
+    synthesis_overlap(spec, &mut overlap)
 }
 
-/// IMDCT, window, and overlap-add. `overlap` is the previous frame's tail.
-#[cfg(test)]
-pub fn synthesis_overlap(spec: &[f64; N], overlap: &mut [f64; N]) -> [f64; N] {
+/// IMDCT, window, and overlap-add. `overlap` is the previous frame's tail
+/// and is replaced with this frame's tail.
+pub(crate) fn synthesis_overlap(spec: &[f64; N], overlap: &mut [f64; N]) -> [f64; N] {
     let im = imdct(spec);
     let mut out = [0.0; N];
     for n in 0..N {
@@ -161,9 +159,6 @@ mod tests {
             max_err = max_err.max((out[i] - pcm[i]).abs());
             max_err = max_err.max((out[N + i] - pcm[N + i]).abs());
         }
-        assert!(
-            max_err < 1e-6,
-            "unquantized TDAC max abs error {max_err}"
-        );
+        assert!(max_err < 1e-6, "unquantized TDAC max abs error {max_err}");
     }
 }

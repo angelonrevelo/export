@@ -47,17 +47,35 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Encode 1024 mono PCM samples in about [-1, 1] as one AAC-LC ADTS frame.
+///
+/// The left half of the long window is silence. This call does not keep
+/// overlap for a later frame.
 pub fn encode_frame(samples: &[f32]) -> Result<Vec<u8>, Error> {
-    if samples.len() != FRAME_SAMPLES {
+    encode_frame_following(&[0.0; FRAME_SAMPLES], samples)
+}
+
+/// Encode `samples` as one AAC-LC ADTS frame whose long window starts with
+/// `previous`.
+///
+/// `previous` is the prior 1024 PCM samples, not a decoded overlap tail.
+/// The library does not store it. [`encode_second_frame`] passes
+/// [`crate::one_frame_pcm`] here.
+pub fn encode_frame_following(previous: &[f32], samples: &[f32]) -> Result<Vec<u8>, Error> {
+    if previous.len() != FRAME_SAMPLES || samples.len() != FRAME_SAMPLES {
         return Err(Error::Invalid);
     }
-    if samples.iter().any(|s| !s.is_finite()) {
+    if previous
+        .iter()
+        .chain(samples.iter())
+        .any(|s| !s.is_finite())
+    {
         return Err(Error::Invalid);
     }
 
     let mut block = [0.0f64; 2048];
-    for (i, sample) in samples.iter().enumerate() {
-        block[FRAME_SAMPLES + i] = f64::from(*sample);
+    for i in 0..FRAME_SAMPLES {
+        block[i] = f64::from(previous[i]);
+        block[FRAME_SAMPLES + i] = f64::from(samples[i]);
     }
     let spec = mdct::analysis(&block);
     let (global_gain, quant) = quantize(&spec);
@@ -65,16 +83,44 @@ pub fn encode_frame(samples: &[f32]) -> Result<Vec<u8>, Error> {
     wrap_adts(&payload)
 }
 
+/// The recorded second frame: left half [`crate::one_frame_pcm`], right half
+/// the next 1024 samples of that same half-scale 440 Hz sine.
+pub fn encode_second_frame() -> Result<Vec<u8>, Error> {
+    encode_frame_following(&crate::one_frame_pcm(), &crate::second_frame_pcm())
+}
+
 /// Decode one AAC-LC ADTS frame to 1024 mono PCM samples.
+///
+/// Overlap history is zero, so a lone frame does not reconstruct its input.
 pub fn decode_frame(bytes: &[u8]) -> Result<[f32; FRAME_SAMPLES], Error> {
+    let spec = spectrum(bytes)?;
+    Ok(pcm_f32(&mdct::synthesis_one_frame(&spec)))
+}
+
+/// Decode `second` overlap-added against the tail of `first`.
+///
+/// The samples are what a decoder emits for the second frame. With the
+/// recorded pair, that is the first frame's sine, one frame late. It is not
+/// [`crate::second_frame_pcm`].
+pub fn decode_second_frame(first: &[u8], second: &[u8]) -> Result<[f32; FRAME_SAMPLES], Error> {
+    let spec0 = spectrum(first)?;
+    let mut overlap = [0.0; FRAME_SAMPLES];
+    let _ = mdct::synthesis_overlap(&spec0, &mut overlap);
+    let spec1 = spectrum(second)?;
+    Ok(pcm_f32(&mdct::synthesis_overlap(&spec1, &mut overlap)))
+}
+
+fn spectrum(bytes: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
     let adts = parse_adts(bytes)?;
-    let spec = read_raw_data_block(adts.payload)?;
-    let pcm = mdct::synthesis_one_frame(&spec);
+    read_raw_data_block(adts.payload)
+}
+
+fn pcm_f32(pcm: &[f64; FRAME_SAMPLES]) -> [f32; FRAME_SAMPLES] {
     let mut out = [0.0f32; FRAME_SAMPLES];
     for (i, sample) in pcm.iter().enumerate() {
         out[i] = *sample as f32;
     }
-    Ok(out)
+    out
 }
 
 fn wrap_adts(payload: &[u8]) -> Result<Vec<u8>, Error> {
@@ -463,7 +509,11 @@ fn dequant(q: i32, sf: i32) -> f64 {
         return 0.0;
     }
     let mag = (f64::from(q.abs())).powf(4.0 / 3.0) * scale_of(sf);
-    if q < 0 { -mag } else { mag }
+    if q < 0 {
+        -mag
+    } else {
+        mag
+    }
 }
 
 #[cfg(test)]
@@ -519,7 +569,39 @@ mod tests {
             max_err <= crate::RECORDED_MAX_ABS_ERROR,
             "max abs error {max_err}"
         );
-        assert!(frame.len() > 7);
+        assert_eq!(frame.len(), 513);
+    }
+
+    #[test]
+    fn second_frame_overlap_adds_against_the_first() {
+        let sine = crate::one_frame_pcm();
+        let first = encode_frame(&sine).unwrap();
+        assert_eq!(first.len(), 513);
+        let second = encode_second_frame().unwrap();
+        let out = decode_second_frame(&first, &second).unwrap();
+        let mut max_err = 0.0f32;
+        let mut peak = 0.0f32;
+        for (a, b) in sine.iter().zip(out.iter()) {
+            max_err = max_err.max((a - b).abs());
+            peak = peak.max(b.abs());
+        }
+        assert!(
+            max_err <= crate::RECORDED_SECOND_FRAME_MAX_ABS_ERROR,
+            "second frame max abs error {max_err} peak {peak}"
+        );
+        assert!(peak > 0.4, "second frame peak {peak} is still near silence");
+
+        let mut truncated = second.clone();
+        truncated.pop();
+        assert_eq!(
+            decode_second_frame(&first, &truncated).unwrap_err(),
+            Error::Truncated
+        );
+        let sbr = fill_frame(EXT_SBR_DATA);
+        assert_eq!(
+            decode_second_frame(&first, &sbr).unwrap_err(),
+            Error::Unsupported
+        );
     }
 
     #[test]

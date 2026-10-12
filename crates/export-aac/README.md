@@ -2,16 +2,16 @@
 
 One AAC-LC ADTS frame. Mono. 44.1 kHz. 1024 samples. Long sine window. No CRC.
 
-This is not a song encoder. It does not write a stream, it does not keep
-overlap from one call to the next, and it does not replace a multi-frame
-FFmpeg encode of a song. HE-AAC, SBR, and parametric stereo return
+This is not a song encoder. `encode_frame` does not keep overlap from one
+call to the next, and these two frames do not replace a multi-frame FFmpeg
+encode of a song. HE-AAC, SBR, and parametric stereo return
 `Error::Unsupported`. A truncated frame or a bad ADTS header returns an
 error. The library does not link or spawn FFmpeg.
 
 A single long window overlap-adds against a zero history. The half-scale
 440 Hz frame therefore does not come back as that sine. Host FFmpeg 6.1.1
 decodes the 513-byte frame as AAC-LC, 44100 Hz, mono, 1024 float samples.
-This decoder and that decode differ by at most 0.00359388 in absolute
+This decoder and that decode differ by at most 0.00000011 in absolute
 sample value. Both sit about 0.50 away from the original sine (full scale
 is 1.0). The measured max abs error of this crate's round trip is
 0.5003551. The locked bound is 0.501.
@@ -29,6 +29,26 @@ for a song.
 
 The miss is `decode_frame` of that frame with the last byte removed. It
 returns `Error::Truncated` and no samples.
+
+## Second frame, release
+
+The second frame is the same mono AAC-LC long window. Its left half is the
+first frame's PCM. Its right half is the next 1024 samples of the same
+half-scale 440 Hz sine. Overlap-add against the first frame's history emits
+that first sine, one frame late. It is not near silence: the peak is
+0.5006469, and the sine's peak is 0.5.
+
+Max abs error versus the sine is 0.0018240213. The locked bound is 0.002.
+Error versus the second frame's own samples is 0.63019896, which is the
+one-frame delay. Host FFmpeg 6.1.1 decodes the two-frame ADTS file as
+AAC-LC, 44100 Hz, mono, 2048 float samples. That second frame matches this
+decoder within 0.00000012.
+
+Same profile, 200 calls. Not a throughput number for a song.
+
+| | p50 | p99 | output bytes |
+| --- | --- | --- | --- |
+| encode | 6.007 ms (6006500 ns) | 7.073 ms (7073108 ns) | 68 |
 
 ## Build
 
