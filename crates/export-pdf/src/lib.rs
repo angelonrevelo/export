@@ -6,6 +6,8 @@
 //! out. Release split of that page is 8046 ns p50 and 10530 ns p99.
 //! A 32×32 page is 3722 bytes in and out. Release split of that page is
 //! 9060 ns p50 and 9938 ns p99.
+//! A 64×64 page is 12940 bytes in and out. Release split of that page is
+//! 13158 ns p50 and 14687 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any other image, and fonts
 //! other than the built-in Helvetica are not preserved. A truncated file, an
@@ -19,7 +21,7 @@ pub enum Error {
 }
 
 /// Largest edge, in pixels, of the one uncompressed RGB page this crate keeps.
-pub const RGB_MAX_EDGE: u32 = 32;
+pub const RGB_MAX_EDGE: u32 = 64;
 
 /// One classic-xref page holding one uncompressed 8-bit DeviceRGB image.
 ///
