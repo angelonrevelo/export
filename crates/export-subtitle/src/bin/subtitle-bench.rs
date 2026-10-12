@@ -26,6 +26,7 @@ fn main() {
     measure_one_underline();
     measure_one_strikeout();
     measure_vtt();
+    measure_vtt_10k();
 }
 
 /// Release latency for one bold dialogue line and one plain cue.
@@ -248,6 +249,60 @@ fn measure_vtt() {
         input.len(),
         written.len(),
     );
+}
+
+/// Ten thousand cues in the same shape as the one-cue WebVTT document.
+fn measure_vtt_10k() {
+    let mut input = String::from("WEBVTT\n\n");
+    for i in 0..10_000u64 {
+        let start = (i + 1) * 1000;
+        let end = start + 1000;
+        input.push_str(&vtt_stamp(start));
+        input.push_str(" --> ");
+        input.push_str(&vtt_stamp(end));
+        input.push_str("\nHi\n\n");
+    }
+    let cues = parse_vtt(&input).expect("vtt");
+    assert_eq!(cues.len(), 10_000);
+    assert_eq!(cues[0].start_ms, 1000);
+    assert_eq!(cues[0].end_ms, 2000);
+    assert_eq!(cues[0].text, "Hi");
+    let written = cues_to_vtt(&cues);
+    let again = parse_vtt(&written).expect("round trip");
+    assert_eq!(again, cues);
+    let n = cues.len();
+    if cfg!(debug_assertions) {
+        println!("vtt 10000: NOT JUDGED (debug build)");
+        return;
+    }
+    const WARMUP: usize = 20;
+    const SAMPLES: usize = 100;
+    let mut sink = 0usize;
+    for _ in 0..WARMUP {
+        sink = sink.wrapping_add(pass_vtt(&input));
+    }
+    let mut samples = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let start = Instant::now();
+        sink = sink.wrapping_add(pass_vtt(&input));
+        samples.push(start.elapsed().as_nanos() as f64);
+    }
+    std::hint::black_box(sink);
+    let p50 = percentile(&mut samples, 50.0) / n as f64;
+    let p99 = percentile(&mut samples, 99.0) / n as f64;
+    println!(
+        "vtt 10000 cues {n} bytes in {} bytes out {} p50 {p50:.0} ns p99 {p99:.0} ns",
+        input.len(),
+        written.len(),
+    );
+}
+
+fn vtt_stamp(ms: u64) -> String {
+    let h = ms / 3_600_000;
+    let m = (ms / 60_000) % 60;
+    let s = (ms / 1000) % 60;
+    let milli = ms % 1000;
+    format!("{h:02}:{m:02}:{s:02}.{milli:03}")
 }
 
 fn pass_vtt(input: &str) -> usize {
