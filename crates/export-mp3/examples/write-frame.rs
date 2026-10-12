@@ -1,9 +1,9 @@
 //! Write one mono 44.1 kHz Layer III frame to a file.
 //!
-//! The file is a single frame. ffmpeg's MP3 demuxer will not open a file that
-//! ends on that frame, because it seeks one frame ahead and must read the next
-//! four header bytes. `scripts/ffmpeg-decode.sh` repeats this frame so the
-//! demuxer can lock, then decodes it.
+//! The file is a single frame. For ffmpeg 6.1, use [`export_mp3::append_ffmpeg_demuxer_suffix`]
+//! or `examples/write-ffmpeg-openable.rs` so the demuxer can read four bytes at
+//! offset 417. That suffix is not a second spectral frame. `scripts/ffmpeg-decode.sh`
+//! can also repeat the frame.
 
 use export_mp3::{encode_frame, FRAME_SAMPLES};
 use std::env;

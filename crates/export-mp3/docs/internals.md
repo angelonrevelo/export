@@ -29,7 +29,9 @@ The recorded 16-line two-copy ffmpeg decode stays absolute peak 0.537770271, RMS
 
 ## ffmpeg
 
-ffmpeg 6.1 `mp3_read_header` seeks to `frame_size` and reads four bytes. If that read fails it returns `Invalid frame size (N): Could not seek to N` and does not decode. A one-frame file still hits that path. Checked again on the 440 Hz sine frame: one copy exits 234 with `Invalid frame size (417): Could not seek to 417`; two copies of that same frame exit 0 with no error line and 9216 bytes of PCM. `scripts/ffmpeg-decode.sh` records the single-file refusal, repeats the same frame, and requires a clean decode of that copy. The library does not link or spawn ffmpeg.
+ffmpeg 6.1 `mp3_read_header` seeks to `frame_size` and reads four bytes. If that read fails it returns `Invalid frame size (N): Could not seek to N` and does not decode. A bare 417-byte frame still exits 234 on the 32-line 440 Hz block.
+
+[`append_ffmpeg_demuxer_suffix`] repeats the frame's first four sync bytes after the frame. That is not a second Layer III frame and does not change the Huffman payload. A 421-byte file opens with exit 0. Default ffmpeg decode emits 2304 float samples; the first 1152 match the first half of the two-copy file. stderr may log `invalid new backstep -1` on the truncated tail. Two full frame copies remain a host option. Measurements are in `bench/runs/ffmpeg-openable-32line.txt`. The library does not link or spawn ffmpeg.
 
 ## Memory and threads
 

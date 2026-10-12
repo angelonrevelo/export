@@ -23,7 +23,7 @@ cargo build --release --target wasm32-unknown-unknown
 ./scripts/gate.sh
 ```
 
-`scripts/ffmpeg-decode.sh` is a host check. The library never calls ffmpeg. ffmpeg 6.1 still will not open a one-frame file, including the 440 Hz sine frame: it seeks one frame ahead, fails with `Invalid frame size (417): Could not seek to 417` (exit 234), and decodes only after that same frame is repeated.
+`scripts/ffmpeg-decode.sh` is a host check. The library never calls ffmpeg. A bare 417-byte file still fails ffmpeg 6.1 with exit 234 (`Invalid frame size (417): Could not seek to 417`). [`append_ffmpeg_demuxer_suffix`] writes 421 bytes (frame plus four repeated sync bytes). That is not a second spectral frame. ffmpeg opens it with exit 0. See `bench/runs/ffmpeg-openable-32line.txt`. Two full copies of the frame remain another host option.
 
 ## Bench
 

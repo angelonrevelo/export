@@ -18,14 +18,21 @@ if [[ "$bytes" -lt 4 ]]; then
   exit 1
 fi
 
-# Show the single-frame demuxer refusal, then decode two copies of that frame.
+# Bare frame: demuxer refusal. Suffix: opens without a second spectral frame.
 set +e
 one_err="$(ffmpeg -hide_banner -v error -i "$tmp/one.mp3" -f f32le "$tmp/one.pcm" 2>&1)"
 one_rc=$?
 set -e
-if [[ "$one_rc" -eq 0 ]]; then
-  echo "single-frame file opened; demuxer behavior changed" >&2
-  echo "$one_err" >&2
+
+cargo run --quiet --release --manifest-path "$root/Cargo.toml" --example write-ffmpeg-openable -- "$tmp/openable.mp3" >/dev/null
+openable_bytes="$(wc -c < "$tmp/openable.mp3" | tr -d ' ')"
+set +e
+openable_err="$(ffmpeg -hide_banner -v error -i "$tmp/openable.mp3" -f f32le "$tmp/openable.pcm" 2>&1)"
+openable_rc=$?
+set -e
+if [[ "$openable_rc" -ne 0 ]]; then
+  echo "ffmpeg openable file failed rc=$openable_rc" >&2
+  echo "$openable_err" >&2
   exit 1
 fi
 
@@ -55,3 +62,4 @@ PY
 
 echo "ffmpeg decoded the crate frame (presented twice for the demuxer)"
 echo "single_frame_demuxer_rc=${one_rc}"
+echo "ffmpeg_openable_bytes=${openable_bytes} openable_rc=${openable_rc}"
