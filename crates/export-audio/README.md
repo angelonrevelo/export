@@ -32,10 +32,10 @@ or Opus). There is no encoder for those formats.
 
 The encoder writes a `STREAMINFO` block and fixed-blocksize frames. Each
 subframe is constant, verbatim, or fixed order 0..=4, with one Rice
-partition or an unencoded residual. An LPC coefficient subframe (precision
-8, 12, or 15) replaces that fixed predictor only when the subframe's bit
-length is strictly smaller. Order stops at 12 when the sample rate is
-48 kHz or below, and at 32 above that.
+partition or an unencoded residual. One LPC candidate replaces that fixed
+predictor only when the subframe's bit length is strictly smaller: order 11
+at coefficient precision 12, or the subset order cap when that cap is lower
+than 11. Order 11 is inside the subset cap of 12 at 48 kHz and below.
 
 The decoder also accepts left/side, right/side, and mid/side, wasted bits,
 and Rice partition orders. A truncated stream returns `Truncated`. A flipped
@@ -46,9 +46,12 @@ match the samples returns `corrupt: md5`.
 
 - Not an MP3, AAC, or Opus codec. Those byte streams error.
 - The encoder does not write seek tables, cues, pictures, or wasted-bits.
-  It uses one Rice partition per subframe. LPC is not a second codec: it is
-  tried only against the fixed predictor already chosen for that block, and
-  it is kept only when that subframe is strictly shorter.
+  It uses one Rice partition per subframe. LPC is not a second codec. The
+  only candidate is order 11 at precision 12, tried against the fixed
+  predictor already chosen for that block, and kept only when that subframe
+  is strictly shorter. A search over orders 1..=12 and precisions 8, 12,
+  and 15 made this fixture 940,154 bytes but took 473.9 ms to encode, so
+  that wider search is not what the encoder runs.
 - Sample width on the way out is 8, 16, or 24. The stream must hold at least
   16 samples per channel. Block size stays inside the subset cap (4608 at
   48 kHz and below, 16384 above).
@@ -67,19 +70,18 @@ exits 2 and does not publish a timing verdict. 31 iterations after 3 warmup
 passes. MB/s is the named byte count divided by p50.
 
 The fixture is 1,048,576 mono 16-bit samples at 44.1 kHz (2,097,152 PCM
-bytes). The encoded FLAC is 940,154 bytes. The same fixture with only the
-fixed predictor was 956,218 bytes, so the LPC subframe is a size win on
-this file. Decode and hash rows use the FLAC size. The encode row uses the
-PCM size. This is one machine, one process, single-threaded. It is not a
-comparison with ffmpeg.
+bytes). The encoded FLAC is 948,202 bytes. The same fixture with only the
+fixed predictor was 956,218 bytes. Decode and hash rows use the FLAC size.
+The encode row uses the PCM size. This is one machine, one process,
+single-threaded. It is not a comparison with ffmpeg.
 
 | path | result | MB/s | p50 | p99 | bytes |
 |---|---|---:|---:|---:|---:|
-| sha256 | hit | 320.33 | 2.93 ms | 3.03 ms | 940,154 |
-| flac_decode | miss | 38.02 | 24.7 ms | 31.0 ms | 940,154 |
-| dedup | hit | 319.22 | 2.95 ms | 5.34 ms | 940,154 |
-| flac_encode | miss | 4.43 | 473.9 ms | 543.0 ms | 2,097,152 |
-| truncated | miss | 65.85 | 14.3 ms | 14.9 ms | 940,153 |
+| sha256 | hit | 307.58 | 3.08 ms | 3.26 ms | 948,202 |
+| flac_decode | miss | 37.23 | 25.5 ms | 26.4 ms | 948,202 |
+| dedup | hit | 296.43 | 3.20 ms | 4.64 ms | 948,202 |
+| flac_encode | miss | 26.54 | 79.0 ms | 87.4 ms | 2,097,152 |
+| truncated | miss | 58.50 | 16.2 ms | 21.3 ms | 948,201 |
 
 `flac_decode` / `miss` is a dedup miss: hash, sniff, decode, write WAV.
 `dedup` / `hit` hashes and returns before the codec, which is why it sits
@@ -87,10 +89,10 @@ next to SHA-256. `flac_encode` / `miss` is PCM to subset FLAC.
 `truncated` / `miss` drops the last byte and must return an error; the
 time is how fast that failure is found, not a successful decode.
 
-Decode of that file allocates about 3,764 times per MB. The buffers are
-built per frame. That cost is inside the 38.02 MB/s figure. Encode time
-includes the LPC search on every fixed block. That search is why encode
-p50 is 473.9 ms.
+Decode of that file allocates about 3,665 times per MB. The buffers are
+built per frame. That cost is inside the 37.23 MB/s figure. Encode p50 is
+79.0 ms with the single LPC candidate above. The wider search that produced
+940,154 bytes is not in this table.
 
 ### Reader experiment
 

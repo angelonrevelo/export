@@ -2,9 +2,10 @@
 //!
 //! The encoder writes STREAMINFO, then fixed-blocksize frames. Each subframe
 //! is constant, verbatim, or fixed order 0..=4, with a single Rice partition
-//! or an unencoded residual. An LPC coefficient subframe replaces that fixed
-//! predictor only when the written subframe is strictly shorter. The decoder
-//! also accepts stereo decorrelation, wasted bits, and Rice partitions.
+//! or an unencoded residual. One LPC candidate (order 11, or the subset cap
+//! when that is lower, at precision 12) replaces that fixed predictor only
+//! when the written subframe is strictly shorter. The decoder also accepts
+//! stereo decorrelation, wasted bits, and Rice partitions.
 
 use crate::crc::{crc8, crc16};
 use crate::error::{Error, Result};
@@ -1138,9 +1139,14 @@ enum Coded {
 }
 
 fn write_subframe(w: &mut BitWriter, samples: &[i32], bps: u32, rate: u32) {
-    let mut coded = choose(samples, bps);
+    let (mut coded, fixed_bits) = choose(samples, bps);
     if matches!(coded, Coded::Fixed { .. }) {
-        if let Some(lpc) = smaller_lpc(samples, bps, rate, &coded) {
+        debug_assert_eq!(
+            coded_bit_len(samples, bps, &coded) as u64,
+            fixed_bits,
+            "fixed bit estimate drifted"
+        );
+        if let Some(lpc) = smaller_lpc(samples, bps, rate, fixed_bits) {
             coded = lpc;
         }
     }
@@ -1218,11 +1224,12 @@ fn write_sub_header(w: &mut BitWriter, kind: u32) {
     w.write_bits(0, 1);
 }
 
-fn choose(samples: &[i32], bps: u32) -> Coded {
+fn choose(samples: &[i32], bps: u32) -> (Coded, u64) {
     if samples.iter().all(|s| *s == samples[0]) {
-        return Coded::Constant(samples[0]);
+        return (Coded::Constant(samples[0]), 8 + u64::from(bps));
     }
-    let verbatim = samples.len() as u64 * u64::from(bps);
+    // Costs include the 8-bit subframe header, so they match a written subframe.
+    let verbatim = 8 + samples.len() as u64 * u64::from(bps);
     let mut best_cost = verbatim;
     let mut best = Coded::Verbatim;
     let max_order = 4.min(samples.len().saturating_sub(1));
@@ -1231,9 +1238,10 @@ fn choose(samples: &[i32], bps: u32) -> Coded {
             continue;
         };
         let (param, rice) = best_rice(&residual);
-        let rice_cost = rice + 10 + u64::from(bps) * order as u64;
+        let warm = u64::from(bps) * order as u64;
+        let rice_cost = 18 + rice + warm;
         let width = signed_width(&residual);
-        let esc_cost = 15 + u64::from(width) * residual.len() as u64 + u64::from(bps) * order as u64;
+        let esc_cost = 23 + u64::from(width) * residual.len() as u64 + warm;
         if esc_cost < rice_cost && esc_cost < best_cost {
             best_cost = esc_cost;
             best = Coded::Fixed {
@@ -1250,7 +1258,7 @@ fn choose(samples: &[i32], bps: u32) -> Coded {
             };
         }
     }
-    best
+    (best, best_cost)
 }
 
 fn lpc_order_cap(rate: u32, len: usize) -> usize {
@@ -1258,91 +1266,79 @@ fn lpc_order_cap(rate: u32, len: usize) -> usize {
     cap.min(len.saturating_sub(1))
 }
 
-/// LPC replaces an already chosen fixed subframe only when the written
-/// subframe is strictly shorter. Constant and verbatim are left alone.
-fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed: &Coded) -> Option<Coded> {
-    let fixed_bits = coded_bit_len(samples, bps, fixed);
+/// One LPC candidate: order 11 (or the subset cap, when that is lower) at
+/// precision 12. It replaces the fixed subframe only when that candidate is
+/// strictly shorter. A wider search on this fixture encoded in about 474 ms,
+/// past the time budget, so orders and precisions that are not this one are
+/// not tried. Constant and verbatim are left alone.
+fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed_bits: u64) -> Option<Coded> {
     let max_order = lpc_order_cap(rate, samples.len());
-    if max_order == 0 || fixed_bits <= min_lpc_bits(bps) {
+    let order = 11.min(max_order);
+    if order == 0 || samples.len() <= order {
         return None;
     }
-    let r = hann_autocorr(samples, max_order);
+    let precision = 12u32;
+    let prefix = 17 + order as u64 * (u64::from(bps) + u64::from(precision));
+    if fixed_bits <= prefix + 15 {
+        return None;
+    }
+    let r = hann_autocorr(samples, order);
     if !r[0].is_finite() || r[0] <= 0.0 {
         return None;
     }
-    let mut prev = vec![0.0f64; max_order + 1];
-    let mut next = vec![0.0f64; max_order + 1];
+    let mut prev = [0.0f64; 33];
+    let mut next = [0.0f64; 33];
     let mut err = r[0];
-    let mut coeff_buf = Vec::new();
-    let mut residual = Vec::new();
-    let mut best_bits = fixed_bits;
-    let mut best = None;
-    for order in 1..=max_order {
+    for i in 1..=order {
         if !err.is_finite() || err <= 0.0 {
-            break;
+            return None;
         }
-        let mut acc = r[order];
-        for j in 1..order {
-            acc -= prev[j] * r[order - j];
+        let mut acc = r[i];
+        for j in 1..i {
+            acc -= prev[j] * r[i - j];
         }
         let k = acc / err;
         if !k.is_finite() || k.abs() >= 1.0 {
-            break;
+            return None;
         }
-        next[order] = k;
-        for j in 1..order {
-            next[j] = prev[j] - k * prev[order - j];
+        next[i] = k;
+        for j in 1..i {
+            next[j] = prev[j] - k * prev[i - j];
         }
-        prev[1..=order].copy_from_slice(&next[1..=order]);
+        prev[1..=i].copy_from_slice(&next[1..=i]);
         err *= 1.0 - k * k;
-        let model = &prev[1..=order];
-        for precision in [8u32, 12, 15] {
-            let prefix = 17 + order as u64 * (u64::from(bps) + u64::from(precision));
-            let res_len = samples.len() - order;
-            let floor = prefix + (10 + res_len as u64).min(15);
-            if floor >= best_bits as u64 {
-                continue;
-            }
-            let Some(shift) = quantize_into(model, precision, &mut coeff_buf) else {
-                continue;
-            };
-            if !lpc_residual_into(samples, &coeff_buf, shift, &mut residual) {
-                continue;
-            }
-            let (param, rice) = best_rice(&residual);
-            let width = signed_width(&residual);
-            let rice_total = prefix + 10 + rice;
-            let esc_total = prefix + 15 + u64::from(width) * residual.len() as u64;
-            let (total, escape, param) = if esc_total < rice_total {
-                (esc_total, Some(width), 0)
-            } else {
-                (rice_total, None, param)
-            };
-            if total >= best_bits as u64 {
-                continue;
-            }
-            let coded = Coded::Lpc {
-                precision,
-                shift,
-                coeff: coeff_buf.clone(),
-                escape,
-                param,
-            };
-            let actual = coded_bit_len(samples, bps, &coded);
-            debug_assert_eq!(actual as u64, total, "lpc bit estimate drifted");
-            if actual < best_bits {
-                best_bits = actual;
-                best = Some(coded);
-            }
-        }
     }
-    best
-}
-
-fn min_lpc_bits(bps: u32) -> usize {
-    // Order 1, precision 8, zero residual stored as an escape: the shortest
-    // LPC subframe this search can emit.
-    (17 + u64::from(bps) + 8 + 15) as usize
+    let mut coeff = Vec::with_capacity(order);
+    let shift = quantize_into(&prev[1..=order], precision, &mut coeff)?;
+    let mut residual = Vec::new();
+    if !lpc_residual_into(samples, &coeff, shift, &mut residual) {
+        return None;
+    }
+    let (param, rice) = best_rice(&residual);
+    let width = signed_width(&residual);
+    let rice_total = prefix + 10 + rice;
+    let esc_total = prefix + 15 + u64::from(width) * residual.len() as u64;
+    let (total, escape, param) = if esc_total < rice_total {
+        (esc_total, Some(width), 0)
+    } else {
+        (rice_total, None, param)
+    };
+    if total >= fixed_bits {
+        return None;
+    }
+    let coded = Coded::Lpc {
+        precision,
+        shift,
+        coeff,
+        escape,
+        param,
+    };
+    debug_assert_eq!(
+        coded_bit_len(samples, bps, &coded) as u64,
+        total,
+        "lpc bit estimate drifted"
+    );
+    Some(coded)
 }
 
 fn hann_autocorr(samples: &[i32], max_order: usize) -> Vec<f64> {
@@ -1493,25 +1489,34 @@ fn fixed_residual(samples: &[i32], order: usize) -> Option<Vec<i32>> {
 }
 
 fn best_rice(res: &[i32]) -> (u32, u64) {
+    let mut bits = [0u64; 15];
+    for &s in res {
+        let u = u64::from(zigzag_enc(s));
+        bits[0] += u + 1;
+        bits[1] += (u >> 1) + 2;
+        bits[2] += (u >> 2) + 3;
+        bits[3] += (u >> 3) + 4;
+        bits[4] += (u >> 4) + 5;
+        bits[5] += (u >> 5) + 6;
+        bits[6] += (u >> 6) + 7;
+        bits[7] += (u >> 7) + 8;
+        bits[8] += (u >> 8) + 9;
+        bits[9] += (u >> 9) + 10;
+        bits[10] += (u >> 10) + 11;
+        bits[11] += (u >> 11) + 12;
+        bits[12] += (u >> 12) + 13;
+        bits[13] += (u >> 13) + 14;
+        bits[14] += (u >> 14) + 15;
+    }
     let mut best_p = 0u32;
     let mut best = u64::MAX;
-    for p in 0..15 {
-        let bits = rice_bits(res, p);
-        if bits < best {
-            best = bits;
-            best_p = p;
+    for (p, b) in bits.iter().copied().enumerate() {
+        if b < best {
+            best = b;
+            best_p = p as u32;
         }
     }
     (best_p, best)
-}
-
-fn rice_bits(res: &[i32], param: u32) -> u64 {
-    let mut n = 0u64;
-    for &s in res {
-        let u = u64::from(zigzag_enc(s));
-        n += (u >> param) + 1 + u64::from(param);
-    }
-    n
 }
 
 fn signed_width(samples: &[i32]) -> u32 {
@@ -1579,8 +1584,9 @@ mod tests {
                 ((t * 0.17).sin() * 9000.0 + (t * 0.04).sin() * 2500.0).round() as i32
             })
             .collect();
-        let picked = choose(&samples, 16);
-        let lpc = smaller_lpc(&samples, 16, 44_100, &picked);
+        let (picked, bits) = choose(&samples, 16);
+        assert_eq!(coded_bit_len(&samples, 16, &picked) as u64, bits);
+        let lpc = smaller_lpc(&samples, 16, 44_100, bits);
         assert!(
             lpc.is_some(),
             "a two-tone sine should beat the fixed predictor"
