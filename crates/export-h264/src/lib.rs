@@ -1,11 +1,13 @@
-//! One baseline H.264 I-frame.
+//! Baseline H.264: one I-frame, then optionally one P-frame.
 //!
-//! The bitstream is Annex B: access unit delimiter, SPS, PPS, and one IDR
-//! slice. Profile is Constrained Baseline, chroma is 4:2:0, there is one
-//! slice, and one QP covers the frame. Prediction is intra DC. Luma residual
-//! is a 4x4 transform. Chroma residual is the DC coefficient only.
+//! The I-frame bitstream is Annex B: access unit delimiter, SPS, PPS, and one
+//! IDR slice. Profile is Constrained Baseline, chroma is 4:2:0, there is one
+//! slice, and one QP covers each frame. I-frame prediction is intra DC.
+//! The P-frame is one slice with motion zero and that I-frame as its only
+//! reference. Luma residual is a 4x4 transform. Chroma residual is the DC
+//! coefficient only.
 //!
-//! P-frames, B-frames, a second pass, and any thread count other than 1
+//! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
 //! return an error. Nothing here links or spawns ffmpeg. This is not a
 //! video shrink of a real MP4.
 
@@ -18,7 +20,7 @@ mod error;
 
 pub use error::Error;
 
-/// What the caller asked to code. Only [`Picture::Intra`] is encoded.
+/// What a one-frame [`encode`] call asked for. A P-frame is [`encode_ip`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Picture {
     Intra,
@@ -127,7 +129,16 @@ pub struct Encoded {
     pub qp: u8,
 }
 
-/// Encode one I-frame. Refuses P-frames, B-frames, a second pass, and threads.
+/// Annex B for the I-frame followed by one P-frame, plus both reconstructions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedPair {
+    pub annex_b: Vec<u8>,
+    pub intra: Yuv420,
+    pub predicted: Yuv420,
+    pub qp: u8,
+}
+
+/// Encode one I-frame. A lone P-frame, a B-frame, a second pass, and threads are refused.
 pub fn encode(frame: &Yuv420, opts: &EncodeOptions) -> Result<Encoded, Error> {
     frame.check()?;
     if opts.qp > 51 {
@@ -149,6 +160,46 @@ pub fn encode(frame: &Yuv420, opts: &EncodeOptions) -> Result<Encoded, Error> {
     Ok(Encoded {
         annex_b,
         reconstructed,
+        qp: opts.qp,
+    })
+}
+
+fn check_common(opts: &EncodeOptions) -> Result<(), Error> {
+    if opts.qp > 51 {
+        return Err(Error::Qp);
+    }
+    match opts.pass {
+        Pass::Single => {}
+        Pass::Second => return Err(Error::SecondPass),
+    }
+    if opts.threads != 1 {
+        return Err(Error::Threading);
+    }
+    Ok(())
+}
+
+/// I-frame, then one P-frame that references only that reconstruction.
+///
+/// The leading bytes are exactly [`encode`] of `intra`. B-frames and a second
+/// pass are refused.
+pub fn encode_ip(intra: &Yuv420, predicted: &Yuv420, opts: &EncodeOptions) -> Result<EncodedPair, Error> {
+    intra.check()?;
+    predicted.check()?;
+    check_common(opts)?;
+    if matches!(opts.picture, Picture::Bipredicted) {
+        return Err(Error::BipredictedFrame);
+    }
+    if intra.width != predicted.width || intra.height != predicted.height {
+        return Err(Error::Shape);
+    }
+    let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
+    let (p_bytes, p_rec) = encode::encode_pframe(predicted, &i_rec, opts.qp)?;
+    let mut annex_b = i_bytes;
+    annex_b.extend(p_bytes);
+    Ok(EncodedPair {
+        annex_b,
+        intra: i_rec,
+        predicted: p_rec,
         qp: opts.qp,
     })
 }
@@ -176,6 +227,22 @@ pub fn fixture_32x32() -> Yuv420 {
         u,
         v,
     }
+}
+
+/// Second 32×32 frame. It is the I-frame fixture shifted a little, so the
+/// P-frame residual is not zero.
+pub fn fixture_32x32_predicted() -> Yuv420 {
+    let mut frame = fixture_32x32();
+    for sample in &mut frame.y {
+        *sample = sample.saturating_add(16);
+    }
+    for sample in &mut frame.u {
+        *sample = sample.saturating_add(4);
+    }
+    for sample in &mut frame.v {
+        *sample = sample.saturating_sub(4);
+    }
+    frame
 }
 
 /// Mean absolute error over every Y, U, and V sample.

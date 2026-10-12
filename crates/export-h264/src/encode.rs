@@ -1,5 +1,5 @@
 use crate::bitstream::{nal_unit, BitWriter};
-use crate::cavlc::{intra_cbp_code, write_block};
+use crate::cavlc::{inter_cbp_code, intra_cbp_code, write_block};
 use crate::error::Error;
 use crate::Yuv420;
 
@@ -586,4 +586,235 @@ pub fn encode_iframe(frame: &Yuv420, qp: u8) -> Result<(Vec<u8>, Yuv420), Error>
         v: rec_v,
     };
     Ok((out, reconstructed))
+}
+
+struct Inter<'a> {
+    src: &'a [u8],
+    reference: &'a [u8],
+    rec: &'a mut [u8],
+    stride: usize,
+    nnz: &'a mut [u8],
+    nnz_stride: usize,
+}
+
+fn encode_inter_luma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32) -> [LumaBlock; 16] {
+    let mut blocks = [LumaBlock {
+        scan: [0; 16],
+        total: 0,
+    }; 16];
+    for i in 0..16 {
+        let x = mb_x * 16 + BLK_X[i] * 4;
+        let y = mb_y * 16 + BLK_Y[i] * 4;
+        let mut residual = [[0i32; 4]; 4];
+        for (r, row) in residual.iter_mut().enumerate() {
+            for (c, sample) in row.iter_mut().enumerate() {
+                let at = (y + r) * plane.stride + x + c;
+                *sample = plane.src[at] as i32 - plane.reference[at] as i32;
+            }
+        }
+        let z = quant4(&fwd4(&residual), qp);
+        let scan = to_scan(&z);
+        let idct = idct4(&dequant4(&z, qp));
+        for (r, row) in idct.iter().enumerate() {
+            for (c, coef) in row.iter().enumerate() {
+                let at = (y + r) * plane.stride + x + c;
+                plane.rec[at] = clip8(plane.reference[at] as i32 + coef);
+            }
+        }
+        let bx = mb_x * 4 + BLK_X[i];
+        let by = mb_y * 4 + BLK_Y[i];
+        let total = nnz_of(&scan);
+        plane.nnz[by * plane.nnz_stride + bx] = total;
+        blocks[i] = LumaBlock { scan, total };
+    }
+    blocks
+}
+
+fn encode_inter_chroma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32) -> ChromaMb {
+    let x0 = mb_x * 8;
+    let y0 = mb_y * 8;
+    let mut dcs = [0i32; 4];
+    for (i, dc) in dcs.iter_mut().enumerate() {
+        let bx = i & 1;
+        let by = i >> 1;
+        let mut residual = [[0i32; 4]; 4];
+        for (r, row) in residual.iter_mut().enumerate() {
+            for (c, sample) in row.iter_mut().enumerate() {
+                let at = (y0 + by * 4 + r) * plane.stride + x0 + bx * 4 + c;
+                *sample = plane.src[at] as i32 - plane.reference[at] as i32;
+            }
+        }
+        *dc = fwd4(&residual)[0][0];
+    }
+    let dc_q = quant_chroma_dc(dcs, qp);
+    let dc_r = dequant_chroma_dc(dc_q, qp);
+    for (i, coef) in dc_r.iter().enumerate() {
+        let mut dq = [[0i32; 4]; 4];
+        dq[0][0] = *coef;
+        let idct = idct4(&dq);
+        let bx = i & 1;
+        let by = i >> 1;
+        for (r, row) in idct.iter().enumerate() {
+            for (c, add) in row.iter().enumerate() {
+                let at = (y0 + by * 4 + r) * plane.stride + x0 + bx * 4 + c;
+                plane.rec[at] = clip8(plane.reference[at] as i32 + add);
+            }
+        }
+        let cx = mb_x * 2 + bx;
+        let cy = mb_y * 2 + by;
+        plane.nnz[cy * plane.nnz_stride + cx] = 0;
+    }
+    ChromaMb {
+        dc: dc_q,
+        ac: [[0; 15]; 4],
+        ac_total: [0; 4],
+    }
+}
+
+fn write_p_slice(slice: &Slice<'_>) -> Vec<u8> {
+    let mb_w = (slice.width / 16) as usize;
+    let mb_h = (slice.height / 16) as usize;
+    let mut b = BitWriter::new();
+    b.write_ue(0);
+    b.write_ue(0);
+    b.write_ue(0);
+    b.write_bits(1, 4);
+    b.write_bit(0);
+    b.write_bit(0);
+    b.write_se(0);
+    b.write_ue(1);
+    for my in 0..mb_h {
+        for mx in 0..mb_w {
+            let mb = my * mb_w + mx;
+            let blocks = &slice.luma[mb * 16..(mb + 1) * 16];
+            b.write_ue(0);
+            b.write_ue(0);
+            b.write_se(0);
+            b.write_se(0);
+            let mut cbpl = 0u32;
+            for i8 in 0..4 {
+                if (0..4).any(|k| blocks[i8 * 4 + k].total != 0) {
+                    cbpl |= 1 << i8;
+                }
+            }
+            let cu = &slice.chroma_u[mb];
+            let cv = &slice.chroma_v[mb];
+            let dc = cu.dc.iter().any(|&c| c != 0) || cv.dc.iter().any(|&c| c != 0);
+            let cbpc = if dc { 1 } else { 0 };
+            let cbp = (cbpl as usize) + (cbpc << 4);
+            b.write_ue(inter_cbp_code(cbp));
+            if cbp != 0 {
+                b.write_se(0);
+            }
+            if cbpl != 0 {
+                for i8 in 0..4 {
+                    if (cbpl & (1 << i8)) == 0 {
+                        continue;
+                    }
+                    for k in 0..4 {
+                        let i = i8 * 4 + k;
+                        let bx = mx * 4 + BLK_X[i];
+                        let by = my * 4 + BLK_Y[i];
+                        let nc = nc_at(slice.luma_nnz, mb_w * 4, bx, by);
+                        write_block(&mut b, &blocks[i].scan, nc);
+                    }
+                }
+            }
+            if cbpc > 0 {
+                write_block(&mut b, &cu.dc, -1);
+                write_block(&mut b, &cv.dc, -1);
+            }
+        }
+    }
+    b.rbsp_trailing();
+    // nal_ref_idc 0: this P picture is not itself a reference.
+    nal_unit(0, 1, &b.into_bytes())
+}
+
+/// One P slice after an already-reconstructed I-frame. Motion is zero.
+pub fn encode_pframe(source: &Yuv420, reference: &Yuv420, qp: u8) -> Result<(Vec<u8>, Yuv420), Error> {
+    if source.width != reference.width || source.height != reference.height {
+        return Err(Error::Shape);
+    }
+    let width = source.width;
+    let height = source.height;
+    let qp_i = qp as i32;
+    let mb_w = (width / 16) as usize;
+    let mb_h = (height / 16) as usize;
+    let mut rec_y = vec![0u8; source.y.len()];
+    let mut rec_u = vec![0u8; source.u.len()];
+    let mut rec_v = vec![0u8; source.v.len()];
+    let mut luma_nnz = vec![0u8; mb_w * 4 * mb_h * 4];
+    let mut u_nnz = vec![0u8; mb_w * 2 * mb_h * 2];
+    let mut v_nnz = vec![0u8; mb_w * 2 * mb_h * 2];
+    let mut luma_blocks = Vec::with_capacity(mb_w * mb_h * 16);
+    let mut chroma_u = Vec::with_capacity(mb_w * mb_h);
+    let mut chroma_v = Vec::with_capacity(mb_w * mb_h);
+    let y_stride = width as usize;
+    let c_stride = (width / 2) as usize;
+    for my in 0..mb_h {
+        for mx in 0..mb_w {
+            let lb = encode_inter_luma(
+                &mut Inter {
+                    src: &source.y,
+                    reference: &reference.y,
+                    rec: &mut rec_y,
+                    stride: y_stride,
+                    nnz: &mut luma_nnz,
+                    nnz_stride: mb_w * 4,
+                },
+                mx,
+                my,
+                qp_i,
+            );
+            luma_blocks.extend_from_slice(&lb);
+            chroma_u.push(encode_inter_chroma(
+                &mut Inter {
+                    src: &source.u,
+                    reference: &reference.u,
+                    rec: &mut rec_u,
+                    stride: c_stride,
+                    nnz: &mut u_nnz,
+                    nnz_stride: mb_w * 2,
+                },
+                mx,
+                my,
+                qp_i,
+            ));
+            chroma_v.push(encode_inter_chroma(
+                &mut Inter {
+                    src: &source.v,
+                    reference: &reference.v,
+                    rec: &mut rec_v,
+                    stride: c_stride,
+                    nnz: &mut v_nnz,
+                    nnz_stride: mb_w * 2,
+                },
+                mx,
+                my,
+                qp_i,
+            ));
+        }
+    }
+    let mut out = nal_unit(0, 9, &[0x30]);
+    out.extend(write_p_slice(&Slice {
+        width,
+        height,
+        luma: &luma_blocks,
+        chroma_u: &chroma_u,
+        chroma_v: &chroma_v,
+        luma_nnz: &luma_nnz,
+        u_nnz: &u_nnz,
+        v_nnz: &v_nnz,
+    }));
+    Ok((
+        out,
+        Yuv420 {
+            width,
+            height,
+            y: rec_y,
+            u: rec_u,
+            v: rec_v,
+        },
+    ))
 }

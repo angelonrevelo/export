@@ -274,3 +274,13 @@ pub fn intra_cbp_code(cbp: usize) -> u32 {
     ];
     MAP[cbp]
 }
+
+/// Inter coded_block_pattern (0..=47) to the Exp-Golomb codeNum.
+/// Pattern 0 is codeNum 0.
+pub fn inter_cbp_code(cbp: usize) -> u32 {
+    const MAP: [u32; 48] = [
+        0, 2, 3, 7, 4, 8, 17, 13, 5, 18, 9, 14, 10, 15, 16, 11, 1, 32, 33, 36, 34, 37, 44, 40, 35,
+        45, 38, 41, 39, 42, 43, 19, 6, 24, 25, 20, 26, 21, 46, 28, 27, 47, 22, 29, 23, 30, 31, 12,
+    ];
+    MAP[cbp]
+}

@@ -1,5 +1,6 @@
 use export_h264::{
-    encode, fixture_32x32, mean_absolute_error, EncodeOptions, Error, Pass, Picture, Yuv420,
+    encode, encode_ip, fixture_32x32, fixture_32x32_predicted, mean_absolute_error, EncodeOptions,
+    Error, Pass, Picture, Yuv420,
 };
 
 #[test]
@@ -27,8 +28,27 @@ fn refuses_p_b_second_pass_and_threads() {
     assert_eq!(encode(&frame, &threaded).unwrap_err(), Error::Threading);
     assert_eq!(
         Error::PredictedFrame.to_string(),
-        "P-frames are not encoded"
+        "a P-frame is encoded only after the I-frame"
     );
+    assert_eq!(
+        encode_ip(&frame, &frame, &bipred).unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_ip(&frame, &frame, &second).unwrap_err(),
+        Error::SecondPass
+    );
+}
+
+#[test]
+fn iframe_bytes_stay_in_front_of_the_pframe() {
+    let intra = fixture_32x32();
+    let alone = encode(&intra, &EncodeOptions::default()).unwrap();
+    assert_eq!(alone.annex_b.len(), 272);
+    let pair = encode_ip(&intra, &fixture_32x32_predicted(), &EncodeOptions::default()).unwrap();
+    assert!(pair.annex_b.starts_with(&alone.annex_b));
+    assert!(pair.annex_b.len() > alone.annex_b.len());
+    assert!(pair.annex_b.windows(5).any(|w| w[0..4] == [0, 0, 0, 1] && w[4] == 0x01));
 }
 
 #[test]

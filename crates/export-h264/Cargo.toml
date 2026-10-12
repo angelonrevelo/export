@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.74"
 publish = false
-description = "One baseline H.264 I-frame, 4:2:0, Annex B. No dependencies."
+description = "Baseline H.264 I-frame and one following P-frame. No dependencies."
 
 # Hot path has no decoder, no C toolchain, and no ffmpeg. Threading is off.
 
@@ -24,3 +24,7 @@ codegen-units = 1
 [[bin]]
 name = "iframe"
 path = "src/bin/iframe.rs"
+
+[[bin]]
+name = "ipframe"
+path = "src/bin/ipframe.rs"

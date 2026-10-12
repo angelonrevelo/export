@@ -1,8 +1,8 @@
 # export-h264
 
-One baseline H.264 I-frame. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
+One baseline H.264 I-frame, and one P-frame after it. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
 
-This is not a video shrink of a real MP4. It does not open a movie, does not write P-frames or B-frames, and does not run a second pass. Those requests return an error. It does not link or spawn ffmpeg.
+This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The P-frame is only the second picture, motion zero, one reference (the I-frame reconstruction). It does not link or spawn ffmpeg.
 
 Chroma residual is the DC coefficient of each 4×4 block. Luma residual is a full 4×4 transform. Deblocking is off so a decoder's pixels are the inverse transform.
 
@@ -15,3 +15,13 @@ Release build (`opt-level = 3`, `lto = "thin"`, `codegen-units = 1`), generated 
 - mean absolute error, ffmpeg decode versus the source, every Y, U, and V sample: 2.4974 (Y 1.9961, U 3, V 4)
 
 That decode matches the encoder reconstruction. `scripts/check-decode.sh` is a host check. It may run ffmpeg only to decode the Annex B file the `iframe` binary already wrote.
+
+## Two frames
+
+Same release profile and QP, the 32×32 fixture then a shifted copy, one thread. 200 calls after 20 warmup. The I-frame bytes are the 272-byte picture above.
+
+- output: 415 bytes
+- release p50: 18 µs, p99: 21 µs on the recorded run. Five later runs on that binary were p50 18–21 µs and p99 23–41 µs
+- mean absolute error, ffmpeg decode versus both sources: 2.5098. The I-frame half is still 2.4974. The P-frame half is 2.5221
+
+`scripts/check-pframe.sh` may run ffmpeg only to decode that two-picture file.
