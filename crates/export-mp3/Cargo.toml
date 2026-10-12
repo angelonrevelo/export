@@ -1,0 +1,37 @@
+# Single-threaded, zero-dependency MPEG-1 Layer III frame codec.
+# No rustls. wasm32-unknown-unknown is a supported lib target (atomics stay off).
+
+[package]
+name = "export-mp3"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "Encode and decode one MPEG-1 Layer III frame (mono, 44.1 kHz)."
+readme = "README.md"
+publish = false
+categories = ["multimedia::audio"]
+keywords = ["mp3", "mpeg", "audio"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[example]]
+name = "bench"
+path = "examples/bench.rs"
+
+[[example]]
+name = "write-frame"
+path = "examples/write-frame.rs"
+
+[[example]]
+name = "sine-440"
+path = "examples/sine-440.rs"
+
+[[example]]
+name = "write-ffmpeg-openable"
+path = "examples/write-ffmpeg-openable.rs"
