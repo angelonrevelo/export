@@ -6,7 +6,8 @@
 //! that gate.
 //!
 //! Working jobs: stream-copy remux of non-fragmented mp4/mov/m4a, elementary
-//! sample copy, and WAV/PCM read, write, downmix, and integer resample.
+//! sample copy, stream-copy concat of two matching MP4s, WAV/PCM read and
+//! write, and a one-pass WAV shrink via downmix and integer resample.
 //! Fragmented MP4 (`moof`) is refused. AAC, Opus, MP3, FLAC, GIF, and WebM
 //! are identified and not decoded.
 
@@ -16,16 +17,18 @@ mod error;
 mod export;
 mod pcm;
 mod sha256;
+mod shrink;
 mod sniff;
 mod wav;
 
 pub use bmff::{
-    append_samples, build_movie, elementary, parse, remux, Movie, MovieSpec, RemuxOpt, SampleTable,
-    Track, TrackSpec,
+    append_samples, build_movie, concat_mp4, elementary, parse, remux, Movie, MovieSpec, RemuxOpt,
+    SampleTable, Track, TrackSpec,
 };
 pub use dedup::{digest_of, Dedup, Prior};
 pub use error::{Error, Result};
 pub use export::{export, export_reader, Job, Output, DEFAULT_MAX_BYTES};
 pub use sha256::{hash, hash_reader, hex, Sha256};
+pub use shrink::{shrink_wav, WavShrink};
 pub use sniff::{sniff, MediaKind};
 pub use wav::{decode as decode_wav, encode as encode_wav, Wav, WavSpec};

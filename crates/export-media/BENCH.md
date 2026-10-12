@@ -20,3 +20,16 @@ MB/s is input bytes / p50. Rows under 1 µs print `n/a` because that is the time
 ## Reverted
 
 Coalesced copy of adjacent samples versus one copy per sample, same 4 MB track (256 × 16 KiB): p50 255 µs vs 252 µs, gain −1.2%. Under a 5% noise floor. Reverted. The shipped copy reserves the known byte count and then copies each sample.
+
+## Concat and WAV shrink
+
+`cargo bench --bench concat_shrink`. Same release profile, 31 iterations, 3 warmup. The rows above were not remeasured.
+
+| path | result | MB/s | p50 | p99 | allocs/MB | bytes |
+|---|---|---:|---:|---:|---:|---:|
+| concat | hit | 728.66 | 2.883 ms | 3.068 ms | 48.56 | 2,100,576 |
+| concat | miss | 9,494.13 | 0.221 ms | 0.264 ms | 33.32 | 2,100,576 |
+| wav_shrink | hit | 482.72 | 2.072 ms | 2.545 ms | 5.00 | 1,000,044 |
+| wav_shrink | miss | n/a | 45 ns | 99 ns | 0.00 | 1,050,288 |
+
+Concat hit appends two non-fragmented MP4s. The miss is a codec mismatch after both files parse. WAV shrink is one mono downmix and one resample to a 200,000 byte budget. The shrink miss is an MP4, rejected by the magic check.

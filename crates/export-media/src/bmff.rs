@@ -5,8 +5,10 @@
 
 use crate::error::{Error, Result};
 
+mod concat;
 mod write;
 
+pub use concat::concat_mp4;
 pub use write::{build_movie, MovieSpec, TrackSpec};
 
 #[derive(Clone, Debug)]

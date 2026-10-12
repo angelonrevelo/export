@@ -25,5 +25,9 @@ codegen-units = 1
 name = "throughput"
 harness = false
 
+[[bench]]
+name = "concat_shrink"
+harness = false
+
 [[example]]
 name = "oracle_fixture"

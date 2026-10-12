@@ -22,6 +22,8 @@ committed and before a codec runs.
 | `Remux { faststart, audio_only, video_only }` | Stream-copy a non-fragmented mp4, mov, or m4a. Sample bytes are copied, not decoded. `faststart` places `moov` before `mdat`. |
 | `Elementary { audio }` | Concatenate the first audio or video sample payloads. |
 | `Wav { sample_rate, channels }` | WAV PCM in, or `sowt` / `twos` PCM inside MP4. Optional integer linear resample and mono downmix. |
+| `concat_mp4` | Stream-copy two non-fragmented MP4s whose sample entries match. Codec mismatch and `moof` are errors. |
+| `shrink_wav` | One downmix and at most one resample to a byte budget. Returns the file and its real byte count. |
 
 `export_reader` pulls from `Read` into at most `max` bytes and pushes the
 result as an owned buffer the caller writes.
@@ -31,14 +33,15 @@ result as an owned buffer the caller writes.
 - Fragmented MP4 (`moof`) is detected and refused. It is not flattened.
 - AAC, Opus, MP3, FLAC, GIF, and WebM/Matroska are sniffed and not decoded.
 - Durations that need `mvhd` version 1, and `mdat` boxes past 4 GiB, are refused.
-- There is no video pixel decode, GIF palette, or multi-pass shrink in this build.
+- There is no video pixel decode, GIF palette, or multi-pass video shrink. WAV shrink is one resample after an optional downmix.
 - The resample is integer linear interpolation, not a windowed sinc.
 
 ## Bench
 
-Release only. `cargo bench --bench throughput` prints MB/s, p50, p99, and
-allocations per MB for hits and misses. A debug build exits 2 and does not
-publish a timing verdict.
+Release only. `cargo bench --bench throughput` and
+`cargo bench --bench concat_shrink` print MB/s, p50, p99, and allocations
+per MB for hits and misses. A debug build exits 2 and does not publish a
+timing verdict.
 
 A coalesced "copy adjacent samples in one memcpy" probe lost. On a 4 MiB
 track of 256 × 16 KiB samples, p50 was 255 µs versus 252 µs for one memcpy
