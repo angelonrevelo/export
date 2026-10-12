@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "incompressible"
 harness = false
+
+[[bench]]
+name = "repeated_4mib"
+harness = false

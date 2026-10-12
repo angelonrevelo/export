@@ -33,6 +33,8 @@ A second run on the same binary was compress 834.2 / 752.4 and inflate 1669.4 / 
 
 Hashing every byte of a match, measured the same way, was compress p50 522.7 then 547.7 MB/s and **3291** bytes. Inflate stayed in the same band (p50 1704.9 then 1766.2). The every-4th-byte insert is what the table uses: the compress gap is larger than that run-to-run spread, and the extra 515 bytes are real.
 
+The same sentence cut to **4,194,304** bytes, same bench profile, 3 warmups, 80 samples. p99 is the slow end. Output is **15,225** bytes. Compress p50 **856.2** MB/s, compress p99 **794.6** MB/s. A second run was p50 862.7 and p99 575.8, same size. Both p50 samples are above 741 MB/s, and the output is smaller than the input, so this rung stays.
+
 ## Incompressible bytes
 
 1,048,576 bytes from a fixed generator: `state = 0xA5A51234`, then `state = state * 1664525 + 1013904223` (mod 2^32), and the byte is `state >> 24`. Same bench profile, 3 warmups, 80 samples. p99 is the slow end of those samples.
