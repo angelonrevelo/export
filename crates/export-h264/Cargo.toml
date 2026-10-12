@@ -26,6 +26,10 @@ name = "iframe"
 path = "src/bin/iframe.rs"
 
 [[bin]]
+name = "still32"
+path = "src/bin/still32.rs"
+
+[[bin]]
 name = "iframe160"
 path = "src/bin/iframe160.rs"
 

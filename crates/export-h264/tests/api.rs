@@ -6,8 +6,8 @@ use export_h264::{
     fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
     fixture_320x240_split, fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight,
     fixture_32x32_predicted, fixture_32x32_shifted, fixture_640x480, fixture_640x480_split,
-    fixture_640x480_split_four, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
-    PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
+    fixture_640x480_split_four, mean_absolute_error, still, EncodeOptions, Error, Motion, Pass,
+    Picture, PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -113,6 +113,44 @@ fn fixture_is_one_iframe() {
     assert!(encoded.annex_b.len() > 16);
     let mae = mean_absolute_error(&frame, &encoded.reconstructed);
     assert!(mae < 40.0, "internal mae {mae}");
+}
+
+#[test]
+fn still_is_the_measured_iframe_reconstruction() {
+    let frame = fixture_32x32();
+    let opts = EncodeOptions::default();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.annex_b.len(), 272);
+    let pixels = still(&encoded);
+    assert_eq!(pixels, encoded.reconstructed.i420());
+    assert_eq!(pixels.len(), 32 * 32 + 16 * 16 * 2);
+    let mae = mean_absolute_error(&frame, &encoded.reconstructed);
+    assert!(
+        (mae - 2.4974).abs() < 0.00005,
+        "still mae {mae:.4} is not the measured reconstruction"
+    );
+    assert_eq!(
+        encode(
+            &frame,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            },
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode(
+            &frame,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            },
+        )
+        .unwrap_err(),
+        Error::SecondPass
+    );
 }
 
 #[test]

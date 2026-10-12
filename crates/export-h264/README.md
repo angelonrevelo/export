@@ -202,3 +202,12 @@ Same profile and QP. One I-frame and thirty-one P-frames. Each P-frame uses the 
 - release p50: 197548 µs, p99: 242052 µs on the recorded run. Two later runs on that binary were p50 199406–199729 µs and p99 231920–276922 µs
 
 ffmpeg decoded all thirty-two pictures and matched the encoder reconstruction. Mean absolute error versus the sources was 3.2412. The I-frame is 3.2467. The thirty-one P-frames together are 3.2410. `scripts/check-seqthirtytwo720.sh` may run ffmpeg only to decode that file.
+
+## 32×32 still
+
+The reconstruction `encode` already stored for the 272-byte I-frame, returned as packed I420. The call does not read Annex B and does not encode. Encode time is outside this timer. 200 calls after 20 warmup.
+
+- raw bytes: 1536
+- release p50: 58 ns, p99: 80 ns on the recorded run. Two later runs on that binary were p50 58–62 ns and p99 83–168 ns
+
+Mean absolute error versus the source is 2.4974, the same reconstruction already measured for that frame. `scripts/check-still32.sh` checks those pixels. It does not run ffmpeg.

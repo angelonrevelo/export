@@ -14,8 +14,9 @@
 //! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
-//! return an error. Nothing here links or spawns ffmpeg. This is not a
-//! video shrink of a real MP4.
+//! return an error. [`still`] returns the reconstruction [`encode`] already
+//! stored. It does not read Annex B. Nothing here links or spawns ffmpeg.
+//! This is not a video shrink of a real MP4, and it is not a decoder.
 
 #![forbid(unsafe_code)]
 
@@ -169,6 +170,14 @@ pub fn encode(frame: &Yuv420, opts: &EncodeOptions) -> Result<Encoded, Error> {
         reconstructed,
         qp: opts.qp,
     })
+}
+
+/// Packed I420 of the reconstruction [`encode`] already stored.
+///
+/// Does not read the Annex B bytes, does not encode, and does not search.
+/// A lone P-frame, a B-frame, and a second pass are still refused by [`encode`].
+pub fn still(encoded: &Encoded) -> Vec<u8> {
+    encoded.reconstructed.i420()
 }
 
 fn check_common(opts: &EncodeOptions) -> Result<(), Error> {
