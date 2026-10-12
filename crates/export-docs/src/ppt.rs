@@ -1,5 +1,5 @@
 //! Legacy PowerPoint 97 to HTML for one generated compound file.
-//! The `PowerPoint Document` stream holds one, two, or three text-bytes shapes.
+//! The `PowerPoint Document` stream holds one, two, three, or four text-bytes shapes.
 //! Any other file stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -93,6 +93,24 @@ pub fn ppt_three_text_document(first: &str, second: &str, third: &str) -> Result
     ]))
 }
 
+/// Compound file whose `PowerPoint Document` stream is four text-bytes shapes.
+pub fn ppt_four_text_document(
+    first: &str,
+    second: &str,
+    third: &str,
+    fourth: &str,
+) -> Result<Vec<u8>> {
+    if !plain_shape(first) || !plain_shape(second) || !plain_shape(third) || !plain_shape(fourth) {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    pack_cfb(&document_stream(&[
+        first.as_bytes(),
+        second.as_bytes(),
+        third.as_bytes(),
+        fourth.as_bytes(),
+    ]))
+}
+
 fn plain_shape(text: &str) -> bool {
     !text.is_empty() && text.len() <= MAX_TEXT && text.bytes().all(allowed_text)
 }
@@ -106,7 +124,7 @@ fn unreadable() -> Error {
 }
 
 fn shape() -> Error {
-    Error::new("file is not one, two, or three text shapes")
+    Error::new("file is not one, two, three, or four text shapes")
 }
 
 fn allowed_text(b: u8) -> bool {
@@ -197,7 +215,7 @@ fn list_text(body: &[u8]) -> Result<Vec<String>> {
         at += n;
         match rec.ty {
             RT_TEXT_HEADER => {
-                if pending_header || texts.len() >= 3 || rec.ver != 0 || rec.data.len() != 4 {
+                if pending_header || texts.len() >= 4 || rec.ver != 0 || rec.data.len() != 4 {
                     return Err(shape());
                 }
                 pending_header = true;
@@ -689,18 +707,59 @@ mod tests {
     }
 
     #[test]
-    fn four_text_shapes_stay_a_miss() {
+    fn three_shape_stays_the_published_size() {
+        let mut alpha = String::new();
+        let mut beta = String::new();
+        let mut gamma = String::new();
+        for i in 0..30 {
+            alpha.push_str(&format!(
+                "Alpha shape sentence {i} of the generated PowerPoint file. "
+            ));
+            beta.push_str(&format!(
+                "Beta shape sentence {i} of the generated PowerPoint file. "
+            ));
+            gamma.push_str(&format!(
+                "Gamma shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        let file = ppt_three_text_document(&alpha, &beta, &gamma).unwrap();
+        assert_eq!(file.len(), 7168);
+        let got = html(&file).unwrap();
+        assert_eq!(got.len(), 5257);
+        assert!(got.contains(&alpha) && got.contains(&beta) && got.contains(&gamma), "{got}");
+    }
+
+    #[test]
+    fn four_text_shapes_become_html() {
+        let first = "First generated legacy PowerPoint text shape.";
+        let second = "Second generated legacy PowerPoint text shape.";
+        let third = "Third generated legacy PowerPoint text shape.";
+        let fourth = "Fourth generated legacy PowerPoint text shape.";
+        let file = ppt_four_text_document(first, second, third, fourth).unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!("<p>{first}</p><p>{second}</p><p>{third}</p><p>{fourth}</p>");
+        assert!(got.contains(&marked), "{got}");
+        let a = got.find(first).unwrap();
+        let b = got.find(second).unwrap();
+        let c = got.find(third).unwrap();
+        let d = got.find(fourth).unwrap();
+        assert!(a < b && b < c && c < d);
+    }
+
+    #[test]
+    fn five_text_shapes_stay_a_miss() {
         let stream = document_stream(&[
             b"One shape.",
             b"Two shape.",
             b"Three shape.",
             b"Four shape.",
+            b"Five shape.",
         ]);
         let file = pack_cfb(&stream).unwrap();
         let err = html(&file).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
         assert!(
-            err.message.contains("not one, two, or three text shapes"),
+            err.message.contains("not one, two, three, or four text shapes"),
             "{err}"
         );
         assert!(

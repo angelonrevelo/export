@@ -61,7 +61,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one, two, or three paragraphs converts; other files stay a miss" },
     Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
-    Pair { source: "ppt", target: "html", ready: false, note: "MISS: only a generated legacy ppt with one, two, or three text shapes converts; other files stay a miss" },
+    Pair { source: "ppt", target: "html", ready: false, note: "MISS: only a generated legacy ppt with one, two, three, or four text shapes converts; other files stay a miss" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
 ];
 
