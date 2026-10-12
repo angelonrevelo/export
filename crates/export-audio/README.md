@@ -117,6 +117,9 @@ of 4, write a wasted-bits shift of two on each channel. That file is
 5,594 bytes and encode p50 is 0.528 ms, beside the 7,601 bytes and
 0.513 ms above. 5,594 is shorter than 7,601, and 0.528 ms is at most
 0.564 ms, so the shift stayed. Both channels round-trip and are not copies.
+Decode of that 5,594-byte file is p50 0.145 ms and p99 0.176 ms (38.46 MB/s
+on the 5,594 FLAC bytes), same iteration count. The existing decoder
+restores both channels, so the decoder was not changed.
 
 ### 24-bit mono block
 
