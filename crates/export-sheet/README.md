@@ -73,6 +73,16 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 | p50 | 263 461 ns |
 | p99 | 354 234 ns |
 
+The same sheet at the next count is 4 000 rows, values 0 through 3 999. One
+numeric column, no formulas. Every row reads back. The file is **74 240 bytes**.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 532 990 ns |
+| p99 | 676 645 ns |
+
 A fourth generated file has A1 = 2, B1 = 3, and C1 = a SUM formula. The reader
 returns the cached number **5** and does not evaluate the expression.
 `xls → csv` prints `2,3,5`.
