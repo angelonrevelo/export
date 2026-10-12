@@ -1,7 +1,9 @@
 """The outside score counts real uploads only, and it keeps the app's tolerance."""
 
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -96,6 +98,63 @@ class RepositoryScoreTest(unittest.TestCase):
         for path in report["counted"]:
             self.assertFalse(score.is_generated(path), path)
         self.assertNotIn("p50", json.dumps(report))
+
+
+class CorpusTest(unittest.TestCase):
+    """Real files in a local, uncommitted corpus count the same as committed ones."""
+
+    def _jpeg(self, path: Path, make: str, model: str) -> None:
+        from PIL import Image
+
+        exif = Image.Exif()
+        if make:
+            exif[271] = make
+            exif[272] = model
+        Image.new("RGB", (8, 8), (200, 40, 40)).save(path, "JPEG", exif=exif)
+
+    def test_corpus_files_are_counted_from_disk(self):
+        repo = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = Path(tmp)
+            (corpus / "phone").mkdir()
+            self._jpeg(corpus / "phone" / "IMG_0001.jpg", "Apple", "iPhone 15 Pro")
+            self._jpeg(corpus / "scan.jpg", "", "")
+            (corpus / "lease.docx").write_bytes(b"PK\x03\x04")
+            (corpus / "notes.txt").write_text("ignored")
+
+            inventory = score.collect(repo, corpus)
+
+            self.assertEqual(inventory["counts"]["phone-jpeg"], 1)
+            self.assertEqual(inventory["counts"]["docx"], 1)
+            self.assertEqual(inventory["counts"]["jpeg-not-phone"], 1)
+            self.assertEqual(inventory["m"], 2)
+            paths = {row["path"] for row in inventory["counted"]}
+            self.assertEqual(paths, {"corpus/phone/IMG_0001.jpg", "corpus/lease.docx"})
+            for row in inventory["counted"]:
+                self.assertIn("file", row)
+                self.assertNotIn("sha", row)
+
+    def test_materialize_copies_and_leaves_the_corpus_file_alone(self):
+        repo = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "lease.docx"
+            src.write_bytes(b"original")
+            scratch = Path(tmp) / "scratch"
+            scratch.mkdir()
+            row = {"path": "corpus/lease.docx", "file": str(src)}
+            copy = score._materialize(repo, row, scratch)
+            copy.write_bytes(b"changed")
+            self.assertEqual(src.read_bytes(), b"original")
+
+    def test_missing_corpus_is_empty(self):
+        self.assertEqual(score.corpus_files(Path("does-not-exist-corpus")), [])
+
+    def test_corpus_is_gitignored(self):
+        repo = Path(__file__).resolve().parents[1]
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", "corpus/IMG_0001.jpg"], cwd=repo
+        )
+        self.assertEqual(ignored.returncode, 0)
 
 
 if __name__ == "__main__":

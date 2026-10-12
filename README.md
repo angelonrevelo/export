@@ -156,9 +156,10 @@ their own inflate code too.
 | `export-mp3` | One MPEG-1 Layer III frame, mono, 44.1 kHz, 1152 samples. No bit reservoir. |
 | `export-vp9` | Decode one generated keyframe at 8×8 through 2048×2048. Inter frames, extra frames, and VP8 are unsupported. |
 
-`scripts/outside_score.py` scores files already stored in this repo against
-the Python app. It may call a separate program named by `EXPORT_RUST_ORACLE`.
-It is not the server.
+`scripts/outside_score.py` scores files already stored in this repo, plus
+real files you drop in a local `corpus/` folder (gitignored, never pushed;
+`--corpus` or `EXPORT_CORPUS` points elsewhere), against the Python app. It
+may call a separate program named by `EXPORT_RUST_ORACLE`. It is not the server.
 
 Crate tests: `cargo test --workspace --offline`. Python tests: `pytest`.
 
