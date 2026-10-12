@@ -42,7 +42,8 @@ pub use error::{Error, Result};
 pub use stats::RunStats;
 pub use doc::word97_document;
 pub use ppt::{
-    ppt_four_text_document, ppt_text_document, ppt_text_indexed_document, ppt_text_nibble_document,
+    ppt_five_text_document, ppt_four_text_document, ppt_text_document,
+    ppt_text_indexed_document, ppt_text_nibble_document,
     ppt_text_picture_document, ppt_three_text_document, ppt_two_text_document,
     ppt_two_text_indexed_document, ppt_text_two_indexed_document, ppt_text_three_indexed_document,
     ppt_text_four_indexed_document, ppt_text_five_indexed_document, ppt_text_six_indexed_document,
