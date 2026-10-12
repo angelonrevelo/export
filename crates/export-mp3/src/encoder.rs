@@ -5,9 +5,9 @@
 //! frame that [`crate::decode_frame`] turns back into PCM.
 //!
 //! Silence stays an empty Huffman region, so the decoder returns exact zeros.
-//! Any other block stores the first 16 quantized long-block MDCT lines of
-//! each granule (Huffman table 5, magnitudes 0..=3). That is not a waveform
-//! encoder and not a song encoder.
+//! Any other block stores the first 32 quantized long-block MDCT lines of
+//! each granule (indices 0 through 31, Huffman table 5, magnitudes 0..=3).
+//! That is not a waveform encoder and not a song encoder.
 
 use crate::decoder::Error;
 
@@ -26,8 +26,9 @@ pub const FRAME_BYTES: usize = 417;
 /// Side-information length for MPEG-1 mono (no CRC).
 const SIDE_INFO_BYTES: usize = 17;
 
-/// Long-block MDCT lines stored per granule. The rest of the 576 lines are zero.
-const MDCT_LINES: usize = 16;
+/// Long-block MDCT lines stored per granule (indices 0 through 31).
+/// The rest of the 576 lines are zero.
+const MDCT_LINES: usize = 32;
 
 /// 1152 samples of `0.5 * sin(2π * 440 * n / 44100)`.
 ///
@@ -86,31 +87,37 @@ pub fn encode_frame(pcm: &[f32]) -> Result<Vec<u8>, Error> {
     Ok(frame)
 }
 
-/// First 16 long-block MDCT lines of subband 0, one row per granule.
+/// Long-block MDCT lines 0 through 31, one row per granule.
 ///
-/// Lines 16 and 17 of that subband, and every other subband, stay zero.
-/// These are the MDCT coefficients themselves. The decoder still runs alias
-/// reduction, which mixes lines 10..=15 with a zero neighbor.
+/// Lines 0..=17 are subband 0. Lines 18..=31 are the first 14 bins of
+/// subband 1. These are the MDCT coefficients themselves. The decoder still
+/// runs alias reduction across the subband boundary.
 fn mdct_lines(pcm: &[f32]) -> [[f32; MDCT_LINES]; 2] {
     let mut analysis = Analysis::new();
-    let mut history = [0.0f32; 18];
+    let mut history = [[0.0f32; 18]; 2];
     let mut out = [[0.0f32; MDCT_LINES]; 2];
     for (granule, dest) in out.iter_mut().enumerate() {
-        let mut block = [0.0f32; 36];
-        block[..18].copy_from_slice(&history);
+        let mut blocks = [[0.0f32; 36]; 2];
+        for band in 0..2 {
+            blocks[band][..18].copy_from_slice(&history[band]);
+        }
         for slot in 0..18 {
             let start = (granule * 18 + slot) * 32;
-            let band0 = analysis.push_band0(&pcm[start..start + 32]);
-            block[18 + slot] = band0;
-            history[slot] = band0;
+            let bands = analysis.push_low_bands(&pcm[start..start + 32]);
+            for band in 0..2 {
+                blocks[band][18 + slot] = bands[band];
+                history[band][slot] = bands[band];
+            }
         }
-        let coeffs = mdct18(&block);
-        dest.copy_from_slice(&coeffs[..MDCT_LINES]);
+        let subband0 = mdct18(&blocks[0]);
+        let subband1 = mdct18(&blocks[1]);
+        dest[..18].copy_from_slice(&subband0);
+        dest[18..32].copy_from_slice(&subband1[..14]);
     }
     out
 }
 
-/// Polyphase analysis, 512-point delay, returning subband 0.
+/// Polyphase analysis, 512-point delay, returning subbands 0 and 1.
 struct Analysis {
     x: [f32; 512],
     off: usize,
@@ -124,7 +131,7 @@ impl Analysis {
         }
     }
 
-    fn push_band0(&mut self, samples: &[f32]) -> f32 {
+    fn push_low_bands(&mut self, samples: &[f32]) -> [f32; 2] {
         for (i, sample) in samples.iter().enumerate() {
             self.x[(31 - i + self.off) & 511] = *sample;
         }
@@ -141,12 +148,15 @@ impl Analysis {
             }
             *bin = sum;
         }
-        let mut band0 = 0.0f32;
-        for (k, bin) in y.iter().enumerate() {
-            let angle = std::f32::consts::PI / 64.0 * (16 - k as i32) as f32;
-            band0 += *bin * angle.cos();
+        let mut bands = [0.0f32; 2];
+        for (band, dest) in bands.iter_mut().enumerate() {
+            let factor = (2 * band + 1) as f32;
+            for (k, bin) in y.iter().enumerate() {
+                let angle = std::f32::consts::PI / 64.0 * factor * (16 - k as i32) as f32;
+                *dest += *bin * angle.cos();
+            }
         }
-        band0
+        bands
     }
 }
 
@@ -284,14 +294,15 @@ impl GranuleSide {
         }
     }
 
-    /// Eight table-5 pairs. Region 0 ends at line 16 (`region0_count = 3`).
+    /// Sixteen table-5 pairs. Region 0 ends at line 36 (`region0_count = 7`),
+    /// which covers spectral indices 0 through 31.
     fn mdct(part2_3_length: u32, global_gain: u32) -> Self {
         Self {
             part2_3_length,
             big_values: (MDCT_LINES / 2) as u32,
             global_gain,
             table_select_0: 5,
-            region0_count: 3,
+            region0_count: 7,
         }
     }
 }
@@ -309,8 +320,8 @@ fn write_header(out: &mut [u8]) {
 /// MPEG-1 mono side information, two long blocks, no scale-factor bits.
 ///
 /// A silent granule has `part2_3_length = 0` and `big_values = 0`. A signal
-/// granule has `big_values = 8`, Huffman table 5 in region 0, and
-/// `region0_count = 3` so that region ends at spectral line 16.
+/// granule has `big_values = 16`, Huffman table 5 in region 0, and
+/// `region0_count = 7` so that region ends at spectral line 36.
 fn write_side_info(granules: &[GranuleSide; 2]) -> [u8; SIDE_INFO_BYTES] {
     let mut w = BitWriter::new();
     w.put(0, 9); // main_data_begin

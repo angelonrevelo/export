@@ -6,4 +6,5 @@ decode_silence_ns n=1000 min=928 p50=948 p99=1490 max=3074
 decode_tone_ns n=1000 min=459974 p50=514755 p99=819588 max=1517834 path=older-count1-pulse
 decode_truncated_ns n=1000 min=31 p50=33 p99=37 max=355
 decode_440hz_16line_ns n=1000 min=523356 p50=559231 p99=581941 max=592382
-note=decode_tone_ns p50 514755 ns (515 µs) is the older count-1 pulse path. decode_440hz_16line_ns is a later release decode of the existing 16-line half-scale 440 Hz frame. Not a waveform. Silence p50 948 ns and truncated p50 33 ns are the recorded rows.
+decode_440hz_32line_ns n=1000 min=460464 p50=462272 p99=595640 max=769210
+note=decode_tone_ns p50 514755 ns (515 µs) is the older count-1 pulse path. decode_440hz_16line_ns p50 559231 ns (559 µs) and p99 581941 ns (582 µs) stay the recorded 16-line row. decode_440hz_32line_ns is a later release decode of lines 0 through 31. Not a waveform. Silence p50 948 ns and truncated p50 33 ns are the recorded rows.

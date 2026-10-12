@@ -4,9 +4,10 @@
 //! on the sorted sample: index `floor(p * (n - 1))`.
 //!
 //! `bench/runs/release.txt` keeps the recorded silence row (p50 948 ns), the
-//! truncated row (p50 33 ns), and the older count-1 pulse row (p50 515 µs).
-//! A fresh run must not replace those. `decode_440hz_16line_ns` times the
-//! existing 16-line half-scale 440 Hz frame. That frame is not a waveform.
+//! truncated row (p50 33 ns), the older count-1 pulse row (p50 515 µs), and
+//! the 16-line 440 Hz row (p50 559 µs, p99 582 µs). A fresh run must not
+//! replace those. `decode_440hz_32line_ns` times the current frame, which
+//! stores lines 0 through 31. That frame is not a waveform.
 
 use export_mp3::{decode_frame, encode_frame, half_scale_440hz, FRAME_SAMPLES};
 use std::time::Instant;
@@ -22,7 +23,7 @@ fn main() {
     }
     let tone_frame = encode_frame(&tone).expect("tone");
     let truncated = &tone_frame[..tone_frame.len() / 2];
-    // Existing 16-line frame: half-scale 440 Hz, not a waveform match.
+    // Current frame: half-scale 440 Hz, lines 0 through 31. Not a waveform match.
     let frame_440 = encode_frame(&half_scale_440hz()).expect("440");
 
     let silence = time_ok(&silent);
@@ -37,8 +38,8 @@ fn main() {
     report("decode_silence_ns", &silence);
     report("decode_tone_ns", &tone_ns);
     report("decode_truncated_ns", &truncated_ns);
-    report("decode_440hz_16line_ns", &frame_440_ns);
-    println!("note=recorded silence p50 is 948 ns and recorded truncated p50 is 33 ns. recorded decode_tone_ns p50 514755 ns is the older count-1 pulse path. decode_440hz_16line_ns is the existing 16-line frame and is not a waveform.");
+    report("decode_440hz_32line_ns", &frame_440_ns);
+    println!("note=recorded silence p50 is 948 ns and recorded truncated p50 is 33 ns. recorded decode_tone_ns p50 514755 ns is the older count-1 pulse path. recorded decode_440hz_16line_ns p50 is 559231 ns. decode_440hz_32line_ns is lines 0 through 31 and is not a waveform.");
 }
 
 fn time_ok(frame: &[u8]) -> Vec<u128> {
