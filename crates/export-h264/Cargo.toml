@@ -54,6 +54,10 @@ name = "mvframe160"
 path = "src/bin/mvframe160.rs"
 
 [[bin]]
+name = "mvframe320"
+path = "src/bin/mvframe320.rs"
+
+[[bin]]
 name = "seqframe"
 path = "src/bin/seqframe.rs"
 
