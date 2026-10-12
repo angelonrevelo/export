@@ -28,3 +28,7 @@ path = "src/bin/pair_bench.rs"
 [[bin]]
 name = "quad_bench"
 path = "src/bin/quad_bench.rs"
+
+[[bin]]
+name = "octet_bench"
+path = "src/bin/octet_bench.rs"
