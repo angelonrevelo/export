@@ -78,6 +78,17 @@ Same 2048×1024 RGB image as the eight-page row, stored-zlib PNG, sixteen copies
 | p50 | 84.9 MB/s |
 | p99 | 87.6 MB/s |
 
+### Thirty-two pages
+
+Same 2048×1024 RGB image, stored-zlib PNG, thirty-two copies in one CBZ. 100 measured passes after one warmup. `cbz_to_pdf` includes zip read, stored-block inflate, PDF write, fsync, and rename. The CBZ stays in the page cache after warmup. Percentiles are nearest-rank on MB/s sorted ascending, so p99 is the fast tail. The eight-page and sixteen-page rows above are unchanged.
+
+| | |
+|---|---|
+| Pages | 32 |
+| RGB bytes | 201,326,592 |
+| p50 | 84.7 MB/s |
+| p99 | 86.3 MB/s |
+
 ## Honest limits
 
 - The writer emits store only. Deflate read is stored blocks. Fixed and dynamic Huffman return an error and do not emit bytes. Zip64, encryption, and split archives return an error.

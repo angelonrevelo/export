@@ -104,6 +104,7 @@ fn main() {
     bench_inflate();
     bench_pdf(&dir);
     bench_pdf16(&dir);
+    bench_pdf32(&dir);
     bench_font();
 }
 
@@ -232,6 +233,55 @@ fn bench_pdf16(dir: &std::path::Path) {
         "note=cbz_to_pdf includes zip read, stored-block inflate, pdf write, fsync, and rename"
     );
     println!("note=the 16-page CBZ stays in the page cache after the warmup pass");
+    let _ = fs::remove_file(&cbz);
+    let _ = fs::remove_file(&pdf);
+}
+
+fn bench_pdf32(dir: &std::path::Path) {
+    const PAGES: usize = 32;
+    const WIDTH: u32 = 2048;
+    const HEIGHT: u32 = 1024;
+    const PASSES_32: usize = 100;
+    let rgb = vec![0x7Fu8; (WIDTH as usize) * (HEIGHT as usize) * 3];
+    let png = export_pack::encode_png_rgb(WIDTH, HEIGHT, &rgb).expect("png");
+    let cbz = dir.join("bench32.cbz");
+    let pdf = dir.join("bench32.pdf");
+    let _ = fs::remove_file(&cbz);
+    let mut zip = export_pack::ZipWriter::create(&cbz).expect("cbz");
+    for i in 0..PAGES {
+        let name = format!("page-{i}.png");
+        zip.write_bytes(&name, &png).expect("page");
+    }
+    zip.finish().expect("cbz finish");
+    let pixel_bytes = (PAGES as u64) * (WIDTH as u64) * (HEIGHT as u64) * 3;
+    let _ = export_pack::cbz_to_pdf(&cbz, &pdf).expect("pdf warmup");
+    let _ = fs::remove_file(&pdf);
+    let mut rates = Vec::with_capacity(PASSES_32);
+    for _ in 0..PASSES_32 {
+        let _ = fs::remove_file(&pdf);
+        let t0 = Instant::now();
+        let info = export_pack::cbz_to_pdf(&cbz, &pdf).expect("pdf");
+        let dur = t0.elapsed();
+        assert_eq!(info.pages, PAGES);
+        assert_eq!(info.pixel_bytes, pixel_bytes);
+        rates.push(mb_s(pixel_bytes, dur));
+    }
+    println!("pdf32_pages={PAGES}");
+    println!("pdf32_width={WIDTH}");
+    println!("pdf32_height={HEIGHT}");
+    println!("pdf32_png=stored-zlib");
+    println!("pdf32_pixel_bytes={pixel_bytes}");
+    println!("pdf32_passes={PASSES_32}");
+    println!("pdf32_mb_s_p50={:.1}", percentile(&rates, 50.0));
+    println!("pdf32_mb_s_p99={:.1}", percentile(&rates, 99.0));
+    println!("note=pdf32 rate counts decoded RGB bytes, same image as the eight-page run");
+    println!(
+        "note=pdf32 percentile is nearest-rank on MB/s sorted ascending, so p99 is the fast tail"
+    );
+    println!(
+        "note=cbz_to_pdf includes zip read, stored-block inflate, pdf write, fsync, and rename"
+    );
+    println!("note=the 32-page CBZ stays in the page cache after the warmup pass");
     let _ = fs::remove_file(&cbz);
     let _ = fs::remove_file(&pdf);
 }
