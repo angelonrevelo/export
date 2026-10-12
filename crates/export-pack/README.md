@@ -67,6 +67,17 @@ PDF rate counts decoded RGB bytes. The timed call is `cbz_to_pdf`: zip read, sto
 
 The font rate is a repeated tiny-font container copy, not a bulk font benchmark. The working set is 492 bytes. Allocations were 70,331.3 / MiB and 6,419,331.1 bytes / MiB, which is the per-copy directory and table rebuild spread over a few hundred bytes.
 
+### Sixteen pages
+
+Same 2048×1024 RGB image as the eight-page row, stored-zlib PNG, sixteen copies in one CBZ. 100 measured passes after one warmup. `cbz_to_pdf` includes zip read, stored-block inflate, PDF write, fsync, and rename. The CBZ stays in the page cache after warmup. Percentiles are nearest-rank on MB/s sorted ascending, so p99 is the fast tail. The eight-page row above is unchanged.
+
+| | |
+|---|---|
+| Pages | 16 |
+| RGB bytes | 100,663,296 |
+| p50 | 84.9 MB/s |
+| p99 | 87.6 MB/s |
+
 ## Honest limits
 
 - The writer emits store only. Deflate read is stored blocks. Fixed and dynamic Huffman return an error and do not emit bytes. Zip64, encryption, and split archives return an error.
