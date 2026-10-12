@@ -280,6 +280,108 @@ fn pptx_pic_deck() -> Vec<u8> {
     pack_stored(&[("ppt/slides/slide1.xml", &xml[..])])
 }
 
+fn report_epub() {
+    let book = epub_one_spine();
+    let sample = measure(|| ready_bytes("epub", "html", &book));
+    emit_ready("epub→html spine", book.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "epub→html spine p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(book.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            book.len(),
+            sample.output_bytes,
+        );
+    }
+    let two = epub_two_spine();
+    match convert("epub", "html", &two) {
+        Ok(_) => {
+            eprintln!("two-item spine produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", two.len()))
+            {
+                eprintln!("epub miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html two", two.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn epub_chapter() -> String {
+    let mut body = String::from(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Notes</title></head><body>
+<h1>Notes</h1>
+"#,
+    );
+    for i in 0..200 {
+        body.push_str(&format!("<p>Paragraph {i} of the generated epub spine.</p>\n"));
+    }
+    body.push_str("</body></html>\n");
+    body
+}
+
+fn epub_container() -> &'static str {
+    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"#
+}
+
+fn epub_opf(itemrefs: &str) -> String {
+    format!(
+        r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Notes</dc:title></metadata>
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    {itemrefs}
+  </spine>
+</package>
+"#
+    )
+}
+
+fn epub_one_spine() -> Vec<u8> {
+    let chapter = epub_chapter();
+    let opf = epub_opf(r#"<itemref idref="chap"/>"#);
+    let container = epub_container();
+    pack_stored(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/chapter.xhtml", chapter.as_bytes()),
+    ])
+}
+
+fn epub_two_spine() -> Vec<u8> {
+    let chapter = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
+    let next = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
+    let opf = epub_opf(
+        "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>",
+    );
+    let container = epub_container();
+    pack_stored(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/chapter.xhtml", chapter),
+        ("OEBPS/next.xhtml", next),
+    ])
+}
+
 fn shrink_pdf_fixture() -> Vec<u8> {
     let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
     for i in 0..80 {
@@ -335,6 +437,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_pptx();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--epub") {
+        println!("export-docs epub byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_epub();
         return;
     }
     let xml = docx_xml(2500);

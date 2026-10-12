@@ -17,6 +17,7 @@ mod convert;
 mod crc;
 mod deflate;
 mod docx;
+mod epub;
 mod error;
 mod htmlpdf;
 mod markdown;
