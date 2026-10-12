@@ -202,6 +202,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | SVG rect encode, 16×16 black square on white (output 124 bytes) | 40 | 0.211 µs | 0.346 µs | 3,639.81 (p99 2,219.65) | pixels match; 1 alloc |
 
+`encode_svg` of one 32×32 black square on white, a later release run. The file is one `<rect>`, 126 bytes. `rasterize_svg` returns the same pixels. p50 is 0.162 µs, at most 0.50 µs, so this path stays. A path, a curve, and text stay `Unsupported`. Cairo, vtracer, and resvg are not called, and the path does not start a thread. The 16×16 SVG row stays 124 bytes, p50 0.211 µs, p99 0.346 µs. The four-frame 1280×720 first-frame row stays 12,321.1 µs. The PNG, JPEG, and WebP rows above were not replaced.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| SVG rect encode, 32×32 black square on white (output 126 bytes) | 40 | 0.162 µs | 1.317 µs | 18,962.96 (p99 2,332.57) | pixels match; 1 alloc |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
