@@ -18,6 +18,10 @@ path = "src/bin/one_frame.rs"
 name = "second-frame"
 path = "src/bin/second_frame.rs"
 
+[[bin]]
+name = "third-frame"
+path = "src/bin/third_frame.rs"
+
 [dependencies]
 
 # Single-threaded. No thread pool, no atomics target-feature, no spawned work.

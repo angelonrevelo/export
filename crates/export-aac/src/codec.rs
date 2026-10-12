@@ -59,7 +59,8 @@ pub fn encode_frame(samples: &[f32]) -> Result<Vec<u8>, Error> {
 ///
 /// `previous` is the prior 1024 PCM samples, not a decoded overlap tail.
 /// The library does not store it. [`encode_second_frame`] passes
-/// [`crate::one_frame_pcm`] here.
+/// [`crate::one_frame_pcm`] here. [`encode_third_frame`] passes
+/// [`crate::second_frame_pcm`].
 pub fn encode_frame_following(previous: &[f32], samples: &[f32]) -> Result<Vec<u8>, Error> {
     if previous.len() != FRAME_SAMPLES || samples.len() != FRAME_SAMPLES {
         return Err(Error::Invalid);
@@ -89,6 +90,12 @@ pub fn encode_second_frame() -> Result<Vec<u8>, Error> {
     encode_frame_following(&crate::one_frame_pcm(), &crate::second_frame_pcm())
 }
 
+/// The recorded third frame: left half [`crate::second_frame_pcm`], right half
+/// the next 1024 samples of that same half-scale 440 Hz sine.
+pub fn encode_third_frame() -> Result<Vec<u8>, Error> {
+    encode_frame_following(&crate::second_frame_pcm(), &crate::third_frame_pcm())
+}
+
 /// Decode one AAC-LC ADTS frame to 1024 mono PCM samples.
 ///
 /// Overlap history is zero, so a lone frame does not reconstruct its input.
@@ -108,6 +115,25 @@ pub fn decode_second_frame(first: &[u8], second: &[u8]) -> Result<[f32; FRAME_SA
     let _ = mdct::synthesis_overlap(&spec0, &mut overlap);
     let spec1 = spectrum(second)?;
     Ok(pcm_f32(&mdct::synthesis_overlap(&spec1, &mut overlap)))
+}
+
+/// Decode `third` overlap-added against the tail left by `second`.
+///
+/// `first` is decoded only to prime that tail. With the recorded triple, the
+/// samples are [`crate::second_frame_pcm`], still one frame late. They are not
+/// [`crate::third_frame_pcm`].
+pub fn decode_third_frame(
+    first: &[u8],
+    second: &[u8],
+    third: &[u8],
+) -> Result<[f32; FRAME_SAMPLES], Error> {
+    let spec0 = spectrum(first)?;
+    let mut overlap = [0.0; FRAME_SAMPLES];
+    let _ = mdct::synthesis_overlap(&spec0, &mut overlap);
+    let spec1 = spectrum(second)?;
+    let _ = mdct::synthesis_overlap(&spec1, &mut overlap);
+    let spec2 = spectrum(third)?;
+    Ok(pcm_f32(&mdct::synthesis_overlap(&spec2, &mut overlap)))
 }
 
 fn spectrum(bytes: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
@@ -600,6 +626,46 @@ mod tests {
         let sbr = fill_frame(EXT_SBR_DATA);
         assert_eq!(
             decode_second_frame(&first, &sbr).unwrap_err(),
+            Error::Unsupported
+        );
+    }
+
+    #[test]
+    fn third_frame_is_still_one_frame_late() {
+        let first_pcm = crate::one_frame_pcm();
+        let second_pcm = crate::second_frame_pcm();
+        let third_pcm = crate::third_frame_pcm();
+        let first = encode_frame(&first_pcm).unwrap();
+        let second = encode_second_frame().unwrap();
+        let third = encode_third_frame().unwrap();
+        assert_eq!(first.len(), 513);
+        assert_eq!(second.len(), 68);
+        let out = decode_third_frame(&first, &second, &third).unwrap();
+        let mut late = 0.0f32;
+        let mut own = 0.0f32;
+        let mut peak = 0.0f32;
+        for i in 0..FRAME_SAMPLES {
+            late = late.max((out[i] - second_pcm[i]).abs());
+            own = own.max((out[i] - third_pcm[i]).abs());
+            peak = peak.max(out[i].abs());
+        }
+        assert!(
+            late <= crate::RECORDED_THIRD_FRAME_MAX_ABS_ERROR,
+            "third frame vs previous sine {late} peak {peak}"
+        );
+        assert!(
+            own > 0.4,
+            "third frame vs its own input {own} is not one frame late"
+        );
+        let mut truncated = third.clone();
+        truncated.pop();
+        assert_eq!(
+            decode_third_frame(&first, &second, &truncated).unwrap_err(),
+            Error::Truncated
+        );
+        let sbr = fill_frame(EXT_SBR_DATA);
+        assert_eq!(
+            decode_third_frame(&first, &second, &sbr).unwrap_err(),
             Error::Unsupported
         );
     }
