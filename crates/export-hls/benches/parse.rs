@@ -3,9 +3,8 @@
 //! Parse timings and the bulk local-stack GETs run on one thread. The
 //! one-segment, two-segment, four-segment, eight-segment, map-and-eight-segment,
 //! map-and-sixteen-segment, map-and-thirty-two-segment, sixteen-segment,
-//! sixteen-range, coalesced-range,
-//! and split-range fetches call the library client and use one local accept
-//! thread beside the client.
+//! sixteen-range, coalesced-range, and split-range fetches call the library
+//! client and use one local accept thread beside the client.
 //! Loopback GETs run only here, on 127.0.0.1. They are not CDN downloads.
 
 use std::io::{ErrorKind, Read, Write};
