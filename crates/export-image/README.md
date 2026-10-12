@@ -214,6 +214,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | thumbnail q=72, two-frame 640×480 WebP first frame → 220×165 (output 3,024 bytes) | 20 | 9,243.2 µs | 9,431.0 µs | 99.71 (p99 97.72) | JPEG; long side 220; 19 allocs; 61.85 allocs/MP |
 
+`thumbnail_jpeg` of the existing four-frame 1280×720 WebP, 192,554 bytes, a later release run. The output is a JPEG of that file's first frame, 3,118 bytes, 220×124. The long side is 220. p50 is 16,374.0 µs, under the 30.5 ms cap, so this path stays. A still WebP stays unsupported. The two-frame 640×480 WebP thumbnail row stays 3,024 bytes, 220×165, p50 9,243.2 µs, p99 9,431.0 µs. The PNG thumbnail row stays 3,703 bytes, p50 20,402.9 µs, p99 21,764.4 µs. The four-frame 1280×720 first-frame row stays 192,554 bytes, p50 12,321.1 µs. The two-frame 640×480 first-frame row stays 34,434 bytes, p50 4,010.8 µs.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| thumbnail q=72, four-frame 1280×720 WebP first frame → 220×124 (output 3,118 bytes) | 20 | 16,374.0 µs | 16,473.7 µs | 168.85 (p99 167.83) | JPEG; long side 220; 19 allocs; 20.62 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
