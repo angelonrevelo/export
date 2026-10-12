@@ -445,9 +445,7 @@ fn fixed_encoder() -> (Enc, Enc) {
         };
     }
     let mut dd = [0u8; 32];
-    for len in &mut dd {
-        *len = 5;
-    }
+    dd.fill(5);
     (codes_from(&ll), codes_from(&dd[..32]))
 }
 

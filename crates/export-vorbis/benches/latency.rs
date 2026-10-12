@@ -59,6 +59,6 @@ fn print_pair(name: &str, sorted: &[u128]) {
 }
 
 fn percentile(sorted: &[u128], percent: usize) -> u128 {
-    let rank = (percent * sorted.len() + 99) / 100;
+    let rank = (percent * sorted.len()).div_ceil(100);
     sorted[rank.saturating_sub(1)]
 }

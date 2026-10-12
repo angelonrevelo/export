@@ -156,10 +156,8 @@ fn fill_forms(row: &mut Row, line: usize) {
                 panic!("tl line {line}: irr {} needs inf, perf, impf, cont", row.en);
             }
         }
-        K_PRO => {
-            if row.ang.is_empty() {
-                row.ang = row.tl.clone();
-            }
+        K_PRO if row.ang.is_empty() => {
+            row.ang = row.tl.clone();
         }
         _ => {}
     }

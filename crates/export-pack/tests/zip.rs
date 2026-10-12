@@ -136,7 +136,7 @@ struct Boom;
 
 impl Read for Boom {
     fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "boom"))
+        Err(std::io::Error::other("boom"))
     }
 }
 

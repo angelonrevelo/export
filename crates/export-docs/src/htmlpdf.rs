@@ -119,15 +119,14 @@ fn blocks(html: &str) -> Result<Vec<Block>> {
                         italic += 1;
                     }
                 }
-                "td" | "th" if !closing => {
-                    if !cur.pieces.is_empty() {
+                "td" | "th" if !closing
+                    && !cur.pieces.is_empty() => {
                         cur.pieces.push(Piece {
                             text: " ".into(),
                             font: font_of(bold, italic),
                             size: cur.size,
                         });
                     }
-                }
                 _ => {}
             }
             continue;

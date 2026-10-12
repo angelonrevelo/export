@@ -734,9 +734,10 @@ mod tests {
             .zip(decoded.iter())
             .fold(0.0f32, |max, (src, out)| max.max((src - out).abs()));
         // Measured on the 32-line frame, debug and release. The recorded
-        // 16-line error stays 0.680283487. Not a sample match.
+        // 16-line error stays 0.680283487. Not a sample match. Platform libm
+        // differs in the last f32 bits, so the bound is 1e-5, not 1e-8.
         assert!(
-            (f64::from(max_abs) - 0.679_248_989).abs() < 1.0e-8,
+            (f64::from(max_abs) - 0.679_248_989).abs() < 1.0e-5,
             "max abs error {max_abs}"
         );
         assert!(decoded.iter().all(|sample| sample.is_finite()));

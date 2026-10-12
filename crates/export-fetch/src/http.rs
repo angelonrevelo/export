@@ -128,10 +128,7 @@ impl ClearConn {
                 dial(&current, &self.cfg)?
             }
         };
-        let mut resp = match exchange(tcp, &current, None, true) {
-            Ok(resp) => resp,
-            Err(err) => return Err(err),
-        };
+        let mut resp = exchange(tcp, &current, None, true)?;
         if resp.head.status != 200 && resp.head.status != 206 {
             return Err(Error::Http(format!("status {}", resp.head.status)));
         }
@@ -228,6 +225,7 @@ pub fn download_file(cfg: &GetCfg, url: &str, dest: &Path) -> Result<DownloadOut
     };
     let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false) // a resumed .part keeps its bytes; a 200 restart truncates below
         .write(true)
         .read(true)
         .open(&part)?;
@@ -505,7 +503,7 @@ fn dial(url: &Url, cfg: &GetCfg) -> Result<TcpStream> {
         }
     }
     Err(last
-        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "connect"))
+        .unwrap_or_else(|| std::io::Error::other("connect"))
         .into())
 }
 
@@ -565,6 +563,7 @@ fn range_value(spec: RangeSpec) -> String {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn read_head(tcp: &mut TcpStream) -> Result<(u16, Vec<(String, String)>, Vec<u8>)> {
     let mut raw = Vec::new();
     let mut tmp = [0u8; 1024];

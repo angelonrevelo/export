@@ -899,7 +899,7 @@ mod tests {
         let first = solid([220, 40, 60]);
         let second = solid([20, 180, 90]);
         assert_eq!(
-            encode_webp_animation(&[first.clone()]).unwrap_err(),
+            encode_webp_animation(std::slice::from_ref(&first)).unwrap_err(),
             UNSUPPORTED
         );
         let odd = Raster::new(8, 8, 3, vec![0; 8 * 8 * 3]).unwrap();

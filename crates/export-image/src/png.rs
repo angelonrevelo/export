@@ -230,7 +230,7 @@ fn raw_len(info: PngInfo, spp: usize) -> Result<usize, Error> {
 }
 
 fn row_bytes(width: u32, bits_per_pixel: usize) -> usize {
-    ((width as usize * bits_per_pixel) + 7) / 8
+    (width as usize * bits_per_pixel).div_ceil(8)
 }
 
 fn pass_count(start: u32, step: u32, full: u32) -> u32 {

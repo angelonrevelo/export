@@ -211,9 +211,7 @@ mod tests {
             } else {
                 Some("none".into())
             },
-            acodec: Some(if ext == "m4a" || ext == "webm" && height.is_none() {
-                "mp4a".into()
-            } else if height.is_some() {
+            acodec: Some(if ext == "m4a" || ext == "webm" && height.is_none() || height.is_some() {
                 "mp4a".into()
             } else {
                 "none".into()

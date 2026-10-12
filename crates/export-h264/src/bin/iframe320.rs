@@ -82,8 +82,8 @@ fn main() -> ExitCode {
         out,
         "width=320\nheight=240\noutput_bytes={}\nrelease_p50_us={}\nrelease_p99_us={}",
         encoded.annex_b.len(),
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

@@ -70,7 +70,7 @@ impl<'a> BitReader<'a> {
             .pos
             .checked_add(n as usize)
             .ok_or(Error::Corrupt("bits"))?;
-        let end_byte = (end + 7) / 8;
+        let end_byte = end.div_ceil(8);
         if end_byte > self.data.len() {
             return Err(Error::Truncated {
                 at: self.data.len(),
@@ -795,6 +795,7 @@ fn fit_i32(v: i64) -> Result<i32> {
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn decorrelate(ch: &mut [Vec<i32>], assign: Assign) {
     if ch.len() != 2 {
         return;
@@ -1043,7 +1044,7 @@ fn write_streaminfo(
 }
 
 fn audio_md5(pcm: &Pcm) -> [u8; 16] {
-    let width = (usize::from(pcm.bits) + 7) / 8;
+    let width = usize::from(pcm.bits).div_ceil(8);
     let mut m = Md5::new();
     for &s in &pcm.samples {
         let tmp = (s as u32).to_le_bytes();

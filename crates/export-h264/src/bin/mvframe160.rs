@@ -92,8 +92,8 @@ fn main() -> ExitCode {
         encoded.annex_b.len(),
         SHIFTED_MV.mvx,
         SHIFTED_MV.mvy,
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

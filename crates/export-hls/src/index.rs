@@ -97,10 +97,8 @@ fn merge_if_close(left: ByteRange, right: ByteRange) -> Option<ByteRange> {
     let end = left_end.max(right_end);
     let gap = if right.offset > left_end {
         right.offset - left_end
-    } else if left.offset > right_end {
-        left.offset - right_end
     } else {
-        0
+        left.offset.saturating_sub(right_end)
     };
     if gap > COALESCE_GAP_BYTES {
         return None;

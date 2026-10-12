@@ -81,8 +81,8 @@ fn main() -> ExitCode {
         pixels.len(),
         p50,
         p99,
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

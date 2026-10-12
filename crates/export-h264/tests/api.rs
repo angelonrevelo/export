@@ -789,7 +789,7 @@ fn qvga_split_sequence_keeps_the_pair() {
     assert_eq!(pair.annex_b.len(), 19954);
     let one = encode_sequence_split(
         &frame,
-        &[picture.clone()],
+        std::slice::from_ref(&picture),
         &opts,
         SHIFTED_MV,
         SPLIT_RIGHT_MV,

@@ -537,6 +537,7 @@ fn read_coef(bools: &mut BoolDecoder<'_, '_>, token: usize) -> Result<i32, Error
     Ok(coef)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn add_wht(pic: &mut Pic, plane: usize, x: usize, y: usize, stride: usize, tokens: &[i32; 16]) {
     let mut rows = [[0i32; 4]; 4];
     for (i, row) in rows.iter_mut().enumerate() {
