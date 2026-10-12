@@ -1201,4 +1201,29 @@ fn main() {
         p50 as f64 / 1_000.0,
         p99 as f64 / 1_000.0,
     );
+
+    // Shrink the 640×480 PNG the thumbnail already uses. Same cap as the
+    // 96×72 shrink above. That loop is unchanged.
+    let shrink_target = 8_000u64;
+    for _ in 0..2 {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&png, shrink_target, &mut c).unwrap();
+    }
+    let (p50, p99) = time_n(12, || {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&png, shrink_target, &mut c).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let mut c = ShrinkCache::new();
+    let shrunk = shrink_png(&png, shrink_target, &mut c).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let smaller = shrunk.bytes.len() < png.len();
+    println!(
+        "shrink_png640 file_bytes={} out_bytes={} samples=12 p50_us={:.1} p99_us={:.1} smaller={smaller} copied={} allocs={allocs}",
+        png.len(),
+        shrunk.bytes.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        shrunk.copied,
+    );
 }
