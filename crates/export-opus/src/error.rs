@@ -8,8 +8,8 @@ pub enum Error {
     /// The TOC byte, or the frame-count structure it introduces, is illegal
     /// or is not the one mono 48 kHz 20 ms frame this crate accepts.
     BadToc,
-    /// Stereo, multistream, in-band FEC, or PCM other than the one silence
-    /// frame this packet can carry.
+    /// Stereo, multistream, in-band FEC, or PCM other than silence and the
+    /// one half-scale 440 Hz frame.
     Unsupported,
 }
 

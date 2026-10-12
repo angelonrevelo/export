@@ -1,4 +1,8 @@
-//! Write the one Opus packet and the PCM this crate decodes it to.
+//! Write one Opus packet and the PCM this crate decodes it to.
+//!
+//! `dump-packet silence packet.opus expected.pcm`
+//! `dump-packet sine packet.opus expected.pcm`
+//!
 //! The host verification script may pass those files to ffmpeg. This
 //! example does not call ffmpeg.
 
@@ -9,11 +13,19 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
+    let kind = args.next().unwrap_or_else(|| "silence".to_string());
     let packet_path = args.next().unwrap_or_else(|| "packet.opus".to_string());
     let pcm_path = args.next().unwrap_or_else(|| "expected.pcm".to_string());
 
-    let pcm = [0i16; FRAME_SAMPLES];
-    let packet = match encode(&pcm) {
+    let source = match kind.as_str() {
+        "silence" => [0i16; FRAME_SAMPLES],
+        "sine" => export_opus::sine_source(),
+        other => {
+            eprintln!("unknown frame {other}");
+            return ExitCode::from(1);
+        }
+    };
+    let packet = match encode(&source) {
         Ok(packet) => packet,
         Err(err) => {
             eprintln!("encode failed: {err}");
@@ -27,8 +39,8 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    if decoded != pcm {
-        eprintln!("roundtrip PCM mismatch");
+    if kind == "silence" && decoded != source {
+        eprintln!("silence roundtrip PCM mismatch");
         return ExitCode::from(1);
     }
 
@@ -45,7 +57,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     println!(
-        "packet={} bytes pcm_samples={}",
+        "{kind} packet={} bytes pcm_samples={}",
         packet.len(),
         decoded.len()
     );

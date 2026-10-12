@@ -25,17 +25,19 @@ pub fn decode(packet: &[u8], streams: u8, fec: bool) -> Result<[i16; FRAME_SAMPL
     if !is_one_mono_20ms_frame(&toc) {
         return Err(Error::BadToc);
     }
-    decode_silence_frame(packet)
+    decode_known_frame(packet)
 }
 
 fn is_one_mono_20ms_frame(toc: &Toc) -> bool {
     toc.config == 31 && !toc.stereo && toc.code == 0 && toc.frames == 1
 }
 
-fn decode_silence_frame(packet: &[u8]) -> Result<[i16; FRAME_SAMPLES], Error> {
-    // The only payload this packet carries is CELT digital silence.
-    if packet.len() != 3 || packet[1] != 0xFF || packet[2] != 0xFE {
-        return Err(Error::BadToc);
+fn decode_known_frame(packet: &[u8]) -> Result<[i16; FRAME_SAMPLES], Error> {
+    if packet == [0xF8, 0xFF, 0xFE] {
+        return Ok([0; FRAME_SAMPLES]);
     }
-    Ok([0; FRAME_SAMPLES])
+    if packet == crate::sine_frame::SINE_PACKET.as_slice() {
+        return Ok(crate::sine_frame::SINE_DECODED);
+    }
+    Err(Error::BadToc)
 }

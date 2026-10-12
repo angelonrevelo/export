@@ -1,7 +1,7 @@
 //! One Opus packet: mono, 48 kHz, one 20 ms frame.
 //!
-//! This crate encodes that single frame and decodes it back to PCM.
-//! It is not a song encoder and it does not replace yt-dlp.
+//! The frames this crate will encode are digital silence and one half-scale
+//! 440 Hz sine. It is not a song encoder and it does not replace yt-dlp.
 //! The library never calls ffmpeg.
 
 #![forbid(unsafe_code)]
@@ -9,11 +9,17 @@
 mod decoder;
 mod encoder;
 mod error;
+mod sine_frame;
 mod toc;
 
 pub use decoder::decode;
 pub use encoder::encode;
 pub use error::Error;
+
+/// PCM samples of the half-scale 440 Hz frame this crate can encode.
+pub fn sine_source() -> [i16; FRAME_SAMPLES] {
+    sine_frame::SINE_SOURCE
+}
 
 /// PCM sample rate for the one frame this crate handles.
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
@@ -83,10 +89,31 @@ mod tests {
     }
 
     #[test]
-    fn non_silence_pcm_is_unsupported() {
+    fn other_pcm_is_unsupported() {
         let mut pcm = silence();
         pcm[0] = 1;
         assert_eq!(encode(&pcm), Err(Error::Unsupported));
+    }
+
+    #[test]
+    fn half_scale_sine_decodes_as_a_tone() {
+        let packet = encode(&sine_frame::SINE_SOURCE).unwrap();
+        assert_eq!(packet.as_slice(), sine_frame::SINE_PACKET.as_slice());
+        assert_eq!(packet[0], TOC_MONO_20MS);
+        let decoded = decode(&packet, 1, false).unwrap();
+        assert_eq!(decoded, sine_frame::SINE_DECODED);
+        let sum_sq: i64 = decoded
+            .iter()
+            .map(|&sample| {
+                let sample = i64::from(sample);
+                sample * sample
+            })
+            .sum();
+        // RMS around 10_800. Silence is 0. This frame is not near silence.
+        assert!(sum_sq / FRAME_SAMPLES as i64 > 8_000 * 8_000);
+        // The window leaves the start of the frame quiet.
+        assert!(decoded[0].unsigned_abs() < 10);
+        assert!(decoded[400].unsigned_abs() > 5_000);
     }
 
     #[test]
