@@ -131,18 +131,17 @@ fn jpeg_roundtrip_and_quality_changes_size() {
     let n = noise(32, 32);
     let small = encode_jpeg(&n, 15).unwrap();
     let large = encode_jpeg(&n, 85).unwrap();
-    assert!(small.len() < large.len(), "{} vs {}", small.len(), large.len());
+    assert!(
+        small.len() < large.len(),
+        "{} vs {}",
+        small.len(),
+        large.len()
+    );
 }
 
 #[test]
 fn resize_area_and_bilinear_bounds() {
-    let src = Raster::new(
-        2,
-        2,
-        3,
-        vec![0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 2],
-    )
-    .unwrap();
+    let src = Raster::new(2, 2, 3, vec![0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 2]).unwrap();
     let area = resize(&src, 1, 1, Filter::Area).unwrap();
     assert_eq!(area.pixels, vec![1, 1, 1]);
     let up = resize(&solid(1, 1, [9, 8, 7]), 3, 2, Filter::Bilinear).unwrap();
@@ -181,16 +180,20 @@ fn shrink_measures_quality_and_lands_on_the_cap() {
     let bq = busy_out.quality.unwrap();
     assert!(fq > bq, "flat q {fq} busy q {bq}");
     assert!(flat_out.probes.len() > 1 && busy_out.probes.len() > 1);
-    assert!(flat_out.probes.iter().any(|p| {
-        p.quality == fq && matches!(p.bytes, Some(n) if n <= target)
-    }));
+    assert!(flat_out
+        .probes
+        .iter()
+        .any(|p| { p.quality == fq && matches!(p.bytes, Some(n) if n <= target) }));
     for probe in &flat_out.probes {
         if probe.quality > fq {
             assert!(probe.bytes.map(|n| n > target).unwrap_or(true));
         }
     }
     let decoded = decode_jpeg(&flat_out.bytes).unwrap();
-    assert_eq!((decoded.width, decoded.height), (flat_out.width, flat_out.height));
+    assert_eq!(
+        (decoded.width, decoded.height),
+        (flat_out.width, flat_out.height)
+    );
 }
 
 #[test]
@@ -243,7 +246,10 @@ fn foreign_baseline_420_matches_an_independent_decode() {
     assert!(jpeg.windows(4).any(|w| w == b"Lavc"));
     let decoded = decode_jpeg(jpeg).unwrap();
     let reference = include_bytes!("fixtures/baseline_420.rgb");
-    assert_eq!((decoded.width, decoded.height, decoded.channels), (32, 24, 3));
+    assert_eq!(
+        (decoded.width, decoded.height, decoded.channels),
+        (32, 24, 3)
+    );
     assert_eq!(decoded.pixels.len(), reference.len());
     let mut max_abs = 0u8;
     let mut sum = 0u64;
@@ -335,6 +341,35 @@ fn adler32(data: &[u8]) -> u32 {
         b = (b + a) % 65521;
     }
     (b << 16) | a
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn shrink_6144_gradient_fits_the_python_cap() {
+    let png = include_bytes!("fixtures/gradient_6144.png");
+    let src = decode_png(png).unwrap();
+    assert_eq!((src.width, src.height, src.channels), (6144, 4608, 3));
+    assert_eq!(&src.pixels[..3], &[0, 0, 0]);
+    let i = 6143 * 3;
+    assert_eq!(src.pixels[i], (6143u32 * 255 / 6144) as u8);
+    assert_eq!(src.pixels[i + 1], 0);
+    let mut cache = ShrinkCache::new();
+    let out = shrink_png(png, 8_000, &mut cache).unwrap();
+    let unpadded = out
+        .bytes
+        .windows(2)
+        .position(|w| w == [0xff, 0xfe])
+        .map(|i| i + 2)
+        .unwrap_or(out.bytes.len());
+    assert_eq!(out.bytes.len(), 8_000);
+    assert_eq!(unpadded, 7_951);
+    assert_eq!(&out.bytes[..2], &[0xff, 0xd8]);
+    assert!(!out.copied);
+    assert_eq!(out.quality, Some(4));
+    assert_eq!(out.scales, 5);
+    assert_eq!((out.width, out.height), (1031, 773));
+    let back = decode_jpeg(&out.bytes).unwrap();
+    assert_eq!((back.width, back.height), (1031, 773));
 }
 
 fn png_crc(tag: &[u8], data: &[u8]) -> u32 {

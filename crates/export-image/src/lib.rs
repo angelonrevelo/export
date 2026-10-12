@@ -32,6 +32,10 @@
 //! whose encoded size fits the cap. A source already at or under the cap is
 //! copied. The content hash is SHA-256, computed once per call, and a repeat
 //! of the same bytes and cap returns the cached encode without running it again.
+//! When the standard Huffman tables still miss the cap after six scales, the
+//! search starts over with tables counted from the image and with each side
+//! truncated to 70 percent, at least 2 pixels. That second file is still a
+//! baseline JPEG. The cap is not raised.
 //!
 //! [`thumbnail_jpeg`] is a separate path: the long edge is at most 220 pixels
 //! and the JPEG quality is 72. The WebP inputs are the two-frame 640×480 file
