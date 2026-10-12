@@ -144,6 +144,12 @@ Four-frame 1280×720 animation, a later release run. Same intra-DC keyframe code
 | --- | --- | --- | --- | --- | --- |
 | two-frame VP8 animation encode, 64×64 canvas, 16×16 at (16, 32) (output 190 bytes) | 40 | 57.1 µs | 64.8 µs | 228.49 (p99 201.50) | file MB/s p50 3.33; 35 allocs; 8,042.28 allocs/MP |
 
+Decode of that same 190-byte file, a later release run. The decoder paints the 16×16 rectangle at (16, 32) onto the 64×64 canvas. The composited canvas matches that overlay. p50 is 64.9 µs, under the 116 µs cap, so the paint stays. The encode rows above were not replaced. `decode_webp` on the file still returns `Unsupported`.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| VP8 animation decode, 64×64 canvas, 16×16 painted at (16, 32) | 40 | 64.9 µs | 95.5 µs | 378.40 (p99 257.44) | file MB/s p50 2.93; 14 allocs; 1,708.98 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
