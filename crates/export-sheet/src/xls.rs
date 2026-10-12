@@ -40,6 +40,11 @@ pub fn generated_biff_xls_numeric_column() -> Vec<u8> {
     wrap_ole_regular(&workbook_numeric_column())
 }
 
+/// The same numeric column at the next count: 2 000 rows, values 0 through 1999.
+pub fn generated_biff_xls_numeric_column_two_thousand() -> Vec<u8> {
+    wrap_ole_regular(&workbook_numeric_column_two_thousand())
+}
+
 /// A1 = 2, B1 = 3, C1 = a SUM formula whose cached value is 5.
 /// The expression is not evaluated.
 pub fn generated_biff_xls_sum_cache() -> Vec<u8> {
@@ -509,6 +514,28 @@ fn workbook_numeric_column() -> Vec<u8> {
     dims[10..12].copy_from_slice(&1u16.to_le_bytes());
     push_rec(&mut out, 0x0200, &dims);
     for row in 0..1000u16 {
+        push_rec(&mut out, 0x0203, &number_cell(row, 0, f64::from(row)));
+    }
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
+fn workbook_numeric_column_two_thousand() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = [0u8; 14];
+    dims[4..8].copy_from_slice(&2000u32.to_le_bytes());
+    dims[10..12].copy_from_slice(&1u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    for row in 0..2000u16 {
         push_rec(&mut out, 0x0203, &number_cell(row, 0, f64::from(row)));
     }
     push_rec(&mut out, 0x000A, &[]);
@@ -1435,6 +1462,28 @@ mod tests {
         let file = generated_biff_xls_numeric_column();
         assert_eq!(&file[..8], &OLE_MAGIC);
         assert!(file.len() > stream.len());
+    }
+
+    #[test]
+    fn numeric_column_two_thousand_reads_every_row() {
+        let stream = workbook_numeric_column_two_thousand();
+        assert!(stream.len() >= 4096);
+        assert!(records(&stream, 0x0006).is_empty());
+        let numbers = records(&stream, 0x0203);
+        assert_eq!(numbers.len(), 2000);
+        assert_eq!(
+            f64::from_le_bytes(numbers[0][6..14].try_into().unwrap()),
+            0.0
+        );
+        assert_eq!(
+            f64::from_le_bytes(numbers[1999][6..14].try_into().unwrap()),
+            1999.0
+        );
+        let rows = parse_workbook(&stream).unwrap();
+        assert_eq!(rows.len(), 2000);
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row, &[i.to_string()]);
+        }
     }
 
     #[test]

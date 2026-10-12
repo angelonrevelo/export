@@ -1,10 +1,10 @@
 use export_sheet::{
     convert_bytes, generated_biff_xls, generated_biff_xls_numeric_column,
-    generated_biff_xls_sum_cache, generated_biff_xls_sum_uncached,
-    generated_biff_xls_sum_uncached_area, generated_biff_xls_sum_uncached_area_column,
-    generated_biff_xls_sum_uncached_area_column_four, generated_biff_xls_sum_uncached_area_four,
-    generated_biff_xls_sum_uncached_four, generated_biff_xls_sum_uncached_three,
-    generated_biff_xls_two_numbers, Format, Options,
+    generated_biff_xls_numeric_column_two_thousand, generated_biff_xls_sum_cache,
+    generated_biff_xls_sum_uncached, generated_biff_xls_sum_uncached_area,
+    generated_biff_xls_sum_uncached_area_column, generated_biff_xls_sum_uncached_area_column_four,
+    generated_biff_xls_sum_uncached_area_four, generated_biff_xls_sum_uncached_four,
+    generated_biff_xls_sum_uncached_three, generated_biff_xls_two_numbers, Format, Options,
 };
 
 #[test]
@@ -44,6 +44,20 @@ fn one_thousand_numeric_rows() {
     assert!(csv.starts_with(b"0\n"));
     assert!(csv.ends_with(b"999\n"));
     assert_eq!(csv.iter().filter(|b| **b == b'\n').count(), 1000);
+}
+
+#[test]
+fn two_thousand_numeric_rows_read_back() {
+    let file = generated_biff_xls_numeric_column_two_thousand();
+    let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
+    assert_eq!(stats.rows, 2000);
+    assert_eq!(stats.lossy, 0);
+    let mut lines = csv.split(|b| *b == b'\n');
+    for i in 0..2000 {
+        assert_eq!(lines.next().unwrap(), i.to_string().as_bytes());
+    }
+    assert_eq!(lines.next(), Some(&[][..]));
+    assert_eq!(lines.next(), None);
 }
 
 #[test]
