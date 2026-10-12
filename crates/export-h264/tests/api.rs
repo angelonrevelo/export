@@ -1,5 +1,5 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160,
+    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_160x160_eight,
     fixture_160x160_predicted, fixture_160x160_shifted, fixture_32x32, fixture_32x32_eight,
     fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
     Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
@@ -330,6 +330,53 @@ fn larger_shifted_picture_uses_one_motion_vector() {
                 ..opts
             },
             SHIFTED_MV,
+        )
+        .unwrap_err(),
+        Error::SecondPass
+    );
+}
+
+#[test]
+fn larger_sequence_keeps_the_iframe_prefix() {
+    let opts = EncodeOptions::default();
+    let (intra, predicted) = fixture_160x160_eight();
+    assert_eq!(predicted.len(), 7);
+    let alone = encode(&intra, &opts).unwrap();
+    assert_eq!(alone.annex_b.len(), 6432);
+    let zero = encode_ip(&intra, &fixture_160x160_predicted(), &opts).unwrap();
+    assert_eq!(zero.annex_b.len(), 9689);
+    let moved = encode_ip_motion(&intra, &fixture_160x160_shifted(), &opts, SHIFTED_MV).unwrap();
+    assert_eq!(moved.annex_b.len(), 6694);
+    let sequence = encode_sequence(&intra, &predicted, &opts).unwrap();
+    assert_eq!(sequence.annex_b.len(), 7197);
+    assert_eq!(&sequence.annex_b[..6432], &alone.annex_b[..]);
+    assert_eq!(sequence.reconstructed.len(), 8);
+    let mut sum = 0.0;
+    for (src, rec) in predicted.iter().zip(sequence.reconstructed.iter().skip(1)) {
+        sum += mean_absolute_error(&src.picture, rec);
+    }
+    let mae = sum / 7.0;
+    assert!(mae < 8.0, "sequence mae {mae}");
+    assert_eq!(
+        encode_sequence(
+            &intra,
+            &predicted,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            }
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_sequence(
+            &intra,
+            &predicted,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            }
         )
         .unwrap_err(),
         Error::SecondPass

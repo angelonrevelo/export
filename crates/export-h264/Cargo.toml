@@ -48,3 +48,7 @@ path = "src/bin/mvframe160.rs"
 [[bin]]
 name = "seqframe"
 path = "src/bin/seqframe.rs"
+
+[[bin]]
+name = "seqframe160"
+path = "src/bin/seqframe160.rs"

@@ -2,7 +2,7 @@
 
 One baseline H.264 I-frame, and one P-frame after it. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
 
-This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. A zero-motion P-frame can follow it, or one shifted picture predicted with quarter-pel motion (16, 0). It does not link or spawn ffmpeg.
+This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. A zero-motion P-frame can follow it, one shifted picture can use quarter-pel motion (16, 0), and eight pictures can chain those choices from the previous reconstruction. It does not link or spawn ffmpeg.
 
 Chroma residual is the DC coefficient of each 4×4 block. Luma residual is a full 4×4 transform. Deblocking is off so a decoder's pixels are the inverse transform.
 
@@ -75,3 +75,13 @@ Same release profile and QP. The I-frame bytes are the 6,432-byte picture above.
 - mean absolute error, ffmpeg decode versus both sources: 3.3751. The I-frame half is still 3.3912. The P-frame half is 3.3590
 
 The ffmpeg decode matches the encoder reconstruction. `scripts/check-motion160.sh` may run ffmpeg only to decode that file.
+
+## Eight 160×160 pictures
+
+Same release profile and QP. The I-frame bytes are the 6,432-byte picture above, then seven P-frames. Each P-frame is predicted from the previous reconstruction. The first, third, fifth, and seventh hold still. The second, fourth, and sixth move four luma samples and use quarter-pel motion (16, 0). 200 calls after 20 warmup.
+
+- output: 7197 bytes
+- release p50: 1383 µs, p99: 1545 µs on the recorded run. Four later runs on that binary were p50 1471–1550 µs and p99 1713–3054 µs
+- mean absolute error, ffmpeg decode versus all eight sources: 3.3421. The I-frame half is still 3.3912. The seven P-frames are 3.3846, 3.3598, 3.3598, 3.3247, 3.3247, 3.2958, and 3.2958
+
+The ffmpeg decode matches the encoder reconstruction. `scripts/check-sequence160.sh` may run ffmpeg only to decode that file.

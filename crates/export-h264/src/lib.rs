@@ -442,7 +442,15 @@ fn shift_frame(src: &Yuv420, dx_luma: i32) -> Yuv420 {
 /// The first, third, fifth, and seventh P-frames hold still. The others move
 /// four luma samples left and use [`SHIFTED_MV`].
 pub fn fixture_32x32_eight() -> (Yuv420, Vec<PredictedFrame>) {
-    let intra = fixture_32x32();
+    eight_from(fixture_32x32())
+}
+
+/// Eight 160×160 pictures, with the same hold-and-shift pattern as [`fixture_32x32_eight`].
+pub fn fixture_160x160_eight() -> (Yuv420, Vec<PredictedFrame>) {
+    eight_from(fixture_160x160())
+}
+
+fn eight_from(intra: Yuv420) -> (Yuv420, Vec<PredictedFrame>) {
     let mut picture = intra.clone();
     let mut predicted = Vec::with_capacity(7);
     for index in 0..7 {
