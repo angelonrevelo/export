@@ -100,7 +100,7 @@ fn main() {
     let judged = !cfg!(debug_assertions);
     for &n in &[64 * 1024usize, 1024 * 1024] {
         let mut plain = vec![0x5au8; n];
-        plain[..8].copy_from_slice(b"PK\x03\x04");
+        plain[..4].copy_from_slice(b"PK\x03\x04");
         let mut file = Vec::new();
         encrypt_ooxml("bench-password", &salt, &plain, &mut file).unwrap();
         decrypt_once(&file, &plain);

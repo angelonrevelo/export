@@ -58,3 +58,49 @@ Machine: Linux 6.12.94+, 4-core Intel Xeon, rustc 1.83.0, clock rdtsc at
 2.400 cycles/ns, overhead 46 cycles. Single-threaded. `opt-level = 3`,
 thin LTO, `codegen-units = 1`. Recorded 2026-10-12. The bench reloads the
 scrubbed file and checks the payload bytes before it prints a row.
+
+## OOXML decrypt
+
+`decrypt_ooxml` reads an ECMA-376 standard-encrypted package (the Compound
+File around a docx, xlsx, or pptx) and writes the zip. The password is
+checked against the encrypted verifier first. A mismatch returns
+`wrong password` and does not write. Agile encryption is refused; it is
+not reported as a wrong password.
+
+`encrypt_ooxml` builds the fixture in this crate. The tests use a stored
+zip whose document part contains `hello-ooxml`. That fixture is not a
+Word-validated docx. The container is what is tested.
+
+### Honest limits
+
+- Standard encryption only: minor version 2, AES-128, SHA-1, 50,000
+  iterations, one ECB key for the whole package. No AES-NI.
+- Compound File version 3, 512-byte sectors. A 4096-byte sector file is
+  refused.
+- No payload HMAC. A flipped ciphertext still decrypts, to different bytes.
+- `encrypt_ooxml` holds the ciphertext. `decrypt_ooxml` does not hold the
+  plaintext. A truncated package after a correct password can write a prefix.
+- `EncryptionInfo` is refused above 64 KiB. The package stream is not loaded.
+
+### Bench
+
+```sh
+cargo bench --manifest-path crates/export-meta/Cargo.toml --bench ooxml
+```
+
+Median of 5 timed decrypts after one warmup. `Instant`, not rdtsc: these
+times are milliseconds. `peak extra` is bytes requested from the allocator
+during decrypt, above the ciphertext and the expected plaintext, which
+were already allocated. It is not process RSS. The decrypt checks every
+output byte against that plaintext.
+
+The 64 KiB row is mostly the 50,000 SHA-1 iterations. The 1 MiB row is
+closer to software AES-128-ECB. Peak extra does not grow with the package.
+
+| plaintext | file | median | MB/s | peak extra |
+|---|---|---|---|---|
+| 65,536 | 69,120 | 9.115 ms | 7.19 | 1,832 |
+| 1,048,576 | 1,059,840 | 21.573 ms | 48.61 | 1,832 |
+
+Same machine and same release profile as the scrub table. Recorded
+2026-10-12. The bench aborts if peak extra reaches 64 KiB.
