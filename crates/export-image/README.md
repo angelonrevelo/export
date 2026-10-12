@@ -238,6 +238,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | shrink 768×576 PNG to 8,000 bytes, fresh cache (file 932,701 bytes, output 8,000 bytes) | 12 | 228,807.5 µs | 236,214.5 µs | 5.80 | 102 allocs; 230.58 allocs/MP |
 
+`shrink_png` of the same gradient at 1536×1152, a later release run. The source PNG is 2,170,497 bytes. The cap is 8,000 bytes. The output is 8,000 bytes, smaller than the source, and not a copy. p50 is 794,767.1 µs, under the 1,006.8 ms cap, so this edge stays. The 768×576 shrink row stays 932,701 bytes in, 8,000 bytes out, p50 228,807.5 µs, p99 236,214.5 µs. The 384×288 shrink row stays 338,716 bytes in, 8,000 bytes out, p50 65,610.7 µs, p99 66,739.0 µs. The 192×144 shrink row stays 87,853 bytes in, 8,000 bytes out, p50 21,117.0 µs, p99 24,968.5 µs. The 96×72 shrink row stays 5,827.4 µs. The 640×480 shrink stays reverted: 728,763 bytes in, 8,000 bytes out, p50 198,157.4 µs. Shrink does not take WebP. The WebP thumbnail rows stay 3,024 bytes at 9,243.2 µs and 3,118 bytes at 16,374.0 µs. The PNG thumbnail row stays 3,703 bytes, p50 20,402.9 µs, p99 21,764.4 µs.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| shrink 1536×1152 PNG to 8,000 bytes, fresh cache (file 2,170,497 bytes, output 8,000 bytes) | 12 | 794,767.1 µs | 847,271.5 µs | 6.68 | 343 allocs; 193.84 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
