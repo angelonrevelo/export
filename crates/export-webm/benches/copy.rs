@@ -3,8 +3,8 @@
 //! This process does not spawn threads.
 
 use export_webm::{
-    large_sample_file, opus_webm, sample_file, stream_copy, vorbis_webm, vp8_4096_webm,
-    vp8_460800_webm, vp8_two_webm, vp8_webm, vp9_4096_webm, vp9_webm, Error,
+    large_sample_file, opus_vorbis_webm, opus_webm, sample_file, stream_copy, vorbis_webm,
+    vp8_4096_webm, vp8_460800_webm, vp8_two_webm, vp8_webm, vp9_4096_webm, vp9_webm, Error,
 };
 use std::time::Instant;
 
@@ -19,6 +19,7 @@ fn main() {
     let vp9_4096 = vp9_4096_webm();
     let opus = opus_webm();
     let vorbis = vorbis_webm();
+    let opus_vorbis = opus_vorbis_webm();
     let mut truncated = small.clone();
     truncated.truncate(truncated.len() / 2);
 
@@ -34,6 +35,9 @@ fn main() {
     let vp9_4096_out = stream_copy(&vp9_4096).expect("4096-byte vp9 copies").bytes;
     let opus_out = stream_copy(opus).expect("opus copies").bytes;
     let vorbis_out = stream_copy(vorbis).expect("vorbis copies").bytes;
+    let opus_vorbis_out = stream_copy(&opus_vorbis)
+        .expect("opus and vorbis copy")
+        .bytes;
     assert_eq!(
         stream_copy(&truncated).expect_err("truncated fails"),
         Error::Truncated
@@ -53,6 +57,7 @@ fn main() {
         let _ = stream_copy(&vp9_4096);
         let _ = stream_copy(opus);
         let _ = stream_copy(vorbis);
+        let _ = stream_copy(&opus_vorbis);
         let _ = stream_copy(&truncated);
     }
 
@@ -66,6 +71,7 @@ fn main() {
     let vp9_4096_ns = time_copy(&vp9_4096, vp9_4096_out.len(), N_SMALL);
     let opus_ns = time_copy(opus, opus_out.len(), N_SMALL);
     let vorbis_ns = time_copy(vorbis, vorbis_out.len(), N_SMALL);
+    let opus_vorbis_ns = time_copy(&opus_vorbis, opus_vorbis_out.len(), N_SMALL);
     let truncated_ns = time_truncated(&truncated, N_SMALL);
 
     println!("threading=off");
@@ -79,6 +85,12 @@ fn main() {
     print_copy_row("vp9_4096", &vp9_4096, &vp9_4096_out, &vp9_4096_ns);
     print_copy_row("opus", opus, &opus_out, &opus_ns);
     print_copy_row("vorbis", vorbis, &vorbis_out, &vorbis_ns);
+    print_copy_row(
+        "opus_vorbis",
+        &opus_vorbis,
+        &opus_vorbis_out,
+        &opus_vorbis_ns,
+    );
     print_truncated_row(&truncated, &truncated_ns);
 }
 

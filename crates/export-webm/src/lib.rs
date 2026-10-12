@@ -33,6 +33,36 @@ pub fn vorbis_webm() -> &'static [u8] {
     include_bytes!("../fixtures/vorbis.webm")
 }
 
+/// One WebM file carrying the Opus track from [`opus_webm`] and the Vorbis
+/// track from [`vorbis_webm`]. Both payloads are copied and neither is decoded.
+pub fn opus_vorbis_webm() -> Vec<u8> {
+    let opus = demux(opus_webm()).expect("opus fixture");
+    let vorbis = demux(vorbis_webm()).expect("vorbis fixture");
+    let opus_track = opus.tracks.into_iter().next().expect("opus track");
+    let mut vorbis_track = vorbis.tracks.into_iter().next().expect("vorbis track");
+    let vorbis_src = vorbis_track.number;
+    if vorbis_track.number == opus_track.number {
+        vorbis_track.number = opus_track.number.saturating_add(1);
+    }
+    if vorbis_track.uid == opus_track.uid {
+        vorbis_track.uid = opus_track.uid.saturating_add(1);
+    }
+    let mut blocks = opus.blocks;
+    for mut block in vorbis.blocks {
+        if block.track == vorbis_src {
+            block.track = vorbis_track.number;
+        }
+        blocks.push(block);
+    }
+    let movie = Movie {
+        doctype: "webm".to_owned(),
+        timestamp_scale: opus.timestamp_scale,
+        tracks: vec![opus_track, vorbis_track],
+        blocks,
+    };
+    remux(&movie).expect("opus and vorbis webm")
+}
+
 /// WebM file whose video payload is VP9. The bytes are copied, not decoded.
 pub fn vp9_webm() -> &'static [u8] {
     include_bytes!("../fixtures/vp9.webm")
@@ -402,6 +432,51 @@ mod tests {
             again.tracks[0].codec_private,
             parsed.tracks[0].codec_private
         );
+        assert_eq!(again.blocks.len(), parsed.blocks.len());
+        for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
+        }
+    }
+
+    #[test]
+    fn opus_and_vorbis_are_copied() {
+        let opus = demux(opus_webm()).unwrap();
+        let vorbis = demux(vorbis_webm()).unwrap();
+        let file = opus_vorbis_webm();
+        let parsed = demux(&file).unwrap();
+        assert_eq!(parsed.tracks.len(), 2);
+        assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_OPUS);
+        assert_eq!(parsed.tracks[1].codec_id, crate::ebml::CODEC_VORBIS);
+        assert_eq!(parsed.tracks[0].codec_private, opus.tracks[0].codec_private);
+        assert_eq!(
+            parsed.tracks[1].codec_private,
+            vorbis.tracks[0].codec_private
+        );
+        let opus_blocks: Vec<_> = parsed
+            .blocks
+            .iter()
+            .filter(|block| block.track == parsed.tracks[0].number)
+            .collect();
+        let vorbis_blocks: Vec<_> = parsed
+            .blocks
+            .iter()
+            .filter(|block| block.track == parsed.tracks[1].number)
+            .collect();
+        assert_eq!(opus_blocks.len(), opus.blocks.len());
+        assert_eq!(vorbis_blocks.len(), vorbis.blocks.len());
+        for (left, right) in opus.blocks.iter().zip(opus_blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
+        }
+        for (left, right) in vorbis.blocks.iter().zip(vorbis_blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
+        }
+        let copied = stream_copy(&file).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_OPUS);
+        assert_eq!(again.tracks[1].codec_id, crate::ebml::CODEC_VORBIS);
         assert_eq!(again.blocks.len(), parsed.blocks.len());
         for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
             assert_eq!(left.payload, right.payload);

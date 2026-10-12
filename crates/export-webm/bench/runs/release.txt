@@ -44,3 +44,8 @@ row=opus samples=2000 input_bytes=826 output_bytes=466 p50_ns=5182 p99_ns=7995 m
 # Vorbis audio track. ffmpeg names the remux `Audio: vorbis`. The payload is copied and is not decoded.
 # p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
 row=vorbis samples=2000 input_bytes=4166 output_bytes=3826 p50_ns=15539 p99_ns=20496 mb_s=268.100
+
+# Opus track and Vorbis track in one file. ffmpeg names `Audio: opus` and `Audio: vorbis`.
+# Neither payload is decoded.
+# p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
+row=opus_vorbis samples=2000 input_bytes=4185 output_bytes=4185 p50_ns=16381 p99_ns=24917 mb_s=255.479
