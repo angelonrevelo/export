@@ -91,7 +91,8 @@ impl Fetcher {
     /// Fetch every span with its own cleartext `Range` GET.
     ///
     /// A gap larger than 4096 bytes does not coalesce, so two ranges of the
-    /// same URI stay two spans and this method issues two GETs. The hole
+    /// same URI stay two spans and this method issues two GETs. Those GETs
+    /// share one connection when they use the same checked address. The hole
     /// between them is not requested. `https` URIs are unsupported. This
     /// method does not run yt-dlp or any other program. An empty span list
     /// returns [`Error::BadTag`].
@@ -99,11 +100,83 @@ impl Fetcher {
         if playlist.spans.is_empty() {
             return Err(Error::BadTag);
         }
-        let mut bodies = Vec::with_capacity(playlist.spans.len());
-        for index in 0..playlist.spans.len() {
-            bodies.push(self.get_span(playlist, index)?);
+        let mut jobs = Vec::with_capacity(playlist.spans.len());
+        for span in &playlist.spans {
+            let range = span.byte_range.ok_or(Error::BadTag)?;
+            jobs.push((span.uri.as_str(), range));
+        }
+        self.fetch_ranges(&jobs)
+    }
+
+    /// Two or more ranges on one address share the open stream. A different
+    /// address, a `Connection: close` response, or the last range closes it.
+    /// Every URL, including a redirect, is passed through [`check_hop`].
+    fn fetch_ranges(&self, jobs: &[(&str, ByteRange)]) -> Result<Vec<Vec<u8>>, Error> {
+        let mut bodies = Vec::with_capacity(jobs.len());
+        let mut live: Option<LiveConn> = None;
+        for (index, (url, range)) in jobs.iter().enumerate() {
+            let close_after = index + 1 == jobs.len();
+            bodies.push(self.exchange_reusing(url, *range, close_after, &mut live)?);
         }
         Ok(bodies)
+    }
+
+    fn exchange_reusing(
+        &self,
+        start: &str,
+        range: ByteRange,
+        close_after: bool,
+        live: &mut Option<LiveConn>,
+    ) -> Result<Vec<u8>, Error> {
+        let mut current = start.to_string();
+        let mut redirects = 0u8;
+        loop {
+            let hop = check_hop(&current, self.policy)?;
+            let same = live
+                .as_ref()
+                .map(|open| open.addr == hop.addr)
+                .unwrap_or(false);
+            if !same {
+                let stream =
+                    TcpStream::connect_timeout(&hop.addr, self.timeout).map_err(io_err)?;
+                stream
+                    .set_read_timeout(Some(self.timeout))
+                    .map_err(io_err)?;
+                stream
+                    .set_write_timeout(Some(self.timeout))
+                    .map_err(io_err)?;
+                *live = Some(LiveConn {
+                    stream,
+                    addr: hop.addr,
+                });
+            }
+            let open = live.as_mut().expect("connection");
+            write_http_get_close(&mut open.stream, &hop.url, Some(range), close_after)?;
+            open.stream.flush().map_err(io_err)?;
+            let (message, server_close) =
+                read_http_exchange(&mut open.stream, self.max_body_bytes)?;
+            if is_redirect(message.status) {
+                if redirects >= self.max_redirects {
+                    return Err(Error::Http("too many redirects".into()));
+                }
+                let location = message
+                    .location
+                    .ok_or_else(|| Error::Http("redirect missing location".into()))?;
+                current = resolve_redirect(&hop.url, &location)?;
+                redirects += 1;
+                if server_close || close_after {
+                    *live = None;
+                }
+                continue;
+            }
+            if !(200..300).contains(&message.status) {
+                return Err(Error::Http(format!("status {}", message.status)));
+            }
+            if server_close || close_after {
+                *live = None;
+            }
+            return Ok(message.body);
+        }
     }
 
     fn fetch(&self, url: &str, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
@@ -190,6 +263,15 @@ pub fn write_http_get(
     url: &HttpUrl,
     range: Option<ByteRange>,
 ) -> Result<(), Error> {
+    write_http_get_close(writer, url, range, true)
+}
+
+fn write_http_get_close(
+    writer: &mut impl Write,
+    url: &HttpUrl,
+    range: Option<ByteRange>,
+    close: bool,
+) -> Result<(), Error> {
     let mut request = String::new();
     request.push_str("GET ");
     request.push_str(&url.path_and_query);
@@ -206,7 +288,11 @@ pub fn write_http_get(
             .ok_or(Error::BadTag)?;
         request.push_str(&format!("Range: bytes={}-{end}\r\n", range.offset));
     }
-    request.push_str("Connection: close\r\n\r\n");
+    if close {
+        request.push_str("Connection: close\r\n\r\n");
+    } else {
+        request.push_str("Connection: keep-alive\r\n\r\n");
+    }
     writer.write_all(request.as_bytes()).map_err(io_err)?;
     Ok(())
 }
@@ -214,6 +300,13 @@ pub fn write_http_get(
 /// Read one HTTP/1.0 or HTTP/1.1 response. `Set-Cookie`, `Cookie`, and
 /// `Authorization` headers return [`Error::Unsupported`].
 pub fn read_http_message(reader: &mut impl Read, max_body: usize) -> Result<HttpMessage, Error> {
+    Ok(read_http_exchange(reader, max_body)?.0)
+}
+
+fn read_http_exchange(
+    reader: &mut impl Read,
+    max_body: usize,
+) -> Result<(HttpMessage, bool), Error> {
     let (header, leftover) = read_header_block(reader)?;
     let text =
         std::str::from_utf8(&header).map_err(|_| Error::Http("headers are not utf-8".into()))?;
@@ -221,11 +314,19 @@ pub fn read_http_message(reader: &mut impl Read, max_body: usize) -> Result<Http
     let prefix = std::io::Cursor::new(leftover);
     let mut chained = prefix.chain(reader);
     let body = read_body(&mut chained, &parsed, max_body)?;
-    Ok(HttpMessage {
-        status: parsed.status,
-        location: parsed.location,
-        body,
-    })
+    Ok((
+        HttpMessage {
+            status: parsed.status,
+            location: parsed.location,
+            body,
+        },
+        parsed.connection_close,
+    ))
+}
+
+struct LiveConn {
+    stream: TcpStream,
+    addr: SocketAddr,
 }
 
 fn follow_hops(
@@ -342,6 +443,7 @@ struct ParsedHeaders {
     location: Option<String>,
     content_length: Option<usize>,
     chunked: bool,
+    connection_close: bool,
 }
 
 fn parse_header_block(text: &str) -> Result<ParsedHeaders, Error> {
@@ -352,11 +454,13 @@ fn parse_header_block(text: &str) -> Result<ParsedHeaders, Error> {
     let status_line = lines
         .next()
         .ok_or_else(|| Error::Http("missing status".into()))?;
+    let (status, mut connection_close) = parse_status(status_line)?;
     let mut parsed = ParsedHeaders {
-        status: parse_status(status_line)?,
+        status,
         location: None,
         content_length: None,
         chunked: false,
+        connection_close,
     };
     for line in lines {
         if line.is_empty() {
@@ -388,6 +492,19 @@ fn parse_header_block(text: &str) -> Result<ParsedHeaders, Error> {
                 .parse()
                 .map_err(|_| Error::Http("bad content-length".into()))?;
             parsed.content_length = Some(len);
+        } else if name.eq_ignore_ascii_case("connection") {
+            let close = value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("close"));
+            let keep = value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("keep-alive"));
+            if close {
+                connection_close = true;
+            } else if keep {
+                connection_close = false;
+            }
+            parsed.connection_close = connection_close;
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             let chunked = value
                 .split(',')
@@ -414,7 +531,7 @@ fn is_forbidden_header(name: &str) -> bool {
         || name.eq_ignore_ascii_case("proxy-authorization")
 }
 
-fn parse_status(line: &str) -> Result<u16, Error> {
+fn parse_status(line: &str) -> Result<(u16, bool), Error> {
     let mut parts = line.split(' ');
     let version = parts
         .next()
@@ -428,7 +545,8 @@ fn parse_status(line: &str) -> Result<u16, Error> {
     if code.len() != 3 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(Error::Http("bad status".into()));
     }
-    code.parse().map_err(|_| Error::Http("bad status".into()))
+    let status = code.parse().map_err(|_| Error::Http("bad status".into()))?;
+    Ok((status, version == "HTTP/1.0"))
 }
 
 fn is_redirect(status: u16) -> bool {

@@ -585,8 +585,8 @@ fn local_stack_coalesced_range_row() -> Result<String, Box<dyn std::error::Error
 
 /// One segment is named as two ranges of the same URI with a 4097-byte gap.
 /// That gap is past the coalesce limit, so [`Fetcher::get_spans`] issues two
-/// cleartext `Range` GETs. The hole is not fetched. The reported byte count
-/// is the sum of the two responses.
+/// cleartext `Range` GETs on one connection. The hole is not fetched. The
+/// reported byte count is the sum of the two responses.
 ///
 /// Loopback is allowed only here. `check_hop` still runs inside the client
 /// before each connect. The bodies are raw text, not a transcode.
@@ -649,7 +649,7 @@ fn local_stack_split_range_row() -> Result<String, Box<dyn std::error::Error>> {
                 first_range,
                 second_range,
                 resource.len(),
-                2 * (warmup + iters),
+                warmup + iters,
             );
         });
         let mut samples = Vec::with_capacity(iters);
@@ -674,7 +674,7 @@ fn local_stack_split_range_row() -> Result<String, Box<dyn std::error::Error>> {
     let p50 = percentile(&sorted, 0.50);
     let p99 = percentile(&sorted, 0.99);
     Ok(format!(
-        "local stack split range GET gets=2 bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+        "local stack split range GET gets=2 connections=1 bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
 }
 
@@ -685,14 +685,14 @@ fn serve_split_ranges(
     first_range: ByteRange,
     second_range: ByteRange,
     resource_len: usize,
-    accepts: usize,
+    connections: usize,
 ) {
     listener.set_nonblocking(true).expect("nonblocking accept");
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut served = 0;
     let first_header = range_header(first_range);
     let second_header = range_header(second_range);
-    while served < accepts && Instant::now() < deadline {
+    while served < connections && Instant::now() < deadline {
         match listener.accept() {
             Ok((mut sock, _)) => {
                 sock.set_nonblocking(false).expect("blocking socket");
@@ -700,27 +700,41 @@ fn serve_split_ranges(
                     .expect("read timeout");
                 sock.set_write_timeout(Some(Duration::from_secs(2)))
                     .expect("write timeout");
-                let request = read_http_request(&mut sock).expect("range request");
-                assert!(
-                    request.starts_with("GET /seg.ts "),
-                    "split fetch used an unexpected path"
-                );
-                let (body, range) = if request.contains(&first_header) {
-                    (first, first_range)
-                } else if request.contains(&second_header) {
-                    (second, second_range)
-                } else {
-                    panic!("4097-byte gap was fetched as one range");
-                };
-                let inclusive_end = range.end().expect("range end") - 1;
-                let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{inclusive_end}/{}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n",
-                    body.len(),
-                    range.offset,
-                    resource_len
-                );
-                sock.write_all(header.as_bytes()).expect("range header");
-                sock.write_all(body).expect("range body");
+                for request_index in 0..2 {
+                    let request = read_http_request(&mut sock)
+                        .expect("second range did not reuse the connection");
+                    assert!(
+                        request.starts_with("GET /seg.ts "),
+                        "split fetch used an unexpected path"
+                    );
+                    if request_index == 0 {
+                        assert!(
+                            request.contains("Connection: keep-alive\r\n"),
+                            "first range closed the connection"
+                        );
+                    }
+                    let (body, range) = if request.contains(&first_header) {
+                        (first, first_range)
+                    } else if request.contains(&second_header) {
+                        (second, second_range)
+                    } else {
+                        panic!("4097-byte gap was fetched as one range");
+                    };
+                    let inclusive_end = range.end().expect("range end") - 1;
+                    let persistence = if request_index == 0 {
+                        "keep-alive"
+                    } else {
+                        "close"
+                    };
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{inclusive_end}/{}\r\nConnection: {persistence}\r\nContent-Type: text/plain\r\n\r\n",
+                        body.len(),
+                        range.offset,
+                        resource_len
+                    );
+                    sock.write_all(header.as_bytes()).expect("range header");
+                    sock.write_all(body).expect("range body");
+                }
                 served += 1;
             }
             Err(err) if waited(&err) => std::hint::spin_loop(),
