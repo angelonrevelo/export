@@ -6,7 +6,7 @@ Supported input:
 
 - IVF (`DKIF` / `VP90`) containing exactly one frame
 - profile 0, 8-bit, 4:2:0
-- 8×8, 16×16, 32×32, 64×64, 128×128, or 256×256 keyframe, shown, no separate render size
+- 8×8, 16×16, 32×32, 64×64, 128×128, 256×256, or 512×512 keyframe, shown, no separate render size
 - lossless quantizer, so only 4×4 Walsh-Hadamard transforms
 - DC luma and DC chroma
 - segmentation off, loop filter level 0, one tile
