@@ -93,6 +93,17 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 767 ns |
 
+A sixth generated file extends that SUM by one numeric cell, still with no
+cached number. A1 = 4, B1 = 5, C1 = 6, and D1 = 7. The reader adds them. The
+value is **22**. `xls → csv` prints `4,5,6,7,22`. Any other uncached
+expression is still refused.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 921 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
