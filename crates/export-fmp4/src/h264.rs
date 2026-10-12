@@ -19,6 +19,9 @@ pub fn h264_file() -> Vec<u8> {
 /// How many times the 16×16 access unit is repeated in [`h264_repeat_file`].
 pub const H264_REPEAT: usize = 47;
 
+/// How many times the 16×16 access unit is repeated in [`h264_x188_file`].
+pub const H264_X188: usize = 188;
+
 /// Fragmented file with [`H264_REPEAT`] copies of the same access unit.
 ///
 /// Each sample is the payload from [`h264_file`]. The bytes are not decoded.
@@ -26,12 +29,23 @@ pub fn h264_repeat_file() -> Vec<u8> {
     remux(&h264_repeat_movie()).expect("repeated h264 fragment is valid")
 }
 
+/// Fragmented file with [`H264_X188`] copies of the same access unit.
+///
+/// Each sample is the payload from [`h264_file`]. The bytes are not decoded.
+pub fn h264_x188_file() -> Vec<u8> {
+    remux(&movie_with_count(H264_X188)).expect("188 h264 samples are valid")
+}
+
 fn h264_movie() -> Movie {
     movie_with_samples(vec![one_sample()])
 }
 
 fn h264_repeat_movie() -> Movie {
-    let samples = (0..H264_REPEAT).map(|_| one_sample()).collect();
+    movie_with_count(H264_REPEAT)
+}
+
+fn movie_with_count(count: usize) -> Movie {
+    let samples = (0..count).map(|_| one_sample()).collect();
     movie_with_samples(samples)
 }
 

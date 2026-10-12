@@ -33,3 +33,7 @@ harness = false
 [[bench]]
 name = "h264x47"
 harness = false
+
+[[bench]]
+name = "h264x188"
+harness = false

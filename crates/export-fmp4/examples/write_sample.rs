@@ -6,7 +6,7 @@ fn main() -> ExitCode {
     let path = match env::args().nth(1) {
         Some(path) => path,
         None => {
-            eprintln!("usage: write_sample OUTPUT.mp4 [pcm|h264|h264x47]");
+            eprintln!("usage: write_sample OUTPUT.mp4 [pcm|h264|h264x47|h264x188]");
             return ExitCode::from(2);
         }
     };
@@ -15,8 +15,9 @@ fn main() -> ExitCode {
         "pcm" | "audio" => export_fmp4::sample_file(),
         "h264" => export_fmp4::h264_file(),
         "h264x47" => export_fmp4::h264_repeat_file(),
+        "h264x188" => export_fmp4::h264_x188_file(),
         _ => {
-            eprintln!("usage: write_sample OUTPUT.mp4 [pcm|h264|h264x47]");
+            eprintln!("usage: write_sample OUTPUT.mp4 [pcm|h264|h264x47|h264x188]");
             return ExitCode::from(2);
         }
     };
