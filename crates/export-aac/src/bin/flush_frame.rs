@@ -1,10 +1,10 @@
 //! Release p50/p99 for the flush frame after the four tone frames.
 //!
-//! The flush is not a new sine. Its right half is silence. Overlap-add
-//! against the fourth frame emits the sine that frame delays. Writes the
-//! four tone frames and the flush, concatenated, to stdout. Prints counters
-//! on stderr. Pass a path as the first argument to also store that file.
-//! Does not call FFmpeg.
+//! Encode is the 945-byte flush. Decode is that same frame after the overlap
+//! tail from the fourth frame already exists. The tail copy is outside the
+//! timer. Writes the four tone frames and the flush, concatenated, to stdout.
+//! Prints counters on stderr. Pass a path as the first argument to also store
+//! that file. Does not call FFmpeg.
 
 use std::io::{self, Write};
 use std::time::Instant;
@@ -51,11 +51,33 @@ fn main() {
     let encode_p50 = percentile(&mut encode_ns, 0.50);
     let encode_p99 = percentile(&mut encode_ns, 0.99);
 
+    assert_eq!(flush.len(), 945);
+    let mut tail = export_aac::overlap_tail_after_third(&first, &second, &third).expect("tail");
+    export_aac::decode_frame_with_tail(&fourth, &mut tail).expect("fourth");
+    let mut once = tail;
+    let primed = export_aac::decode_frame_with_tail(&flush, &mut once).expect("primed");
+    assert_eq!(primed, decoded);
+    let mut decode_ns = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let mut history = tail;
+        let started = Instant::now();
+        let out = export_aac::decode_frame_with_tail(&flush, &mut history).expect("decode");
+        decode_ns.push(started.elapsed().as_nanos());
+        assert_eq!(out, decoded);
+    }
+    let decode_p50 = percentile(&mut decode_ns, 0.50);
+    let decode_p99 = percentile(&mut decode_ns, 0.99);
+
     let mut err = io::stderr().lock();
     let _ = writeln!(err, "samples={SAMPLES}");
     let _ = writeln!(err, "output_bytes={}", flush.len());
+    // encode_* is this run only. The published encode row stays 5893053 ns
+    // p50 and 7642850 ns p99. decode_tail_ready_* is the 945-byte flush after
+    // the overlap tail exists, not the 60-byte frame (5055180 / 8760302 ns).
     let _ = writeln!(err, "encode_p50_ns={encode_p50}");
     let _ = writeln!(err, "encode_p99_ns={encode_p99}");
+    let _ = writeln!(err, "decode_tail_ready_p50_ns={decode_p50}");
+    let _ = writeln!(err, "decode_tail_ready_p99_ns={decode_p99}");
     let _ = writeln!(err, "max_abs_error_vs_delayed_sine={vs_sine}");
     let _ = writeln!(err, "max_abs_error_vs_silence={vs_silence}");
 

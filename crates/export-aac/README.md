@@ -123,6 +123,14 @@ Same profile, 200 calls. Not a throughput number for a song.
 | --- | --- | --- | --- |
 | encode | 5.893 ms (5893053 ns) | 7.643 ms (7642850 ns) | 945 |
 
+Decode is `decode_frame_with_tail` on that same 945-byte frame. The overlap
+tail from the fourth frame already exists. The tail copy is outside the
+timer. 200 calls, same profile.
+
+| | p50 | p99 |
+| --- | --- | --- |
+| decode, tail ready | 5.073 ms (5073023 ns) | 5.327 ms (5326863 ns) |
+
 ## Build
 
 ```

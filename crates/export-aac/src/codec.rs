@@ -845,7 +845,11 @@ mod tests {
         assert_eq!(second.len(), 68);
         assert_eq!(third.len(), 94);
         assert_eq!(fourth.len(), 60);
+        assert_eq!(flush.len(), 945);
         let out = decode_flush_frame(&first, &second, &third, &fourth, &flush).unwrap();
+        let mut primed = overlap_tail_after_third(&first, &second, &third).unwrap();
+        decode_frame_with_tail(&fourth, &mut primed).unwrap();
+        assert_eq!(decode_frame_with_tail(&flush, &mut primed).unwrap(), out);
         let mut vs_sine = 0.0f32;
         let mut vs_silence = 0.0f32;
         let mut peak = 0.0f32;
