@@ -1,4 +1,5 @@
-//! ASS/SSA dialogue cues. Override tags are stripped so the shared cue is plain text.
+//! ASS/SSA dialogue cues. One `{\b1}`...`{\b0}` pair on a dialogue line is kept,
+//! so that span stays bold in the text. Every other override is stripped.
 //! Style, actor, and margin fields are not preserved. That is the honest limit.
 
 use crate::parse::{Cue, Error};
@@ -130,22 +131,50 @@ fn stamp(ms: u64) -> String {
 
 fn strip_overrides(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' && chars.peek() == Some(&'\\') {
-            for next in chars.by_ref() {
-                if next == '}' {
-                    break;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut bold_at: Option<usize> = None;
+    let mut bold_kept = false;
+    while i < bytes.len() {
+        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+            if let Some(rel) = bytes[i + 2..].iter().position(|&b| b == b'}') {
+                let end = i + 2 + rel + 1;
+                let tag = &text[i..end];
+                if !bold_kept && bold_at.is_none() && tag == "{\\b1}" {
+                    bold_at = Some(out.len());
+                    out.push_str(tag);
+                } else if bold_at.is_some() && tag == "{\\b0}" {
+                    out.push_str(tag);
+                    bold_at = None;
+                    bold_kept = true;
                 }
+                i = end;
+                continue;
             }
-            continue;
+            break;
         }
-        if c == '\\' && matches!(chars.peek(), Some('N' | 'n' | 'h')) {
-            let kind = chars.next().unwrap();
-            out.push(if kind == 'h' { ' ' } else { '\n' });
-            continue;
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'N' | b'n' => {
+                    out.push('\n');
+                    i += 2;
+                    continue;
+                }
+                b'h' => {
+                    out.push(' ');
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
         }
-        out.push(c);
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    if let Some(at) = bold_at {
+        let end = at + "{\\b1}".len();
+        out.replace_range(at..end, "");
     }
     out
 }
@@ -172,5 +201,20 @@ mod tests {
     fn truncated_dialogue_errors() {
         let input = "[Events]\nDialogue: 0,0:00:01.00\n";
         assert_eq!(parse_ass(input), Err(Error::Truncated));
+    }
+
+    #[test]
+    fn keeps_one_bold_pair_and_leaves_a_plain_cue() {
+        let input = "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\an8}Hello {\\b1}there{\\b0} {\\i1}pal{\\i0} {\\b1}two{\\b0}\nDialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Plain cue\n";
+        let cues = parse_ass(input).unwrap();
+        assert_eq!(cues[0].text, "Hello {\\b1}there{\\b0} pal two");
+        assert_eq!(cues[1].text, "Plain cue");
+        let written = cues_to_ass(&cues);
+        assert!(written.contains("{\\b1}there{\\b0}"));
+        assert!(!written.contains("{\\i"));
+        assert!(!written.contains("{\\an"));
+        let again = parse_ass(&written).unwrap();
+        assert_eq!(again, cues);
+        assert_eq!(again[1].text, "Plain cue");
     }
 }
