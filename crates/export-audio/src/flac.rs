@@ -1643,8 +1643,7 @@ mod tests {
         round_trip(&pcm);
     }
 
-    fn stereo_block() -> Pcm {
-        let n = 4096usize;
+    fn stereo_pcm(n: usize) -> Pcm {
         let mut samples = Vec::with_capacity(n * 2);
         for i in 0..n {
             let ramp = ((i % 256) as i32) - 128;
@@ -1661,6 +1660,10 @@ mod tests {
             bits: 16,
             samples,
         }
+    }
+
+    fn stereo_block() -> Pcm {
+        stereo_pcm(4096)
     }
 
     fn mono_wide() -> Pcm {
@@ -1764,6 +1767,27 @@ mod tests {
         }
         assert_eq!(back_left, left);
         assert_eq!(back_right, right);
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn stereo_second_round_trips_both_channels() {
+        let pcm = stereo_pcm(44_100);
+        assert_eq!(pcm.samples.len(), 88_200);
+        let bytes = encode(&pcm).unwrap();
+        assert_eq!(bytes.len(), 87_272);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 2);
+        assert_eq!(back.bits, 16);
+        assert_eq!(back.sample_rate, 44_100);
+        let mut left = Vec::with_capacity(44_100);
+        let mut right = Vec::with_capacity(44_100);
+        for i in 0..44_100 {
+            assert_eq!(back.samples[i * 2], pcm.samples[i * 2]);
+            assert_eq!(back.samples[i * 2 + 1], pcm.samples[i * 2 + 1]);
+            left.push(pcm.samples[i * 2]);
+            right.push(pcm.samples[i * 2 + 1]);
+        }
         assert_ne!(left, right);
     }
 

@@ -98,8 +98,7 @@ fn fixture() -> Pcm {
     }
 }
 
-fn stereo_block() -> Pcm {
-    let n = 4096usize;
+fn stereo_pcm(n: usize) -> Pcm {
     let mut samples = Vec::with_capacity(n * 2);
     for i in 0..n {
         let ramp = ((i % 256) as i32) - 128;
@@ -116,6 +115,10 @@ fn stereo_block() -> Pcm {
         bits: 16,
         samples,
     }
+}
+
+fn stereo_block() -> Pcm {
+    stereo_pcm(4096)
 }
 
 fn mono_wide() -> Pcm {
@@ -276,4 +279,31 @@ fn main() {
         std::hint::black_box(decode(&wide_stereo_flac).expect("decode 24-bit stereo"));
     });
     report("wide_stereo_decode", "miss", wide_stereo_flac.len() as u64, &wide_stereo_decode);
+
+    let second = stereo_pcm(44_100);
+    let second_flac = encode(&second).expect("encode one second");
+    let second_back = decode(&second_flac).expect("decode one second");
+    assert_eq!(second_flac.len(), 87_272);
+    assert_eq!(second_back.bits, 16);
+    assert_eq!(second_back.channels, 2);
+    assert_eq!(second_back.sample_rate, 44_100);
+    assert_eq!(second_back.samples.len(), 88_200);
+    let mut channels_differ = false;
+    for i in 0..44_100 {
+        assert_eq!(second_back.samples[i * 2], second.samples[i * 2], "left");
+        assert_eq!(second_back.samples[i * 2 + 1], second.samples[i * 2 + 1], "right");
+        if second.samples[i * 2] != second.samples[i * 2 + 1] {
+            channels_differ = true;
+        }
+    }
+    assert!(channels_differ, "channels are copies");
+    let second_pcm_len = (second.samples.len() * 2) as u64;
+    let second_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&second).expect("encode one second"));
+    });
+    report("second_encode", "miss", second_pcm_len, &second_encode);
+    let second_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&second_flac).expect("decode one second"));
+    });
+    report("second_decode", "miss", second_flac.len() as u64, &second_decode);
 }

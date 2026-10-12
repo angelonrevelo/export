@@ -128,6 +128,19 @@ channels round-trip. The encoded file is 16,025 bytes. Encode p50 is
 of that file is p50 0.208 ms and p99 0.254 ms (76.95 MB/s on the 16,025
 FLAC bytes). Release, 31 iterations after 3 warmup passes.
 
+### One second of 16-bit stereo
+
+Separate from the 4,096-sample stereo row, the 24-bit stereo row, and the
+mono 1,048,576-sample row. 44,100 samples per channel, 16-bit, 44.1 kHz.
+The same two channel formulas as the 4,096-sample stereo block, so the
+channels are not copies. The same LPC candidate, order 11 at precision 12,
+and only when that subframe is strictly shorter. Both channels round-trip.
+The encoded file is 87,272 bytes. Encode p50 is 5.97 ms and p99 is 6.33 ms
+(29.56 MB/s on the 176,400 PCM bytes). Decode p50 is 1.58 ms and p99 is
+1.72 ms (55.24 MB/s on the 87,272 FLAC bytes). Release, 31 iterations after
+3 warmup passes. A linear scale of the 4,096-sample stereo encode is about
+5.5 ms. This encode is 5.97 ms, so the length stayed.
+
 ### Reader experiment
 
 Rice quotients were timed two ways, interleaved in one process, 31 rounds,
