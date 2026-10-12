@@ -51,3 +51,4 @@ check_one 8 testdata/keyframe.ivf testdata/ffmpeg.yuv
 check_one 16 testdata/keyframe-16.ivf testdata/ffmpeg-16.yuv
 check_one 32 testdata/keyframe-32.ivf testdata/ffmpeg-32.yuv
 check_one 64 testdata/keyframe-64.ivf testdata/ffmpeg-64.yuv
+check_one 128 testdata/keyframe-128.ivf testdata/ffmpeg-128.yuv

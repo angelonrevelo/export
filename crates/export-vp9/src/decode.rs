@@ -34,11 +34,11 @@ struct Pic {
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
-    above_nz: [[u8; 16]; 3],
-    left_nz: [[u8; 16]; 3],
-    skips: [u8; 64],
-    above_part: [u8; 8],
-    left_part: [u8; 8],
+    above_nz: [[u8; 32]; 3],
+    left_nz: [[u8; 32]; 3],
+    skips: [u8; 256],
+    above_part: [u8; 16],
+    left_part: [u8; 16],
 }
 
 /// Decode the VP9 payload of one supported keyframe.
@@ -85,7 +85,10 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     if br.f(1)? != 0 {
         return Err(Error::Unsupported);
     }
-    if !matches!((width, height), (8, 8) | (16, 16) | (32, 32) | (64, 64)) {
+    if !matches!(
+        (width, height),
+        (8, 8) | (16, 16) | (32, 32) | (64, 64) | (128, 128)
+    ) {
         return Err(Error::Unsupported);
     }
     if error_resilient == 0 {
@@ -160,13 +163,25 @@ fn decode_tile(
         y: vec![0; width * height],
         u: vec![0; chroma],
         v: vec![0; chroma],
-        above_nz: [[0; 16]; 3],
-        left_nz: [[0; 16]; 3],
-        skips: [0; 64],
-        above_part: [0; 8],
-        left_part: [0; 8],
+        above_nz: [[0; 32]; 3],
+        left_nz: [[0; 32]; 3],
+        skips: [0; 256],
+        above_part: [0; 16],
+        left_part: [0; 16],
     };
-    decode_partition(bools, &mut pic, 0, 0, BLOCK_64X64)?;
+    let mut sb_row = 0;
+    while sb_row < pic.mi {
+        pic.left_part.fill(0);
+        for plane in &mut pic.left_nz {
+            plane.fill(0);
+        }
+        let mut sb_col = 0;
+        while sb_col < pic.mi {
+            decode_partition(bools, &mut pic, sb_row, sb_col, BLOCK_64X64)?;
+            sb_col += 8;
+        }
+        sb_row += 8;
+    }
     Ok(Frame {
         width: pic.width,
         height: pic.height,
@@ -353,7 +368,7 @@ fn transform(
     }
     let x4 = x >> 2;
     let y4 = y >> 2;
-    if plane >= 3 || x4 >= 16 || y4 >= 16 {
+    if plane >= 3 || x4 >= 32 || y4 >= 32 {
         return Err(Error::Unsupported);
     }
     pic.above_nz[plane][x4] = nonzero;
