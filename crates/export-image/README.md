@@ -72,6 +72,16 @@ WebP rows are appended on the same 640×480 gradient. This is the release bench 
 
 The miss is a bad signature. It returns before a chunk is decoded.
 
+Encode rows are a later release run of the same 640×480 gradient. The decode rows above were not replaced.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| VP8L encode 640×480 (output 921,676 bytes) | 40 | 15,189.5 µs | 20,390.8 µs | 60.67 (p99 45.20) | file MB/s p50 60.68; 20 allocs; 65.10 allocs/MP |
+| VP8 encode 640×480, quantizer index 8 (output 16,288 bytes) | 40 | 4,926.1 µs | 5,178.9 µs | 187.08 (p99 177.95) | file MB/s p50 3.31; 30 allocs; 97.66 allocs/MP |
+| WebP encode miss, 8×8 lossy (`Unsupported`) | 80 | 30 ns | 60 ns | — | 0 allocs |
+
+An 8×8 frame is not a multiple of 16, so `encode_webp_lossy` returns before the DCT. The encoder is still DC prediction only, with the loop filter off and no animation.
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
