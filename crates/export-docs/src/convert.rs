@@ -56,7 +56,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "pdf", target: "png", ready: false, note: "MISS: rasterize is out of scope" },
     Pair { source: "rtf", target: "html", ready: false, note: "MISS: rtf reader is not implemented" },
     Pair { source: "epub", target: "html", ready: false, note: "MISS: epub reader is not implemented" },
-    Pair { source: "pptx", target: "html", ready: false, note: "MISS: pptx reader is not implemented" },
+    Pair { source: "pptx", target: "html", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: legacy .doc has no reader; LibreOffice was the only hop" },
     Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
@@ -85,6 +85,9 @@ pub fn convert_to<R: Read + Seek, W: Write>(
 ) -> Result<RunStats> {
     let source = key(source_ext);
     let target = key(target);
+    if source == "pptx" && target == "html" {
+        return crate::pptx::pptx_to_html(input, output);
+    }
     if !pair_ready(&source, &target) {
         let note = PAIRS
             .iter()

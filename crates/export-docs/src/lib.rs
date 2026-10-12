@@ -21,6 +21,7 @@ mod error;
 mod htmlpdf;
 mod markdown;
 mod pdf;
+mod pptx;
 mod stats;
 mod xml;
 mod zip;

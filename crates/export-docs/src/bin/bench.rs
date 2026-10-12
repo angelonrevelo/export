@@ -204,6 +204,82 @@ fn emit_miss(label: &str, note: &str) {
     );
 }
 
+fn report_pptx() {
+    let deck = pptx_text_deck();
+    let sample = measure(|| ready_bytes("pptx", "html", &deck));
+    emit_ready("pptx→html text", deck.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "pptx→html text p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(deck.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            deck.len(),
+            sample.output_bytes,
+        );
+    }
+    let pic = pptx_pic_deck();
+    match convert("pptx", "html", &pic) {
+        Ok(_) => {
+            eprintln!("picture deck produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", pic.len()))
+            {
+                eprintln!("pptx miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("pptx→html pic", pic.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn slide_xml(title: &str, body: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+      <p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>{title}</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="3" name="Body"/><p:cNvSpPr/><p:nvPr><p:ph type="body"/></p:nvPr></p:nvSpPr>
+      <p:spPr/>
+      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr b="1"/><a:t>{body}</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#
+    )
+}
+
+fn pptx_text_deck() -> Vec<u8> {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for n in 1..=40 {
+        let xml = slide_xml(&format!("Slide {n} title"), "alpha beta gamma delta text shape");
+        files.push((format!("ppt/slides/slide{n}.xml"), xml.into_bytes()));
+    }
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .collect();
+    pack_stored(&refs)
+}
+
+fn pptx_pic_deck() -> Vec<u8> {
+    let xml = br#"<?xml version="1.0"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:pic/></p:spTree></p:cSld>
+</p:sld>"#;
+    pack_stored(&[("ppt/slides/slide1.xml", &xml[..])])
+}
+
 fn shrink_pdf_fixture() -> Vec<u8> {
     let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
     for i in 0..80 {
@@ -250,6 +326,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_shrink(&pdf);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--pptx") {
+        println!("export-docs pptx byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_pptx();
         return;
     }
     let xml = docx_xml(2500);
