@@ -174,6 +174,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | `decode_webp`, two-frame 256×256 file, first frame (file 458 bytes) | 40 | 723.0 µs | 796.5 µs | 271.95 (p99 246.84) | file MB/s p50 0.63; 5 allocs; 76.29 allocs/MP |
 
+`decode_webp` of the existing two-frame 640×480 file, 34,434 bytes, a later release run. It returns that file's first frame. Those pixels match the animation decoder's first frame. p50 is 4,010.8 µs, under the 5,120 µs cap, so this return stays. A non-animation still decode was unchanged. `decode_webp` of the 64×64 files and of the 256×256 file was unchanged. The four-frame 640×480 file and a larger animation still return `Unsupported`. The 723.0 µs row, the 49.7 µs row, the 64.6 µs row, and the 66.4 µs row were not replaced.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| `decode_webp`, two-frame 640×480 file, first frame (file 34,434 bytes) | 40 | 4,010.8 µs | 4,355.7 µs | 229.78 (p99 211.59) | file MB/s p50 8.59; 5 allocs; 16.28 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
