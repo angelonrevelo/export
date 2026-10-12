@@ -22,7 +22,7 @@ committed and before a codec runs.
 | `Remux { faststart, audio_only, video_only }` | Stream-copy a non-fragmented mp4, mov, or m4a. Sample bytes are copied, not decoded. `faststart` places `moov` before `mdat`. |
 | `Elementary { audio }` | Concatenate the first audio or video sample payloads. |
 | `Wav { sample_rate, channels }` | WAV PCM in, or `sowt` / `twos` PCM inside MP4. Optional integer linear resample and mono downmix. |
-| `concat_mp4` | Stream-copy two non-fragmented MP4s whose sample entries match. Codec mismatch and `moof` are errors. |
+| `concat_mp4` | Stream-copy two non-fragmented MP4s whose sample entries match. Two copies of the one-frame audiogram become two `raw ` samples. Codec mismatch and `moof` are errors. |
 | `shrink_wav` | One downmix and at most one resample to a byte budget. Returns the file and its real byte count. |
 | `audiogram` | One gray waveform frame (`raw `, 24-bit RGB) plus the PCM audio track. The video sample lasts as long as the WAV. |
 
@@ -41,7 +41,8 @@ result as an owned buffer the caller writes.
 ## Bench
 
 Release only. `cargo bench --bench throughput`, `cargo bench --bench concat_shrink`,
-and `cargo bench --bench audiogram` print MB/s, p50, p99, and allocations
+`cargo bench --bench audiogram`, and `cargo bench --bench concat_copies`
+print MB/s, p50, p99, and allocations
 per MB for hits and misses. A debug build exits 2 and does not publish a
 timing verdict.
 

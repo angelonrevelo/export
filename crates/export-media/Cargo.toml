@@ -33,5 +33,12 @@ harness = false
 name = "audiogram"
 harness = false
 
+[[bench]]
+name = "concat_copies"
+harness = false
+
 [[example]]
 name = "oracle_fixture"
+
+[[example]]
+name = "concat_copies"

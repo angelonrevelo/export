@@ -54,3 +54,15 @@ The video sample entry is `raw ` (VisualSampleEntry, depth 24). The frame is 640
 ffmpeg reads this entry. `ffprobe` reports `rawvideo` (`raw `), `rgb24`, `nb_frames=1`, and `pcm_s16le` (`sowt`). A decode to rgb24 was 230,400 bytes, and every pixel stayed gray (only 32 and 220).
 
 Chrome (headless) fired `loadeddata` with duration 1 and a video size of 0×0. It did not decode the picture. Safari and QuickTime were not run on this host. The file has no `avc1`, `hvc1`, or `av01` sample, which is what those players require for MP4 video. VLC was not installed here.
+
+## Two copies
+
+`cargo bench --bench concat_copies`. Same release profile, 31 iterations, 3 warmup. The audiogram row above was not remeasured. The coded size is still 640×120.
+
+`concat_mp4` stream-copies two copies of the one-frame audiogram this crate already writes. The picture bytes are the same `raw ` sample twice. Nothing is re-encoded.
+
+| path | samples | bytes | p50 | p99 |
+|---|---:|---:|---:|---:|
+| concat_copies | 2 | 653,824 | 0.642 ms | 0.808 ms |
+
+p50 is under 2 ms. `scripts/concat_copies.sh` is a host ffprobe only. It reported `codec_name=rawvideo`, 640×120, `nb_frames=2`. The library does not call ffmpeg.
