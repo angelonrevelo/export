@@ -1,4 +1,4 @@
-use export_subtitle::{cues_to_ass, cues_to_srt, parse_ass, parse_srt};
+use export_subtitle::{cues_to_ass, cues_to_srt, cues_to_vtt, parse_ass, parse_srt, parse_vtt};
 use std::time::Instant;
 
 fn main() {
@@ -25,6 +25,7 @@ fn main() {
     measure_one_italic();
     measure_one_underline();
     measure_one_strikeout();
+    measure_vtt();
 }
 
 /// Release latency for one bold dialogue line and one plain cue.
@@ -213,6 +214,46 @@ Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Plain cue\n\
         p50,
         p99
     );
+}
+
+/// The WebVTT document already in this crate. One cue, round-tripped.
+fn measure_vtt() {
+    let input = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHi\n";
+    let cues = parse_vtt(input).expect("vtt");
+    let written = cues_to_vtt(&cues);
+    let again = parse_vtt(&written).expect("round trip");
+    assert_eq!(again, cues);
+    let n = cues.len();
+    if cfg!(debug_assertions) {
+        println!("vtt: NOT JUDGED (debug build)");
+        return;
+    }
+    const WARMUP: usize = 50;
+    const SAMPLES: usize = 500;
+    let mut sink = 0usize;
+    for _ in 0..WARMUP {
+        sink = sink.wrapping_add(pass_vtt(input));
+    }
+    let mut samples = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let start = Instant::now();
+        sink = sink.wrapping_add(pass_vtt(input));
+        samples.push(start.elapsed().as_nanos() as f64);
+    }
+    std::hint::black_box(sink);
+    let p50 = percentile(&mut samples, 50.0) / n as f64;
+    let p99 = percentile(&mut samples, 99.0) / n as f64;
+    println!(
+        "vtt cues {n} bytes in {} bytes out {} p50 {p50:.0} ns p99 {p99:.0} ns",
+        input.len(),
+        written.len(),
+    );
+}
+
+fn pass_vtt(input: &str) -> usize {
+    let cues = parse_vtt(input).expect("vtt");
+    let written = cues_to_vtt(&cues);
+    written.len()
 }
 
 fn pass(input: &str) -> usize {
