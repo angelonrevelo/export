@@ -82,6 +82,10 @@ name = "seqsplit720"
 path = "src/bin/seqsplit720.rs"
 
 [[bin]]
+name = "seqeight720"
+path = "src/bin/seqeight720.rs"
+
+[[bin]]
 name = "seqframe"
 path = "src/bin/seqframe.rs"
 

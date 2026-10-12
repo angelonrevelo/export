@@ -2,7 +2,7 @@
 
 One baseline H.264 I-frame, and one P-frame after it. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
 
-This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. A zero-motion P-frame can follow it, one shifted picture can use quarter-pel motion (16, 0), and eight pictures can chain those choices from the previous reconstruction. Sixteen 160×160 pictures use that same chain. One I-frame can also be 320×240. A zero-motion P-frame can follow that reconstruction, a shifted picture can use quarter-pel motion (16, 0), and one P-frame can use (16, 0) on the left half of the macroblocks and (−16, 0) on the right. Four pictures can chain that split. A 640×480 pair can use that same split, and four pictures can chain it. A 1280×720 pair can use that same split, and four pictures can chain it. It does not link or spawn ffmpeg.
+This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. A zero-motion P-frame can follow it, one shifted picture can use quarter-pel motion (16, 0), and eight pictures can chain those choices from the previous reconstruction. Sixteen 160×160 pictures use that same chain. One I-frame can also be 320×240. A zero-motion P-frame can follow that reconstruction, a shifted picture can use quarter-pel motion (16, 0), and one P-frame can use (16, 0) on the left half of the macroblocks and (−16, 0) on the right. Four pictures can chain that split. A 640×480 pair can use that same split, and four pictures can chain it. A 1280×720 pair can use that same split, and four pictures can chain it. Eight pictures can continue that chain. It does not link or spawn ffmpeg.
 
 Chroma residual is the DC coefficient of each 4×4 block. Luma residual is a full 4×4 transform. Deblocking is off so a decoder's pixels are the inverse transform.
 
@@ -175,3 +175,12 @@ Same profile and QP. One I-frame and three P-frames. Each P-frame is predicted f
 - release p50: 26275 µs, p99: 31804 µs on the recorded run. Three later runs on that binary were p50 26379–26760 µs and p99 28367–37613 µs
 
 ffmpeg decoded all four pictures and matched the encoder reconstruction. Mean absolute error versus the sources was 3.2416. The I-frame is 3.2467. The three P-frames are 3.2413, 3.2395, and 3.2391. `scripts/check-seqsplit720.sh` may run ffmpeg only to decode that file.
+
+## Eight 1280×720 pictures
+
+Same profile and QP. One I-frame and seven P-frames. Each P-frame uses the same left/right split, predicted from the previous reconstruction. The I-frame bytes are the picture inside the 245,120-byte four-picture file. The last P-frame of that four-picture file is not a reference, so this file does not start with those 245,120 bytes. 200 calls after 20 warmup.
+
+- output: 254390 bytes
+- release p50: 53888 µs, p99: 67214 µs on the recorded run. Three later runs on that binary were p50 52400–53036 µs and p99 57705–71355 µs
+
+ffmpeg decoded all eight pictures and matched the encoder reconstruction. Mean absolute error versus the sources was 3.2406. The I-frame is 3.2467. The seven P-frames are 3.2413, 3.2395, 3.2391, 3.2393, 3.2398, 3.2396, and 3.2397. `scripts/check-seqeight720.sh` may run ffmpeg only to decode that file.

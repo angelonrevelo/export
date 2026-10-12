@@ -1,12 +1,12 @@
 use export_h264::{
     encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence, encode_sequence_split,
-    fixture_1280x720, fixture_1280x720_split, fixture_1280x720_split_four, fixture_160x160,
-    fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
-    fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
-    fixture_320x240_split, fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight,
-    fixture_32x32_predicted, fixture_32x32_shifted, fixture_640x480, fixture_640x480_split,
-    fixture_640x480_split_four, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
-    PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
+    fixture_1280x720, fixture_1280x720_split, fixture_1280x720_split_eight,
+    fixture_1280x720_split_four, fixture_160x160, fixture_160x160_eight, fixture_160x160_predicted,
+    fixture_160x160_shifted, fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted,
+    fixture_320x240_shifted, fixture_320x240_split, fixture_320x240_split_four, fixture_32x32,
+    fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted, fixture_640x480,
+    fixture_640x480_split, fixture_640x480_split_four, mean_absolute_error, EncodeOptions, Error,
+    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -810,6 +810,36 @@ fn hd_split_sequence_keeps_the_pair() {
     let i_mae = mean_absolute_error(&frame, &sequence.reconstructed[0]);
     let all = (i_mae + sum) / 4.0;
     assert!(all < 3.5, "hd sequence mae {all} p {mae}");
+}
+
+#[test]
+fn hd_eight_keeps_the_four_picture_row() {
+    let opts = EncodeOptions::default();
+    let (four_intra, four_p) = fixture_1280x720_split_four();
+    let four =
+        encode_sequence_split(&four_intra, &four_p, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(four.annex_b.len(), 245120);
+    let (intra, predicted) = fixture_1280x720_split_eight();
+    assert_eq!(intra, four_intra);
+    assert_eq!(predicted.len(), 7);
+    assert_eq!(&predicted[..3], four_p.as_slice());
+    let sequence =
+        encode_sequence_split(&intra, &predicted, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(sequence.reconstructed.len(), 8);
+    assert_eq!(sequence.annex_b.len(), 254390);
+    assert_ne!(&sequence.annex_b[..245120], &four.annex_b[..]);
+    let iframe = encode(&intra, &opts).unwrap();
+    assert_eq!(
+        &sequence.annex_b[..iframe.annex_b.len()],
+        &iframe.annex_b[..]
+    );
+    let mut sum = 0.0;
+    for (src, rec) in predicted.iter().zip(sequence.reconstructed.iter().skip(1)) {
+        sum += mean_absolute_error(src, rec);
+    }
+    let i_mae = mean_absolute_error(&intra, &sequence.reconstructed[0]);
+    let all = (i_mae + sum) / 8.0;
+    assert!(all <= 3.30, "hd eight mae {all}");
 }
 
 #[test]

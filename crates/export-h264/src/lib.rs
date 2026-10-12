@@ -589,10 +589,19 @@ pub fn fixture_1280x720_split_four() -> (Yuv420, Vec<Yuv420>) {
     split_four(fixture_1280x720())
 }
 
+/// Eight 1280×720 pictures. The four-picture chain continued for seven P-frames.
+pub fn fixture_1280x720_split_eight() -> (Yuv420, Vec<Yuv420>) {
+    split_chain(fixture_1280x720(), 7)
+}
+
 fn split_four(intra: Yuv420) -> (Yuv420, Vec<Yuv420>) {
+    split_chain(intra, 3)
+}
+
+fn split_chain(intra: Yuv420, pframes: usize) -> (Yuv420, Vec<Yuv420>) {
     let mut picture = intra.clone();
-    let mut predicted = Vec::with_capacity(3);
-    for _ in 0..3 {
+    let mut predicted = Vec::with_capacity(pframes);
+    for _ in 0..pframes {
         picture = shift_halves(&picture);
         predicted.push(picture.clone());
     }
