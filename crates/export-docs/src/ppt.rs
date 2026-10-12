@@ -1007,10 +1007,9 @@ mod tests {
     fn one_text_and_picture_become_pdf() {
         let text = picture_slide_text();
         let file = ppt_text_picture_document(&text).unwrap();
-        assert_ne!(file.len(), 5632);
-        assert_ne!(file.len(), 7680);
-        assert_ne!(file.len() as u64, ONE_SHAPE_PDF_MISS);
+        assert_eq!(file.len(), 14336);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        assert_eq!(pdf.len(), 1991);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&text), "{got}");
         let (width, height, rgb) = picture_rgb();
