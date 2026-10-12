@@ -72,6 +72,22 @@ impl Fetcher {
         Ok(bodies)
     }
 
+    /// Fetch one coalesced span with a single cleartext `Range` GET.
+    ///
+    /// Adjacent `#EXT-X-BYTERANGE` values of the same URI whose gap is at most
+    /// 4096 bytes are already one span. This method requests that span once
+    /// with [`Fetcher::get_range`]. The merged span covers the hole, so the
+    /// response can be larger than the sum of the named ranges. A span with
+    /// no byte range returns [`Error::BadTag`]. `https` URIs are unsupported.
+    /// This method does not run yt-dlp or any other program.
+    /// [`Fetcher::get_segment`] and [`Fetcher::get_segments`] still GET the
+    /// whole URI and ignore `#EXT-X-BYTERANGE`.
+    pub fn get_span(&self, playlist: &MediaPlaylist, index: usize) -> Result<Vec<u8>, Error> {
+        let span = playlist.spans.get(index).ok_or(Error::BadTag)?;
+        let range = span.byte_range.ok_or(Error::BadTag)?;
+        self.get_range(&span.uri, range)
+    }
+
     fn fetch(&self, url: &str, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
         let timeout = self.timeout;
         let max_body = self.max_body_bytes;
@@ -711,5 +727,57 @@ mod tests {
         let empty = parse_media_playlist("#EXTM3U\n#EXT-X-ENDLIST\n").unwrap();
         assert!(empty.segments.is_empty());
         assert_eq!(Fetcher::default().get_segments(&empty), Err(Error::BadTag));
+    }
+
+    #[test]
+    fn coalesced_span_is_one_range_get() {
+        assert_eq!(
+            parse_media_playlist(
+                "#EXTM3U\n#EXTINF:1,\n#EXT-X-BYTERANGE:32768@0\nhttps://cdn.example/a.ts\n"
+            ),
+            Err(Error::Unsupported)
+        );
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n\
+             #EXTINF:1,\n\
+             #EXT-X-BYTERANGE:32768@0\n\
+             a.ts\n\
+             #EXTINF:1,\n\
+             #EXT-X-BYTERANGE:32768@36864\n\
+             a.ts\n",
+        )
+        .unwrap();
+        assert_eq!(playlist.segments.len(), 2);
+        assert_eq!(playlist.spans.len(), 1);
+        assert_eq!(playlist.spans[0].segments, vec![0, 1]);
+        assert_eq!(
+            playlist.spans[0].byte_range,
+            Some(ByteRange {
+                offset: 0,
+                length: 69_632,
+            })
+        );
+        assert!(playlist.spans[0].byte_range.unwrap().length > 65_536);
+        assert_eq!(
+            Fetcher::default().get_span(&playlist, 0),
+            Err(Error::BadTag)
+        );
+        assert_eq!(
+            Fetcher::default().get_span(&playlist, 1),
+            Err(Error::BadTag)
+        );
+        assert_eq!(
+            Fetcher::default().get_segment(&playlist, 0),
+            Err(Error::BadTag)
+        );
+
+        let whole = parse_media_playlist("#EXTM3U\n#EXTINF:1,\na.ts\n").unwrap();
+        assert!(whole.spans[0].byte_range.is_none());
+        assert_eq!(Fetcher::default().get_span(&whole, 0), Err(Error::BadTag));
+
+        let partial = b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 0-3/4\r\n\r\nbody";
+        let message = read_http_message(&mut Cursor::new(&partial[..]), 1024).unwrap();
+        assert_eq!(message.status, 206);
+        assert_eq!(message.body, b"body");
     }
 }

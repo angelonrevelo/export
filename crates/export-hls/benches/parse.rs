@@ -1,9 +1,9 @@
 //! Release bench.
 //!
 //! Parse timings and the bulk local-stack GETs run on one thread. The
-//! one-segment and two-segment fetches call the library client and use one
-//! local accept thread beside the client. Loopback GETs run only here, on
-//! 127.0.0.1. They are not CDN downloads.
+//! one-segment, two-segment, and coalesced-range fetches call the library
+//! client and use one local accept thread beside the client. Loopback GETs
+//! run only here, on 127.0.0.1. They are not CDN downloads.
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use export_hls::{
     check_hop, parse_media_playlist, read_http_message, resolve_redirect, write_http_get,
-    ConnectPolicy, Error, Fetcher, Hop,
+    ByteRange, ConnectPolicy, Error, Fetcher, Hop,
 };
 
 fn main() {
@@ -87,6 +87,14 @@ fn main() {
         Ok(report) => println!("{report}"),
         Err(err) => {
             eprintln!("local stack two-segment GET failed: {err}");
+            std::process::exit(1);
+        }
+    }
+
+    match local_stack_coalesced_range_row() {
+        Ok(report) => println!("{report}"),
+        Err(err) => {
+            eprintln!("local stack coalesced range GET failed: {err}");
             std::process::exit(1);
         }
     }
@@ -468,6 +476,141 @@ fn local_stack_two_segment_row() -> Result<String, Box<dyn std::error::Error>> {
     Ok(format!(
         "local stack two-segment GET bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
+}
+
+/// One 65,536-byte segment is named as two adjacent byte ranges of the same
+/// URI. The gap is 4096 bytes, so the client coalesces them and
+/// [`Fetcher::get_span`] issues one cleartext `Range` GET. The response is
+/// the merged span, which covers the hole.
+///
+/// Loopback is allowed only here. `check_hop` still runs inside the client
+/// before connect. The body is raw text, not a transcode.
+fn local_stack_coalesced_range_row() -> Result<String, Box<dyn std::error::Error>> {
+    const NAMED_BYTES: usize = 64 * 1024;
+    const GAP_BYTES: usize = 4096;
+    const FIRST_BYTES: usize = NAMED_BYTES / 2;
+    const SECOND_BYTES: usize = NAMED_BYTES - FIRST_BYTES;
+    const MERGED_BYTES: usize = FIRST_BYTES + GAP_BYTES + SECOND_BYTES;
+    let second_offset = FIRST_BYTES + GAP_BYTES;
+    let mut body = Vec::with_capacity(MERGED_BYTES);
+    body.extend(std::iter::repeat(b'a').take(FIRST_BYTES));
+    body.extend(std::iter::repeat(b'h').take(GAP_BYTES));
+    body.extend(std::iter::repeat(b'b').take(SECOND_BYTES));
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let segment_url = format!("http://127.0.0.1:{port}/seg.ts");
+    if check_hop(&segment_url, ConnectPolicy::default()) != Err(Error::Blocked) {
+        return Err("loopback segment was accepted without the bench opt-in".into());
+    }
+    let playlist_text = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXTINF:5.0,\n#EXT-X-BYTERANGE:{FIRST_BYTES}@0\n{segment_url}\n#EXTINF:5.0,\n#EXT-X-BYTERANGE:{SECOND_BYTES}@{second_offset}\n{segment_url}\n#EXT-X-ENDLIST\n"
+    );
+    let playlist = parse_media_playlist(&playlist_text)?;
+    if playlist.segments.len() != 2 || playlist.spans.len() != 1 {
+        return Err("playlist did not coalesce two adjacent ranges".into());
+    }
+    if playlist.segments[0].uri != segment_url || playlist.segments[1].uri != segment_url {
+        return Err("both ranges must name the same cleartext segment".into());
+    }
+    if playlist.segments[0].byte_range
+        != Some(ByteRange {
+            offset: 0,
+            length: FIRST_BYTES as u64,
+        })
+        || playlist.segments[1].byte_range
+            != Some(ByteRange {
+                offset: second_offset as u64,
+                length: SECOND_BYTES as u64,
+            })
+    {
+        return Err("segment rows were rewritten before the fetch".into());
+    }
+    let merged = playlist.spans[0]
+        .byte_range
+        .ok_or("coalesced span has no range")?;
+    if merged
+        != (ByteRange {
+            offset: 0,
+            length: MERGED_BYTES as u64,
+        })
+        || playlist.spans[0].segments != [0, 1]
+        || MERGED_BYTES <= NAMED_BYTES
+    {
+        return Err("merged span did not cover the hole".into());
+    }
+    let fetcher = Fetcher {
+        policy: ConnectPolicy::new(true),
+        timeout: Duration::from_secs(2),
+        max_redirects: 5,
+        max_body_bytes: 8 * 1024 * 1024,
+    };
+    let warmup = 5;
+    let iters = 100;
+    let samples = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            serve_coalesced_range(listener, &body, warmup + iters);
+        });
+        let mut samples = Vec::with_capacity(iters);
+        for index in 0..(warmup + iters) {
+            let started = Instant::now();
+            let got = fetcher
+                .get_span(&playlist, 0)
+                .expect("coalesced cleartext range");
+            let elapsed = started.elapsed().as_nanos() as f64;
+            assert_eq!(got.len(), MERGED_BYTES);
+            assert_eq!(got, body);
+            if index >= warmup {
+                samples.push(elapsed);
+            }
+            std::hint::black_box(got.len());
+        }
+        samples
+    });
+    let mut sorted = samples;
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let p50 = percentile(&sorted, 0.50);
+    let p99 = percentile(&sorted, 0.99);
+    Ok(format!(
+        "local stack coalesced range GET bytes={MERGED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+    ))
+}
+
+fn serve_coalesced_range(listener: TcpListener, body: &[u8], accepts: usize) {
+    listener.set_nonblocking(true).expect("nonblocking accept");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut served = 0;
+    let expected = format!("Range: bytes=0-{}\r\n", body.len() - 1);
+    while served < accepts && Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut sock, _)) => {
+                sock.set_nonblocking(false).expect("blocking socket");
+                sock.set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read timeout");
+                sock.set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("write timeout");
+                let request = read_http_request(&mut sock).expect("range request");
+                assert!(
+                    request.starts_with("GET /seg.ts "),
+                    "coalesced fetch used an unexpected path"
+                );
+                assert!(
+                    request.contains(&expected),
+                    "coalesced fetch was not one Range GET"
+                );
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 0-{}/{}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n",
+                    body.len(),
+                    body.len() - 1,
+                    body.len()
+                );
+                sock.write_all(header.as_bytes()).expect("range header");
+                sock.write_all(body).expect("range body");
+                served += 1;
+            }
+            Err(err) if waited(&err) => std::hint::spin_loop(),
+            Err(err) => panic!("range accept failed: {err}"),
+        }
+    }
 }
 
 fn serve_two_cleartext_segments(
