@@ -290,6 +290,10 @@ pub fn pdf_flate_fixture(input: &[u8]) -> Result<Vec<u8>> {
     pdf::flate_fixture(input)
 }
 
+pub fn pdf_flate_plain_matches(left: &[u8], right: &[u8]) -> Result<bool> {
+    pdf::flate_plain_matches(left, right)
+}
+
 fn kind_code(ext: &str) -> u16 {
     match key(ext).as_str() {
         "docx" => 1,

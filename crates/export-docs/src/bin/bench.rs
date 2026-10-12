@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_docs::{
-    convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_image_matches, pdf_merge,
+    convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_flate_plain_matches,
+    pdf_image_matches, pdf_merge,
     pdf_rotate, pdf_shrink, pdf_split, pdf_text, pdf_watermark, ppt_five_text_document,
     ppt_eight_text_document, ppt_nine_text_document, ppt_seven_text_document,
     ppt_six_text_document, ppt_ten_text_document, ppt_eleven_text_document,
@@ -171,13 +172,17 @@ fn emit_untimed(label: &str, input_bytes: u64, output_bytes: Option<u64>, status
 }
 
 fn report_shrink(pdf: &[u8]) {
+    if pdf.len() != 37_200 {
+        eprintln!("uncompressed shrink fixture is {} bytes", pdf.len());
+        std::process::exit(1);
+    }
     match pdf_shrink(pdf) {
         Ok(_) => {
             eprintln!("uncompressed pdf shrink produced a file");
             std::process::exit(1);
         }
         Err(e) => {
-            if !e.message.starts_with("MISS:") || !e.message.contains(&format!("input_b={}", pdf.len())) {
+            if !e.message.starts_with("MISS:") || !e.message.contains("input_b=37200") {
                 eprintln!("shrink miss hid the input size: {e}");
                 std::process::exit(1);
             }
@@ -188,22 +193,48 @@ fn report_shrink(pdf: &[u8]) {
         eprintln!("flate fixture failed: {e}");
         std::process::exit(1);
     });
-    match pdf_shrink(&flate) {
-        Ok(out) => {
-            if out.len() >= flate.len() {
-                eprintln!("shrink returned a file that is not smaller");
-                std::process::exit(1);
-            }
-            emit_untimed(
-                "pdf→shrink flate",
-                flate.len() as u64,
-                Some(out.len() as u64),
-                "recompressed FlateDecode round-trip, file smaller",
-            );
-        }
+    if flate.len() != 37_246 {
+        eprintln!("flate shrink fixture is {} bytes", flate.len());
+        std::process::exit(1);
+    }
+    let preview = match pdf_shrink(&flate) {
+        Ok(out) => out,
         Err(e) => {
             emit_untimed("pdf→shrink flate", flate.len() as u64, None, &e.message);
+            return;
         }
+    };
+    let plains_match = pdf_flate_plain_matches(&flate, &preview).unwrap_or(false);
+    if preview.len() >= flate.len() || !plains_match {
+        emit_untimed(
+            "pdf→shrink flate",
+            flate.len() as u64,
+            Some(preview.len() as u64),
+            "recompressed FlateDecode did not stay smaller with matching streams",
+        );
+        return;
+    }
+    let sample = measure(|| {
+        let out = pdf_shrink(&flate).unwrap_or_else(|e| {
+            eprintln!("pdf shrink flate failed: {e}");
+            std::process::exit(1);
+        });
+        let n = out.len() as u64;
+        black_box(out);
+        n
+    });
+    emit_ready("pdf→shrink flate", flate.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "pdf→shrink flate p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(flate.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            flate.len(),
+            sample.output_bytes,
+        );
     }
 }
 

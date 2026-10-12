@@ -578,6 +578,11 @@ fn is_flate(dict: &[(String, Obj)]) -> bool {
     }
 }
 
+/// True when every `/FlateDecode` stream in `left` inflates to the same bytes as `right`.
+pub fn flate_plain_matches(left: &[u8], right: &[u8]) -> Result<bool> {
+    Ok(flate_plains(left)? == flate_plains(right)?)
+}
+
 fn flate_plains(data: &[u8]) -> Result<Vec<Vec<u8>>> {
     let mut src = Src::open(data)?;
     let mut out = Vec::new();
