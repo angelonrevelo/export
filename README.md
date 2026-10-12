@@ -110,8 +110,14 @@ from the page does not call the Rust crates.
 
 `scripts/run.sh` is the runnable app. It loads `.env` and starts uvicorn on
 `app.main:app`, bound to `127.0.0.1:8500` unless `HOST` and `PORT` say
-otherwise. A checkout of `main` is what that local run serves. This repo has
-no hosted deploy target, certificate, or public URL.
+otherwise. A checkout of `main` is what that local run serves.
+
+## Deploying
+
+For a server, see [scripts/export.service](scripts/export.service) (systemd),
+[scripts/nginx-export.conf](scripts/nginx-export.conf) and
+[scripts/Caddyfile](scripts/Caddyfile) (HTTPS reverse proxy). Read
+[SECURITY.md](SECURITY.md) before exposing it beyond localhost.
 
 ## Rust crates
 

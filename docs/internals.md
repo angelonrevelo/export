@@ -153,9 +153,10 @@ cp .env.example .env             # set EXPORT_PASSWORD + EXPORT_PIPER_VOICE
 bash scripts/run.sh
 ```
 
-`bash scripts/run.sh` is the local server. This repo has no hosted deploy
-target, certificate, or public URL. A checkout of `main` is what that local
-run serves.
+`bash scripts/run.sh` is the local server. For a real deployment, see
+[scripts/export.service](scripts/export.service) (systemd unit) and
+[scripts/nginx-export.conf](scripts/nginx-export.conf) (reverse proxy for
+`export.bygelo.com`).
 
 ## Architecture
 
@@ -533,12 +534,14 @@ model.
 
 ## Security & deployment scope
 
-`export` is built for **personal use on localhost**. `scripts/run.sh` binds
-`HOST` / `PORT` (default `127.0.0.1:8500`). This repository has no hosted
-deploy target, certificate, or public URL. Phase 2 app hardening is in:
-download uses a short-lived `token` (not `?pw=`), mutating POSTs are
-rate-limited, URL extract refuses SSRF, Pillow bombs are capped at
-64_000_000 pixels.
+`export` is built for **personal use** (localhost or your private network).
+`scripts/run.sh` binds `HOST` / `PORT` (default `127.0.0.1:8500`).
+Phase 2 app hardening is in: download uses a short-lived `token` (not
+`?pw=`), mutating POSTs are rate-limited, URL extract refuses SSRF, Pillow
+bombs are capped at 64_000_000 pixels. HTTPS is a reverse-proxy job —
+[scripts/nginx-export.conf](scripts/nginx-export.conf) and
+[scripts/Caddyfile](scripts/Caddyfile). Certbot / live DNS / tmpfs mount are
+deploy-time, not claimed here.
 
 For a trusted-group host set `EXPORT_MAX_UPLOAD_MB=500`,
 `EXPORT_MAX_COMPRESS_MB=2000`, `EXPORT_DOWNLOAD_AUTODELETE=1`,

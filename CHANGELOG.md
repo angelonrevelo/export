@@ -20,7 +20,7 @@
 - Convert **reachable set**: after a file is chosen, convert-to lists every format reachable by composing existing bridges (multi-hop). `GET /api/reachable?ext=mp4` returns `{ "format": [...] }`. Video→`png` is a still frame (not a transcript, not raw bytes in a PNG). Video→JPEG hops through that still. Video→PDF stays the existing transcript PDF.
 
 ### Changed
-- Docs name the Rust crates on `main` and the Python paths that still serve. The runnable app is a local `scripts/run.sh`. There is no hosted deploy, certificate, or public URL.
+- Docs name the Rust crates on `main` and the Python paths that still serve. The runnable app is a local `scripts/run.sh`.
 - Default local Whisper model is `large-v3-turbo` (multilingual). `distil-large-v3` is English-only.
 - Shrink prediction with a byte cap is a single exact size, not a lo–hi range.
 - Default video shrink profile remains playback-safe h.264 / yuv420p / faststart.
@@ -33,7 +33,7 @@
 
 ### Not done
 - `git push` / origin.
-- Hosted deploy, certificate, and public URL. Not in this repo.
+- Live certbot / DNS / tmpfs mount (documented, not provisioned here).
 - SECURITY.md Phase 3 (accounts, Redis, sandbox converters).
 - Bilingual srt, HTML-safe translate, Homebrew libass burn-in.
 - New format families (aseprite, N64, Minecraft, WASM). Video→PDF is still STT, not frames-as-PDF.
