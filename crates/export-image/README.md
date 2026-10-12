@@ -250,6 +250,8 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | shrink 3072×2304 PNG to 8,000 bytes, fresh cache (file 4,799,731 bytes, output 8,000 bytes) | 12 | 1,303,047.3 µs | 1,365,475.2 µs | 16.30 | 490 allocs; 69.23 allocs/MP |
 
+`shrink_png` of the same gradient at 6144×4608, cap 8,000 bytes, fresh cache. The existing shrink returned `OverBudget` on the first call: the image does not fit the byte cap after six area scales. There is no output, so there is no p50 or p99, and that bench was reverted. The 3072×2304 shrink row stays 4,799,731 bytes in, 8,000 bytes out, p50 1,303,047.3 µs, p99 1,365,475.2 µs. The 1536×1152 shrink row stays 2,170,497 bytes in, 8,000 bytes out, p50 794,767.1 µs, p99 847,271.5 µs. The 768×576 shrink row stays 932,701 bytes in, 8,000 bytes out, p50 228,807.5 µs. The 384×288, 192×144, and 96×72 rows stay as published. The 640×480 shrink stays reverted: 728,763 bytes in, 8,000 bytes out, p50 198,157.4 µs.
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
