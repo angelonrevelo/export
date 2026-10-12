@@ -234,9 +234,21 @@ const fn nearest4(levels: &[u8; 4], v: u8) -> u8 {
 
 /// 96×64 generated RGB. Not a photograph.
 pub fn quantize_fixture() -> RgbRaster {
-    let width = 96u16;
-    let height = 64u16;
-    let mut rgb = Vec::with_capacity(usize::from(width) * usize::from(height) * 3);
+    quantize_frame(96, 64).unwrap()
+}
+
+/// Same generator as [`quantize_fixture`], at a chosen size.
+pub fn quantize_frame(width: u16, height: u16) -> Result<RgbRaster, Error> {
+    if width == 0 || height == 0 {
+        return Err(INVALID);
+    }
+    let pixels = u32::from(width)
+        .checked_mul(u32::from(height))
+        .ok_or(TOO_LARGE)?;
+    if u64::from(pixels) > MAX_PIXELS {
+        return Err(TOO_LARGE);
+    }
+    let mut rgb = Vec::with_capacity(pixels as usize * 3);
     for y in 0..height {
         for x in 0..width {
             let i = u32::from(y) * u32::from(width) + u32::from(x);
@@ -245,7 +257,7 @@ pub fn quantize_fixture() -> RgbRaster {
             rgb.push((i.wrapping_mul(53)) as u8);
         }
     }
-    RgbRaster { width, height, rgb }
+    Ok(RgbRaster { width, height, rgb })
 }
 
 #[cfg(test)]
@@ -282,5 +294,15 @@ mod tests {
         assert!(result.mae[2] <= f64::from(QUANTIZE_MAX_ABS[2]));
         let err = decode_gif(&result.bytes[..result.bytes.len() / 2]).unwrap_err();
         assert_eq!(err.code, ErrorCode::Truncated);
+    }
+
+    #[test]
+    fn vga_frame_stays_inside_the_bound() {
+        let raster = quantize_frame(640, 480).unwrap();
+        let result = quantize_gif89a(&raster).unwrap();
+        assert!(result.max_abs[0] <= QUANTIZE_MAX_ABS[0]);
+        assert!(result.max_abs[1] <= QUANTIZE_MAX_ABS[1]);
+        assert!(result.max_abs[2] <= QUANTIZE_MAX_ABS[2]);
+        assert!(result.bytes.starts_with(b"GIF89a"));
     }
 }
