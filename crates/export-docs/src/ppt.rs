@@ -2121,7 +2121,9 @@ mod tests {
     fn five_shape_strings_are_in_the_html() {
         let (north, east, south, west, center) = five_shape_fixture();
         let file = ppt_five_text_document(&north, &east, &south, &west, &center).unwrap();
+        assert_eq!(file.len(), 9216);
         let got = html(&file).unwrap();
+        assert_eq!(got.len(), 7286);
         let marked = format!("<p>{north}</p><p>{east}</p><p>{south}</p><p>{west}</p><p>{center}</p>");
         assert!(got.contains(&marked), "{got}");
         let n = got.find(&north).unwrap();
