@@ -13,15 +13,20 @@
 //! - [`decode`] — greedy CTC on synthetic logits, plus `txt` / `srt` / `vtt` /
 //!   `notes` / `words` writers in Export's shape.
 //! - [`recognize::transcribe_fixture`] — one 3×3 integer layer. It spells `HI`
-//!   for two bin-centered tones and `IH` if those tones are swapped. It does
-//!   not transcribe speech.
+//!   for two bin-centered tones and `IH` if those tones are swapped. It is a
+//!   fixture, not speech recognition.
+//! - [`blob`] — CRC-checked `81×3` integer weights, 984 bytes. They decode the
+//!   formant word `NO` (not a pure sine, not a frequency branch). They do not
+//!   transcribe microphone speech. A missing or flipped blob is an error.
+//!   Decode scratch stays flat as the clip grows.
 //! - [`ocr`] — 5×7 printed `A`–`Z` `0`–`9` at one pitch. Not Tesseract.
 //! - [`tts::synthesize`] — formant sines to WAV. Not Piper.
 //! - [`denoise`] — spectral subtraction from a short noise preamble.
-//! - [`crossover`] — a 300 Hz one-pole split. Not Demucs.
+//! - [`crossover`] — a 300 Hz Butterworth split. Not Demucs.
 
 #![forbid(unsafe_code)]
 
+pub mod blob;
 pub mod crossover;
 pub mod decode;
 pub mod denoise;
@@ -34,6 +39,9 @@ pub mod wav;
 
 mod fft;
 
+pub use blob::{
+    bundled_no_blob, load_acoustic, transcribe_acoustic, transcribe_bundled, BUNDLED_NO_LEN,
+};
 pub use crossover::Crossover;
 pub use decode::{
     ctc_greedy, ctc_greedy_logits, write_notes, write_srt, write_txt, write_vtt, write_words,
