@@ -237,6 +237,67 @@ fn report_pptx() {
     }
 }
 
+fn report_pptx_pdf() {
+    let deck = pptx_text_deck();
+    match convert("pptx", "pdf", &deck) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("pptx→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            let has_slides = extracted.contains("Slide 1 title")
+                && extracted.contains("Slide 40 title")
+                && extracted.contains("alpha beta gamma delta text shape");
+            if !has_slides {
+                emit_untimed(
+                    "pptx→pdf text",
+                    deck.len() as u64,
+                    Some(pdf.len() as u64),
+                    "MISS: pdf text does not match",
+                );
+            } else {
+                let sample = measure(|| ready_bytes("pptx", "pdf", &deck));
+                emit_ready("pptx→pdf text", deck.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "pptx→pdf text p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(deck.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        deck.len(),
+                        sample.output_bytes,
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", deck.len()))
+            {
+                eprintln!("pptx→pdf hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("pptx→pdf text", deck.len() as u64, None, &err.message);
+        }
+    }
+    let pic = pptx_pic_deck();
+    match convert("pptx", "pdf", &pic) {
+        Ok(_) => {
+            eprintln!("picture deck produced pdf");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", pic.len()))
+            {
+                eprintln!("pptx pdf miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("pptx→pdf pic", pic.len() as u64, None, &err.message);
+        }
+    }
+}
+
 fn slide_xml(title: &str, body: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -832,6 +893,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_pptx();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--pptx-pdf") {
+        println!("export-docs pptx pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_pptx_pdf();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {

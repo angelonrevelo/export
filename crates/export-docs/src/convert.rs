@@ -57,6 +57,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "rtf", target: "html", ready: false, note: "MISS: only a generated rtf of paragraphs and bold converts; other files stay a miss" },
     Pair { source: "epub", target: "html", ready: false, note: "MISS: only a generated epub whose spine is one or two xhtml files converts; other packages stay a miss" },
     Pair { source: "pptx", target: "html", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
+    Pair { source: "pptx", target: "pdf", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one, two, or three paragraphs converts; other files stay a miss" },
     Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
@@ -88,6 +89,9 @@ pub fn convert_to<R: Read + Seek, W: Write>(
     let target = key(target);
     if source == "pptx" && target == "html" {
         return crate::pptx::pptx_to_html(input, output);
+    }
+    if source == "pptx" && target == "pdf" {
+        return crate::pptx::pptx_to_pdf(input, output);
     }
     if source == "epub" && target == "html" {
         return crate::epub::epub_to_html(input, output);

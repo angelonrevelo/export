@@ -1,4 +1,5 @@
-//! pptx to HTML for a generated `ppt/slides` deck of text shapes.
+//! pptx to HTML, and to PDF, for a generated `ppt/slides` deck of text shapes.
+//! The PDF is kept only when its text contains each slide paragraph.
 //! Anything else stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -18,6 +19,23 @@ pub fn pptx_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Resul
         return Err(miss(input_bytes, &err.to_string()));
     }
     read_deck(src, out, input_bytes).map_err(|err| {
+        if err.message.starts_with("MISS:") {
+            err
+        } else {
+            miss(input_bytes, &err.message)
+        }
+    })
+}
+
+pub fn pptx_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
+    let input_bytes = match src.seek(SeekFrom::End(0)) {
+        Ok(n) => n,
+        Err(err) => return Err(miss(0, &err.to_string())),
+    };
+    if let Err(err) = src.seek(SeekFrom::Start(0)) {
+        return Err(miss(input_bytes, &err.to_string()));
+    }
+    read_deck_pdf(src, out, input_bytes).map_err(|err| {
         if err.message.starts_with("MISS:") {
             err
         } else {
@@ -80,6 +98,77 @@ fn read_deck<R: Read + Seek, W: Write>(
         input_bytes,
         output_bytes: counted.n,
     })
+}
+
+fn read_deck_pdf<R: Read + Seek, W: Write>(
+    src: &mut R,
+    out: &mut W,
+    input_bytes: u64,
+) -> Result<RunStats> {
+    let index = ArchiveIndex::read(src)?;
+    let mut slides = Vec::new();
+    for entry in &index.entries {
+        if let Some(n) = slide_number(&entry.name) {
+            slides.push((n, entry.name.clone()));
+        }
+    }
+    if slides.is_empty() {
+        return Err(Error::new("has no ppt/slides text deck"));
+    }
+    slides.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut paras = Vec::new();
+    let mut scratch = 0usize;
+    for (_, name) in &slides {
+        let mut reader = zip::open_entry(src, &index, name)?;
+        scratch = scratch.max(reader.scratch_peak());
+        let mut sink = TextSink {
+            stack: Vec::new(),
+            saw_tx: false,
+            in_para: false,
+            in_text: false,
+            bold: false,
+            italic: false,
+            runs: Vec::new(),
+            saw_sld: false,
+            paras: Vec::new(),
+        };
+        let stats = xml::pull(&mut reader, &mut sink)?;
+        scratch = scratch.max(stats.scratch_peak);
+        if !sink.saw_sld {
+            return Err(Error::new("slide is not a text shape"));
+        }
+        paras.extend(sink.paras);
+    }
+    if paras.is_empty() {
+        return Err(Error::new("slide is not a text shape"));
+    }
+    let pdf = deck_pdf(&paras)?;
+    let extracted = crate::pdf::plain_text(&pdf)?;
+    if !paras.iter().all(|text| extracted.contains(text)) {
+        return Err(Error::new("pdf text does not match"));
+    }
+    out.write_all(&pdf).map_err(|e| Error::new(e.to_string()))?;
+    let peak = if scratch > pdf.len() { scratch } else { pdf.len() };
+    Ok(RunStats {
+        scratch_peak: peak,
+        input_bytes,
+        output_bytes: pdf.len() as u64,
+    })
+}
+
+fn deck_pdf(paras: &[String]) -> Result<Vec<u8>> {
+    let lines: Vec<crate::pdf::Line> = paras
+        .iter()
+        .map(|text| crate::pdf::Line {
+            spans: vec![crate::pdf::Span {
+                text: text.clone(),
+                font: 0,
+                size: 11.0,
+            }],
+            leading: 14.0,
+        })
+        .collect();
+    crate::pdf::from_lines(&lines)
 }
 
 fn slide_number(name: &str) -> Option<u32> {
@@ -225,6 +314,110 @@ impl<W: Write> SlideSink<'_, W> {
             }
         }
         Ok(())
+    }
+}
+
+struct TextSink {
+    stack: Vec<String>,
+    saw_tx: bool,
+    in_para: bool,
+    in_text: bool,
+    bold: bool,
+    italic: bool,
+    runs: Vec<Run>,
+    saw_sld: bool,
+    paras: Vec<String>,
+}
+
+impl TextSink {
+    fn inside(&self, local: &str) -> bool {
+        self.stack.iter().any(|name| name == local)
+    }
+
+    fn flush_para(&mut self) {
+        let runs = std::mem::take(&mut self.runs);
+        let mut text = String::new();
+        for run in &runs {
+            text.push_str(&run.text);
+        }
+        if !text.is_empty() {
+            self.paras.push(text);
+        }
+    }
+}
+
+impl XmlSink for TextSink {
+    fn start(&mut self, name: &str, attrs: &[Attr]) -> Result<()> {
+        let local = local_name(name);
+        if !allowed(local) {
+            return Err(Error::new("slide is not a text shape"));
+        }
+        match local {
+            "sld" => self.saw_sld = true,
+            "sp" => self.saw_tx = false,
+            "txBody" => self.saw_tx = true,
+            "p" if self.inside("txBody") => {
+                self.in_para = true;
+                self.runs.clear();
+            }
+            "rPr" => {
+                self.bold = attr(attrs, "b").is_some_and(flag);
+                self.italic = attr(attrs, "i").is_some_and(flag);
+            }
+            "br" if self.in_para => self.runs.push(Run {
+                text: String::new(),
+                bold: false,
+                italic: false,
+                br: true,
+            }),
+            "t" if self.in_para => {
+                self.in_text = true;
+                self.runs.push(Run {
+                    text: String::new(),
+                    bold: self.bold,
+                    italic: self.italic,
+                    br: false,
+                });
+            }
+            _ => {}
+        }
+        self.stack.push(local.to_string());
+        Ok(())
+    }
+
+    fn end(&mut self, name: &str) -> Result<()> {
+        let local = local_name(name);
+        if local == "p" && self.in_para {
+            self.in_para = false;
+            self.flush_para();
+        }
+        if local == "t" {
+            self.in_text = false;
+        }
+        if local == "r" {
+            self.bold = false;
+            self.italic = false;
+        }
+        if local == "sp" && !self.saw_tx {
+            return Err(Error::new("slide is not a text shape"));
+        }
+        if self.stack.last().map(String::as_str) == Some(local) {
+            self.stack.pop();
+        }
+        Ok(())
+    }
+
+    fn text(&mut self, text: &str) -> Result<()> {
+        if self.in_text {
+            if let Some(run) = self.runs.last_mut() {
+                run.text.push_str(text);
+            }
+            return Ok(());
+        }
+        if text.chars().all(char::is_whitespace) {
+            return Ok(());
+        }
+        Err(Error::new("slide is not a text shape"))
     }
 }
 
@@ -424,5 +617,29 @@ mod tests {
             err.message.contains(&format!("input_b={}", bytes.len())),
             "{err}"
         );
+        let err = crate::convert::convert("pptx", "pdf", &bytes).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(err.message.contains("not a text shape"), "{err}");
+        assert!(
+            err.message.contains(&format!("input_b={}", bytes.len())),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn text_shapes_become_pdf_with_the_slide_text() {
+        let first = slide("Hello &amp; Co", "Bold line");
+        let second = slide("Second", "alpha beta gamma delta text shape");
+        let bytes = pack_stored(&[
+            ("ppt/slides/slide2.xml", second.as_bytes()),
+            ("ppt/slides/slide1.xml", first.as_bytes()),
+        ]);
+        let pdf = crate::convert::convert("pptx", "pdf", &bytes).unwrap();
+        let text = crate::pdf::plain_text(&pdf).unwrap();
+        let hello = text.find("Hello & Co").unwrap();
+        let bold = text.find("Bold line").unwrap();
+        let second_at = text.find("Second").unwrap();
+        let body = text.find("alpha beta gamma delta text shape").unwrap();
+        assert!(hello < bold && bold < second_at && second_at < body, "{text}");
     }
 }
