@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "quantize_anim32"
 harness = false
+
+[[bench]]
+name = "quantize_anim64"
+harness = false

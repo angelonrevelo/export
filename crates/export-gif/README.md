@@ -106,3 +106,15 @@ Sixteen frames at 256×256 are 10351.6 µs, so thirty-two frames should sit betw
 | p99 | 21511.0 µs |
 
 That p50 is inside the window, so this frame count stays. Video-to-GIF still returns an error. The library does not call ffmpeg.
+
+## Sixty-four-frame encode
+
+Thirty-two frames at 256×256 are 21020.9 µs, so sixty-four frames should sit between 31,531 µs and 46,246 µs. `cargo bench --manifest-path crates/export-gif/Cargo.toml --bench quantize_anim64` is one GIF89a, sixty-four generated 256×256 frames, same 3-3-2 palette and LZW writer. The file round-trips. The thirty-two-frame row and the sixteen-frame row were not remeasured.
+
+| | |
+|---|---|
+| output bytes | 725,509 |
+| p50 | 44724.2 µs |
+| p99 | 48277.1 µs |
+
+That p50 is inside the window, so this frame count stays. Video-to-GIF still returns an error. The library does not call ffmpeg.
