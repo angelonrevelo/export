@@ -1258,4 +1258,32 @@ fn main() {
         mb_s(wide_pixels * 3.0, p50),
         allocs as f64 / (wide_pixels / 1_000_000.0),
     );
+
+    // Same gradient, next edge 768×576. Same cap. The 384×288 loop above is unchanged.
+    let larger = gradient(768, 576);
+    let larger_png = encode_png(&larger).unwrap();
+    for _ in 0..2 {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&larger_png, target, &mut c).unwrap();
+    }
+    let (p50, p99) = time_n(12, || {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&larger_png, target, &mut c).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let mut c = ShrinkCache::new();
+    let larger_out = shrink_png(&larger_png, target, &mut c).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let smaller = larger_out.bytes.len() < larger_png.len();
+    let larger_pixels = 768.0 * 576.0;
+    println!(
+        "shrink_png768 file_bytes={} out_bytes={} samples=12 p50_us={:.1} p99_us={:.1} smaller={smaller} copied={} pixel_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        larger_png.len(),
+        larger_out.bytes.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        larger_out.copied,
+        mb_s(larger_pixels * 3.0, p50),
+        allocs as f64 / (larger_pixels / 1_000_000.0),
+    );
 }
