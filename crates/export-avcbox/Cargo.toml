@@ -64,3 +64,7 @@ path = "src/bin/avcbox720four.rs"
 [[bin]]
 name = "avcbox720eight"
 path = "src/bin/avcbox720eight.rs"
+
+[[bin]]
+name = "avcbox720sixteen"
+path = "src/bin/avcbox720sixteen.rs"

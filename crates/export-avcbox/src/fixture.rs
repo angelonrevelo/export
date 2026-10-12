@@ -1,3 +1,8 @@
+/// The 381,775-byte 1280×720 Annex B file: the level 3.1 I-frame, then fifteen zero-motion P-frames.
+///
+/// Copied as bytes. This crate does not link an H.264 encoder.
+pub static SIXTEEN_1280X720: &[u8] = include_bytes!("sixteen_1280x720.annexb");
+
 /// The 363,671-byte 1280×720 Annex B file: the level 3.1 I-frame, then seven zero-motion P-frames.
 ///
 /// Copied as bytes. This crate does not link an H.264 encoder.
