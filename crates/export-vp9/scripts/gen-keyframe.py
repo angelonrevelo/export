@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write one IVF keyframe this crate decodes.
 
-The picture is 8x8 through 1024x1024, profile 0, 8-bit 4:2:0, lossless, DC predicted.
+The picture is 8x8 through 2048x2048, profile 0, 8-bit 4:2:0, lossless, DC predicted.
 On the 8x8 and 16x16 frames, each 8x8 block's first luma 4x4 carries a
 positive FOUR token. The 32x32 frame is one keyframe as well: four of its
 8x8 blocks carry that token and the other twelve are skipped. The 64x64
@@ -10,8 +10,9 @@ The 128x128 frame is one keyframe too, four superblocks, four coded blocks.
 The 256x256 frame is one keyframe: sixteen superblocks, four coded blocks.
 The 512x512 frame is one keyframe: sixty-four superblocks, four coded blocks.
 The 1024x1024 frame is one keyframe: two hundred fifty-six superblocks, four
-coded blocks. Loop filter, segmentation, and probability updates are off.
-Default size 8 keeps the original file bytes.
+coded blocks. The 2048x2048 frame is one keyframe: one thousand twenty-four
+superblocks, four coded blocks. Loop filter, segmentation, and probability
+updates are off. Default size 8 keeps the original file bytes.
 """
 
 from __future__ import annotations
@@ -498,6 +499,72 @@ def write_tile_1024(encoder: BoolEncoder) -> None:
             walk(sb_row, sb_col, 64)
 
 
+# Top-left 8x8 of each quadrant.
+CODED_2048 = {(0, 0), (0, 128), (128, 0), (128, 128)}
+
+
+def write_tile_2048(encoder: BoolEncoder) -> None:
+    """One intra 2048x2048. One thousand twenty-four superblocks, still one keyframe."""
+    above = [0] * 256
+    left = [0] * 256
+    skips = [[0] * 256 for _ in range(256)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 256 or col >= 256:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 256
+        has_cols = col + half < 256
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_2048:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in range(0, 256, 8):
+        for i in range(256):
+            left[i] = 0
+        for sb_col in range(0, 256, 8):
+            walk(sb_row, sb_col, 64)
+
+
 def tile(size: int) -> bytes:
     encoder = BoolEncoder()
     encoder.write(128, 0)
@@ -530,6 +597,8 @@ def tile(size: int) -> bytes:
         write_tile_512(encoder)
     elif size == 1024:
         write_tile_1024(encoder)
+    elif size == 2048:
+        write_tile_2048(encoder)
     elif size == 16:
         # Keyframe partition context 4, split: three 1-bits.
         encoder.write(149, 1)
@@ -571,8 +640,8 @@ def frame(size: int) -> bytes:
     writer.f(1, 0)
     writer.f(1, 0)
     writer.f(1, 0)
-    if size in (512, 1024):
-        # Sb64Cols is 8 or 16. A zero tile-column bit keeps a single column.
+    if size in (512, 1024, 2048):
+        # Sb64Cols is 8, 16, or 32. A zero tile-column bit keeps a single column.
         writer.f(1, 0)
     writer.f(1, 0)
     writer.f(16, len(header))
@@ -599,9 +668,19 @@ def main() -> None:
     args = sys.argv[1:]
     size = 8
     if args and args[0] == "--size":
-        if len(args) < 2 or args[1] not in ("8", "16", "32", "64", "128", "256", "512", "1024"):
+        if len(args) < 2 or args[1] not in (
+            "8",
+            "16",
+            "32",
+            "64",
+            "128",
+            "256",
+            "512",
+            "1024",
+            "2048",
+        ):
             raise SystemExit(
-                "usage: gen-keyframe.py [--size 8|16|32|64|128|256|512|1024] [path]"
+                "usage: gen-keyframe.py [--size 8|16|32|64|128|256|512|1024|2048] [path]"
             )
         size = int(args[1])
         args = args[2:]

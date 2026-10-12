@@ -55,3 +55,4 @@ check_one 128 testdata/keyframe-128.ivf testdata/ffmpeg-128.yuv
 check_one 256 testdata/keyframe-256.ivf testdata/ffmpeg-256.yuv
 check_one 512 testdata/keyframe-512.ivf testdata/ffmpeg-512.yuv
 check_one 1024 testdata/keyframe-1024.ivf testdata/ffmpeg-1024.yuv
+check_one 2048 testdata/keyframe-2048.ivf testdata/ffmpeg-2048.yuv

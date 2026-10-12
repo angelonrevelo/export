@@ -28,11 +28,11 @@ struct Pic {
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
-    above_nz: [[u8; 256]; 3],
-    left_nz: [[u8; 256]; 3],
-    skips: [u8; 16384],
-    above_part: [u8; 128],
-    left_part: [u8; 128],
+    above_nz: [[u8; 512]; 3],
+    left_nz: [[u8; 512]; 3],
+    skips: [u8; 65536],
+    above_part: [u8; 256],
+    left_part: [u8; 256],
 }
 
 /// Decode the VP9 payload of one supported keyframe.
@@ -40,7 +40,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     if bytes.is_empty() {
         return Err(Error::Truncated);
     }
-    if bytes.len() > 8192 {
+    if bytes.len() > 32768 {
         return Err(Error::Unsupported);
     }
     if bytes[bytes.len() - 1] & 0xe0 == 0xc0 {
@@ -89,6 +89,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
             | (256, 256)
             | (512, 512)
             | (1024, 1024)
+            | (2048, 2048)
     ) {
         return Err(Error::Unsupported);
     }
@@ -106,8 +107,8 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     if br.f(1)? != 0 {
         return Err(Error::Unsupported);
     }
-    // A 512- or 1024-wide picture has one tile-column bit. Zero keeps a single column.
-    if (width == 512 || width == 1024) && br.f(1)? != 0 {
+    // A 512-, 1024-, or 2048-wide picture has one tile-column bit. Zero keeps a single column.
+    if (width == 512 || width == 1024 || width == 2048) && br.f(1)? != 0 {
         return Err(Error::Unsupported);
     }
     if br.f(1)? != 0 {
@@ -168,11 +169,11 @@ fn decode_tile(
         y: vec![0; width * height],
         u: vec![0; chroma],
         v: vec![0; chroma],
-        above_nz: [[0; 256]; 3],
-        left_nz: [[0; 256]; 3],
-        skips: [0; 16384],
-        above_part: [0; 128],
-        left_part: [0; 128],
+        above_nz: [[0; 512]; 3],
+        left_nz: [[0; 512]; 3],
+        skips: [0; 65536],
+        above_part: [0; 256],
+        left_part: [0; 256],
     };
     let mut sb_row = 0;
     while sb_row < pic.mi {
@@ -367,7 +368,7 @@ fn transform(
     }
     let x4 = x >> 2;
     let y4 = y >> 2;
-    if plane >= 3 || x4 >= 256 || y4 >= 256 {
+    if plane >= 3 || x4 >= 512 || y4 >= 512 {
         return Err(Error::Unsupported);
     }
     pic.above_nz[plane][x4] = nonzero;
