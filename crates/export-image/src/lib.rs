@@ -10,8 +10,8 @@
 //! The decoder paints that rectangle onto the canvas. [`decode_webp`] returns
 //! that composited canvas for two 64×64 partial files: the second frame 16×16
 //! at (16, 32), and the second frame 16×16 at the origin. For the full-frame
-//! 64×64 two-frame file it returns the first frame. Every other animation
-//! stays an error on [`decode_webp`].
+//! 64×64 two-frame file, and for the two-frame 256×256 file, it returns the
+//! first frame. Every other animation stays an error on [`decode_webp`].
 //! Alpha-only (`ALPH`) and other extended features stay errors.
 //! Thumbnail and shrink do not take WebP. Not in this crate: HEIC, AVIF, TIFF,
 //! SVG, RAW, JPEG XL, background removal, and vectorization. A file that

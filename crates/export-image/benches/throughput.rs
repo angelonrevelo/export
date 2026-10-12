@@ -917,4 +917,40 @@ fn main() {
         mb_s(anim64.len() as f64, p50),
         allocs as f64 / (first_pixels / 1_000_000.0),
     );
+
+    // decode_webp of the two-frame 256×256 file only. The 64×64 rows above are unchanged.
+    for _ in 0..2 {
+        let _ = decode_webp(&anim256).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(decode_webp(black_box(&anim256)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let first256 = decode_webp(&anim256).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let first256_pixels = 256.0 * 256.0;
+    let first_match = first256.width == 256
+        && first256.height == 256
+        && first256.x == 0
+        && first256.y == 0
+        && first256.pixels == decoded256[0].pixels
+        && first256.pixels != decoded256[1].pixels;
+    let small_same = decode_webp(&anim64).unwrap().pixels == first.pixels
+        && decode_webp(&anim_part).unwrap().pixels == origin.pixels
+        && decode_webp(&anim_placed).unwrap().pixels == one.pixels;
+    let still_same = decode_webp(&encode_webp_lossy(&large[0]).unwrap())
+        .unwrap()
+        .pixels
+        == still256_a.pixels;
+    let larger_errors = decode_webp(&anim_hd).is_err();
+    println!(
+        "webp_anim256_first_decode canvas=256x256 frames=2 samples=40 file_bytes={} p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2} first_match={first_match} small_same={small_same} still_same={still_same} larger_errors={larger_errors}",
+        anim256.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(first256_pixels * 3.0, p50),
+        mb_s(first256_pixels * 3.0, p99),
+        mb_s(anim256.len() as f64, p50),
+        allocs as f64 / (first256_pixels / 1_000_000.0),
+    );
 }
