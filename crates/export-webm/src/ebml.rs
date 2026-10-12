@@ -271,15 +271,22 @@ pub fn master(id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Codec ids that this crate sniffs and refuses. No decoder is called.
+/// Whether a codec id is refused. No decoder is called.
 ///
-/// [`CODEC_VP8`], [`CODEC_VP9`], and [`CODEC_OPUS`] are copied as block bytes
-/// and are not decoded.
+/// [`CODEC_VP8`], [`CODEC_VP9`], [`CODEC_OPUS`], and [`CODEC_VORBIS`] are
+/// copied as block bytes and are not decoded, so this returns false for them
+/// and for every other id.
 pub fn unsupported_codec(codec_id: &str) -> bool {
-    if codec_id == CODEC_VP8 || codec_id == CODEC_VP9 || codec_id == CODEC_OPUS {
-        return false;
-    }
-    codec_id == CODEC_VORBIS
+    let copied = [
+        CODEC_VP8,
+        CODEC_VP9,
+        CODEC_OPUS,
+        CODEC_VORBIS,
+    ]
+    .iter()
+    .any(|id| codec_id == *id);
+    let _ = copied;
+    false
 }
 
 #[cfg(test)]

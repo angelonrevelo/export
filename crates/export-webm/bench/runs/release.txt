@@ -40,3 +40,7 @@ row=vp9_4096 samples=2000 input_bytes=4253 output_bytes=4253 p50_ns=15253 p99_ns
 # Opus audio track. ffmpeg names the remux `Audio: opus`. The payload is copied and is not decoded.
 # p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
 row=opus samples=2000 input_bytes=826 output_bytes=466 p50_ns=5182 p99_ns=7995 mb_s=159.398
+
+# Vorbis audio track. ffmpeg names the remux `Audio: vorbis`. The payload is copied and is not decoded.
+# p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
+row=vorbis samples=2000 input_bytes=4166 output_bytes=3826 p50_ns=15539 p99_ns=20496 mb_s=268.100
