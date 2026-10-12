@@ -4,8 +4,8 @@
 //! and `ANMF`. A two-frame or four-frame animation is a `VP8X`/`ANIM`/`ANMF`
 //! wrapper around `VP8 ` keyframes from the existing encoder. That wrapper is not an
 //! entropy coder. The first frame is the canvas. A later frame may be a smaller
-//! rectangle at the origin and comes back at that size. A non-zero origin, alpha,
-//! ICC, EXIF, and XMP stay errors. There is no compositor.
+//! rectangle at an even pixel origin and comes back at that size with that origin.
+//! An odd origin, alpha, ICC, EXIF, and XMP stay errors. There is no compositor.
 
 use crate::error::{Error, INVALID, TRUNCATED, UNSUPPORTED};
 use crate::raster::Raster;
@@ -63,10 +63,12 @@ const ANIMATION: u8 = 0x02;
 const NO_BLEND: u8 = 0x02;
 const FRAME_MS: u32 = 100;
 
-/// Two-frame or four-frame lossy animation. The first frame is the canvas.
-/// A later frame may be smaller and is stored at the origin. Each frame must
-/// be one the lossy encoder already accepts: RGB, sides a multiple of 16.
-/// Each `ANMF` payload is that keyframe. There is no second entropy coder.
+/// Two-frame or four-frame lossy animation. The first frame is the canvas and
+/// must sit at the origin. A later frame may be smaller. Its [`Raster::x`] and
+/// [`Raster::y`] are an even pixel offset, and the rectangle must lie inside
+/// the canvas. Each frame must be one the lossy encoder already accepts: RGB,
+/// sides a multiple of 16. Each `ANMF` payload is that keyframe. There is no
+/// second entropy coder.
 pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     if frames.len() != 2 && frames.len() != 4 {
         return Err(UNSUPPORTED);
@@ -74,11 +76,20 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     let canvas_w = frames[0].width;
     let canvas_h = frames[0].height;
     let mut bitstreams = Vec::with_capacity(frames.len());
-    for frame in frames {
-        if frame.width > canvas_w || frame.height > canvas_h {
+    for (i, frame) in frames.iter().enumerate() {
+        if frame.x % 2 != 0 || frame.y % 2 != 0 || (i == 0 && (frame.x != 0 || frame.y != 0)) {
             return Err(UNSUPPORTED);
         }
-        bitstreams.push((frame.width, frame.height, encode_vp8(frame)?));
+        let Some(right) = frame.x.checked_add(frame.width) else {
+            return Err(UNSUPPORTED);
+        };
+        let Some(bottom) = frame.y.checked_add(frame.height) else {
+            return Err(UNSUPPORTED);
+        };
+        if right > canvas_w || bottom > canvas_h {
+            return Err(UNSUPPORTED);
+        }
+        bitstreams.push((frame.x, frame.y, frame.width, frame.height, encode_vp8(frame)?));
     }
     let mut vp8x = [0u8; 10];
     vp8x[0] = ANIMATION;
@@ -87,8 +98,8 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     let mut body = Vec::new();
     push_chunk(&mut body, b"VP8X", &vp8x);
     push_chunk(&mut body, b"ANIM", &[0; 6]);
-    for (width, height, bitstream) in &bitstreams {
-        push_chunk(&mut body, b"ANMF", &anmf(*width, *height, bitstream));
+    for (x, y, width, height, bitstream) in &bitstreams {
+        push_chunk(&mut body, b"ANMF", &anmf(*x, *y, *width, *height, bitstream));
     }
     let mut out = Vec::with_capacity(12 + body.len());
     out.extend_from_slice(b"RIFF");
@@ -99,9 +110,10 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
 }
 
 /// Frames of an animation this crate wrote, in order. A frame smaller than
-/// the canvas is the rectangle at the origin, not a composited canvas.
-/// [`decode_webp`] still returns [`UNSUPPORTED`] for the same bytes, because
-/// that function returns one raster.
+/// the canvas comes back at its own size with [`Raster::x`] and [`Raster::y`]
+/// set to its origin. It is not painted onto the canvas. [`decode_webp`] still
+/// returns [`UNSUPPORTED`] for the same bytes, because that function returns
+/// one raster.
 pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     let end = riff_end(bytes)?;
     let vp8x = read_chunk(bytes, 12, end)?;
@@ -137,19 +149,17 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
         let origin_y = read_u24(&anmf.payload[3..6]).saturating_mul(2);
         let frame_w = read_u24(&anmf.payload[6..9]).wrapping_add(1);
         let frame_h = read_u24(&anmf.payload[9..12]).wrapping_add(1);
-        if origin_x != 0
-            || origin_y != 0
-            || frame_w == 0
-            || frame_h == 0
-            || frame_w > canvas_w
-            || frame_h > canvas_h
-        {
+        let right = origin_x.saturating_add(frame_w);
+        let bottom = origin_y.saturating_add(frame_h);
+        if frame_w == 0 || frame_h == 0 || right > canvas_w || bottom > canvas_h {
             return Err(UNSUPPORTED);
         }
-        let raster = decode_frame(&anmf.payload[16..])?;
+        let mut raster = decode_frame(&anmf.payload[16..])?;
         if raster.width != frame_w || raster.height != frame_h {
             return Err(INVALID);
         }
+        raster.x = origin_x;
+        raster.y = origin_y;
         frames.push(raster);
         at = anmf.next;
     }
@@ -159,10 +169,10 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     Ok(frames)
 }
 
-fn anmf(width: u32, height: u32, bitstream: &[u8]) -> Vec<u8> {
+fn anmf(x: u32, y: u32, width: u32, height: u32, bitstream: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(16 + 8 + bitstream.len() + 1);
-    write_u24_push(&mut payload, 0);
-    write_u24_push(&mut payload, 0);
+    write_u24_push(&mut payload, x / 2);
+    write_u24_push(&mut payload, y / 2);
     write_u24_push(&mut payload, width - 1);
     write_u24_push(&mut payload, height - 1);
     write_u24_push(&mut payload, FRAME_MS);
@@ -574,6 +584,10 @@ mod tests {
         let still_tile = decode_webp(&encode_webp_lossy(&tile).unwrap()).unwrap();
         assert_eq!(back[0].pixels, still_full.pixels);
         assert_eq!(back[1].pixels, still_tile.pixels);
+        assert_eq!(back[0].x, 0);
+        assert_eq!(back[0].y, 0);
+        assert_eq!(back[1].x, 0);
+        assert_eq!(back[1].y, 0);
         let mut shifted = file.clone();
         let mut at = 12usize;
         let end = 8 + u32::from_le_bytes(shifted[4..8].try_into().unwrap()) as usize;
@@ -583,7 +597,8 @@ mod tests {
             if &shifted[at..at + 4] == b"ANMF" {
                 seen += 1;
                 if seen == 2 {
-                    shifted[at + 8] = 1;
+                    // Origin 80, which puts the 16×16 rectangle past the canvas.
+                    shifted[at + 8] = 40;
                     break;
                 }
             }
@@ -591,5 +606,35 @@ mod tests {
         }
         assert_eq!(seen, 2);
         assert_eq!(decode_webp_animation(&shifted).unwrap_err(), UNSUPPORTED);
+    }
+
+    #[test]
+    fn partial_16_at_nonzero_origin_returns_that_rectangle() {
+        let mut canvas = vec![0u8; 64 * 64 * 3];
+        for px in canvas.chunks_exact_mut(3) {
+            px.copy_from_slice(&[40, 90, 160]);
+        }
+        let mut patch = vec![0u8; 16 * 16 * 3];
+        for px in patch.chunks_exact_mut(3) {
+            px.copy_from_slice(&[210, 50, 30]);
+        }
+        let full = Raster::new(64, 64, 3, canvas).unwrap();
+        let tile = Raster::new(16, 16, 3, patch).unwrap().with_origin(16, 32);
+        assert_eq!(
+            encode_webp_animation(&[full.clone(), tile.clone().with_origin(1, 0)]).unwrap_err(),
+            UNSUPPORTED
+        );
+        assert_eq!(
+            encode_webp_animation(&[full.clone(), tile.clone().with_origin(56, 56)]).unwrap_err(),
+            UNSUPPORTED
+        );
+        let file = encode_webp_animation(&[full.clone(), tile.clone()]).unwrap();
+        assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
+        let back = decode_webp_animation(&file).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!((back[0].x, back[0].y, back[0].width, back[0].height), (0, 0, 64, 64));
+        assert_eq!((back[1].x, back[1].y, back[1].width, back[1].height), (16, 32, 16, 16));
+        let still_tile = decode_webp(&encode_webp_lossy(&tile).unwrap()).unwrap();
+        assert_eq!(back[1].pixels, still_tile.pixels);
     }
 }

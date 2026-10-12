@@ -6,8 +6,8 @@
 //!
 //! WebP is a still frame, or a two-frame or four-frame animation whose frames
 //! are the same lossy VP8 keyframes: profile 0, DC prediction, loop filter off.
-//! A later animation frame may be a smaller rectangle at the origin. There is
-//! no compositor. [`decode_webp`] still returns one raster and rejects `VP8X`.
+//! A later animation frame may be a smaller rectangle at an even pixel origin.
+//! There is no compositor. [`decode_webp`] still returns one raster and rejects `VP8X`.
 //! Alpha-only (`ALPH`) and other extended features stay errors.
 //! Thumbnail and shrink do not take WebP. Not in this crate: HEIC, AVIF, TIFF,
 //! SVG, RAW, JPEG XL, background removal, and vectorization. A file that

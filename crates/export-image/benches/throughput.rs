@@ -734,4 +734,43 @@ fn main() {
         decoded_part.len(),
         decode_webp(&anim_part).is_err(),
     );
+
+    // Appended 16×16 rectangle at a non-zero origin. The rows above are unchanged.
+    let placed = [
+        partial[0].clone(),
+        partial[1].clone().with_origin(16, 32),
+    ];
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&placed).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&placed)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim_placed = encode_webp_animation(&placed).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim_placed_pixels = 64.0 * 64.0 + 16.0 * 16.0;
+    println!(
+        "webp_anim64_placed_encode canvas=64x64 frames=2 partial=16x16 origin=16,32 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim_placed.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim_placed_pixels * 3.0, p50),
+        mb_s(anim_placed_pixels * 3.0, p99),
+        mb_s(anim_placed.len() as f64, p50),
+        allocs as f64 / (anim_placed_pixels / 1_000_000.0),
+    );
+    let decoded_placed = decode_webp_animation(&anim_placed).unwrap();
+    let still_placed = decode_webp(&encode_webp_lossy(&placed[1]).unwrap()).unwrap();
+    let placed_ok = decoded_placed.len() == 2
+        && decoded_placed[1].x == 16
+        && decoded_placed[1].y == 32
+        && decoded_placed[1].width == 16
+        && decoded_placed[1].height == 16
+        && decoded_placed[1].pixels == still_placed.pixels;
+    println!(
+        "webp_anim64_placed_decode frames={} at_origin={placed_ok} still_match={placed_ok} single_raster_errors={}",
+        decoded_placed.len(),
+        decode_webp(&anim_placed).is_err(),
+    );
 }

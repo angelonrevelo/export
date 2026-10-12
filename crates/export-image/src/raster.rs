@@ -12,6 +12,10 @@ pub struct Raster {
     pub height: u32,
     pub channels: u8,
     pub pixels: Vec<u8>,
+    /// Pixel offset of an animation rectangle. Stills stay at zero.
+    pub x: u32,
+    /// Pixel offset of an animation rectangle. Stills stay at zero.
+    pub y: u32,
 }
 
 impl Raster {
@@ -36,7 +40,17 @@ impl Raster {
             height,
             channels,
             pixels,
+            x: 0,
+            y: 0,
         })
+    }
+
+    /// Place this raster at an even pixel offset. The animation encoder stores
+    /// that offset; it does not paint the pixels onto another frame.
+    pub fn with_origin(mut self, x: u32, y: u32) -> Self {
+        self.x = x;
+        self.y = y;
+        self
     }
 
     pub fn pixel_count(&self) -> u64 {
