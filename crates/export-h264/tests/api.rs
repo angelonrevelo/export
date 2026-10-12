@@ -1,8 +1,8 @@
 use export_h264::{
     encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160,
-    fixture_160x160_predicted, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
-    fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
-    PredictedFrame, Yuv420, SHIFTED_MV,
+    fixture_160x160_predicted, fixture_160x160_shifted, fixture_32x32, fixture_32x32_eight,
+    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
+    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
 };
 
 #[test]
@@ -287,6 +287,52 @@ fn larger_iframe_is_constrained_baseline() {
         )
         .unwrap_err(),
         Error::BipredictedFrame
+    );
+}
+
+#[test]
+fn larger_shifted_picture_uses_one_motion_vector() {
+    let intra = fixture_160x160();
+    let shifted = fixture_160x160_shifted();
+    let opts = EncodeOptions::default();
+    let alone = encode(&intra, &opts).unwrap();
+    assert_eq!(alone.annex_b.len(), 6432);
+    let zero = encode_ip(&intra, &fixture_160x160_predicted(), &opts).unwrap();
+    assert_eq!(zero.annex_b.len(), 9689);
+    let moved = encode_ip_motion(&intra, &shifted, &opts, SHIFTED_MV).unwrap();
+    assert_eq!(moved.annex_b.len(), 6694);
+    assert_eq!(&moved.annex_b[..6432], &alone.annex_b[..]);
+    assert_ne!(
+        moved.annex_b,
+        encode_ip(&intra, &shifted, &opts).unwrap().annex_b
+    );
+    let mae = mean_absolute_error(&shifted, &moved.predicted);
+    assert!(mae < 8.0, "shifted mae {mae}");
+    assert_eq!(
+        encode_ip_motion(
+            &intra,
+            &shifted,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            },
+            SHIFTED_MV,
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_ip_motion(
+            &intra,
+            &shifted,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            },
+            SHIFTED_MV,
+        )
+        .unwrap_err(),
+        Error::SecondPass
     );
 }
 

@@ -408,6 +408,13 @@ pub fn fixture_32x32_shifted() -> Yuv420 {
     shift_frame(&fixture_32x32(), 4)
 }
 
+/// The 160×160 fixture moved four luma samples to the left.
+///
+/// [`SHIFTED_MV`] predicts this picture from that I-frame.
+pub fn fixture_160x160_shifted() -> Yuv420 {
+    shift_frame(&fixture_160x160(), 4)
+}
+
 fn shift_frame(src: &Yuv420, dx_luma: i32) -> Yuv420 {
     Yuv420 {
         width: src.width,
