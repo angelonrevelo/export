@@ -1,4 +1,4 @@
-//! Decode one generated VP9 keyframe.
+//! Decode one generated 8×8 or 16×16 VP9 keyframe.
 //!
 //! This is not a video decoder. Inter frames, extra frames, and VP8 are unsupported.
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Write the one IVF keyframe this crate decodes.
+"""Write one IVF keyframe this crate decodes.
 
-The picture is 8x8, profile 0, 8-bit 4:2:0, lossless, DC predicted.
-The first luma 4x4 carries a positive FOUR token. Every other transform
-ends immediately. Loop filter, segmentation, and probability updates are off.
+The picture is 8x8 or 16x16, profile 0, 8-bit 4:2:0, lossless, DC predicted.
+Each 8x8 block's first luma 4x4 carries a positive FOUR token. Every other
+transform ends immediately. The 16x16 frame is one keyframe: the 64 and 32
+superblock partitions are implied splits, and the 16x16 partition is an
+explicit split into four 8x8 blocks. Loop filter, segmentation, and
+probability updates are off. Default size 8 keeps the original file bytes.
 """
 
 from __future__ import annotations
@@ -94,14 +97,14 @@ def compressed_header() -> bytes:
     return encoder.flush()
 
 
-def tile() -> bytes:
-    # Band 0, context 0 luma probabilities, and the Pareto values for node >= 2
-    # at probability 183. Contexts for the later end-of-block flags are 1, 1, 0.
+def write_block(encoder: BoolEncoder) -> None:
+    # 8x8 partition none uses context 0. Skip, DC luma, and DC chroma have no
+    # neighbors that change the probability on this frame. Band 0, context 0
+    # luma probabilities, and the Pareto values for node >= 2 at probability
+    # 183. Later end-of-block contexts are 1, 1, 0. Chroma ends at context 0.
     y0 = (195, 29, 183)
     y_eob = {0: 195, 1: 84, 3: 8}
     uv0 = 214
-    encoder = BoolEncoder()
-    encoder.write(128, 0)
     encoder.write(158, 0)
     encoder.write(192, 0)
     encoder.write(137, 0)
@@ -118,10 +121,24 @@ def tile() -> bytes:
         encoder.write(y_eob[ctx], 0)
     encoder.write(uv0, 0)
     encoder.write(uv0, 0)
+
+
+def tile(size: int) -> bytes:
+    encoder = BoolEncoder()
+    encoder.write(128, 0)
+    if size == 16:
+        # Keyframe partition context 4, split: three 1-bits.
+        encoder.write(149, 1)
+        encoder.write(53, 1)
+        encoder.write(53, 1)
+        for _ in range(4):
+            write_block(encoder)
+    else:
+        write_block(encoder)
     return encoder.flush()
 
 
-def frame() -> bytes:
+def frame(size: int) -> bytes:
     header = compressed_header()
     writer = BitWriter()
     writer.f(2, 2)
@@ -136,8 +153,8 @@ def frame() -> bytes:
     writer.f(8, 0x42)
     writer.f(3, 2)
     writer.f(1, 1)
-    writer.f(16, 7)
-    writer.f(16, 7)
+    writer.f(16, size - 1)
+    writer.f(16, size - 1)
     writer.f(1, 0)
     writer.f(1, 0)
     writer.f(1, 1)
@@ -153,16 +170,16 @@ def frame() -> bytes:
     writer.f(1, 0)
     writer.f(16, len(header))
     writer.align()
-    return writer.bytes() + header + tile()
+    return writer.bytes() + header + tile(size)
 
 
-def ivf(payload: bytes) -> bytes:
+def ivf(payload: bytes, size: int) -> bytes:
     header = bytearray(b"DKIF")
     header += (0).to_bytes(2, "little")
     header += (32).to_bytes(2, "little")
     header += b"VP90"
-    header += (8).to_bytes(2, "little")
-    header += (8).to_bytes(2, "little")
+    header += size.to_bytes(2, "little")
+    header += size.to_bytes(2, "little")
     header += (1).to_bytes(4, "little")
     header += (1).to_bytes(4, "little")
     header += (1).to_bytes(4, "little")
@@ -172,8 +189,15 @@ def ivf(payload: bytes) -> bytes:
 
 
 def main() -> None:
-    destination = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
-    data = ivf(frame())
+    args = sys.argv[1:]
+    size = 8
+    if args and args[0] == "--size":
+        if len(args) < 2 or args[1] not in ("8", "16"):
+            raise SystemExit("usage: gen-keyframe.py [--size 8|16] [path]")
+        size = int(args[1])
+        args = args[2:]
+    destination = pathlib.Path(args[0]) if args else None
+    data = ivf(frame(size), size)
     if destination is None:
         sys.stdout.buffer.write(data)
     else:

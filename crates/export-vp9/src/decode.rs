@@ -24,15 +24,21 @@ const TOKEN_TREE: [i16; 20] = [
 ];
 
 const MI_WIDTH_LOG2: [usize; 13] = [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3];
+const B_WIDTH_LOG2: [u32; 13] = [0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4];
+const B_HEIGHT_LOG2: [u32; 13] = [0, 1, 0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4];
 
 struct Pic {
     width: usize,
     height: usize,
+    mi: usize,
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
     above_nz: [[u8; 4]; 3],
     left_nz: [[u8; 4]; 3],
+    skips: [u8; 4],
+    above_part: [u8; 8],
+    left_part: [u8; 8],
 }
 
 /// Decode the VP9 payload of one supported keyframe.
@@ -79,7 +85,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     if br.f(1)? != 0 {
         return Err(Error::Unsupported);
     }
-    if width != 8 || height != 8 {
+    if !matches!((width, height), (8, 8) | (16, 16)) {
         return Err(Error::Unsupported);
     }
     if error_resilient == 0 {
@@ -125,7 +131,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
         return Err(Error::Truncated);
     }
     let mut bools = BoolDecoder::new(&mut br, tile_bits / 8)?;
-    let frame = decode_tile(&mut bools)?;
+    let frame = decode_tile(&mut bools, width, height)?;
     bools.exit()?;
     if br.bits_left() != 0 {
         return Err(Error::BadHeader);
@@ -141,19 +147,26 @@ fn delta_q(br: &mut BitReader<'_>) -> Result<i32, Error> {
     }
 }
 
-fn decode_tile(bools: &mut BoolDecoder<'_, '_>) -> Result<Frame, Error> {
+fn decode_tile(
+    bools: &mut BoolDecoder<'_, '_>,
+    width: usize,
+    height: usize,
+) -> Result<Frame, Error> {
+    let chroma = (width / 2) * (height / 2);
     let mut pic = Pic {
-        width: 8,
-        height: 8,
-        y: vec![0; 64],
-        u: vec![0; 16],
-        v: vec![0; 16],
+        width,
+        height,
+        mi: width / 8,
+        y: vec![0; width * height],
+        u: vec![0; chroma],
+        v: vec![0; chroma],
         above_nz: [[0; 4]; 3],
         left_nz: [[0; 4]; 3],
+        skips: [0; 4],
+        above_part: [0; 8],
+        left_part: [0; 8],
     };
-    let above = [0u8; 8];
-    let left = [0u8; 8];
-    decode_partition(bools, &mut pic, 0, 0, BLOCK_64X64, &above, &left)?;
+    decode_partition(bools, &mut pic, 0, 0, BLOCK_64X64)?;
     Ok(Frame {
         width: pic.width,
         height: pic.height,
@@ -169,10 +182,8 @@ fn decode_partition(
     row: usize,
     col: usize,
     bsize: usize,
-    above: &[u8],
-    left: &[u8],
 ) -> Result<(), Error> {
-    if row >= 1 || col >= 1 {
+    if row >= pic.mi || col >= pic.mi {
         return Ok(());
     }
     let num8 = match bsize {
@@ -183,12 +194,12 @@ fn decode_partition(
         _ => return Err(Error::Unsupported),
     };
     let half = num8 >> 1;
-    let has_rows = row + half < 1;
-    let has_cols = col + half < 1;
+    let has_rows = row + half < pic.mi;
+    let has_cols = col + half < pic.mi;
     let partition = if !has_rows && !has_cols {
         PARTITION_SPLIT
     } else if has_rows && has_cols {
-        let ctx = partition_ctx(bsize, row, col, above, left, num8);
+        let ctx = partition_ctx(pic, bsize, row, col, num8)?;
         bools.tree(&PARTITION_TREE, |node| {
             if node >= 3 {
                 128
@@ -204,7 +215,9 @@ fn decode_partition(
         if partition != PARTITION_NONE {
             return Err(Error::Unsupported);
         }
-        return decode_block(bools, pic, row, col);
+        decode_block(bools, pic, row, col)?;
+        update_partition(pic, row, col, BLOCK_8X8, num8)?;
+        return Ok(());
     }
     if partition != PARTITION_SPLIT {
         return Err(Error::Unsupported);
@@ -215,32 +228,47 @@ fn decode_partition(
         BLOCK_16X16 => BLOCK_8X8,
         _ => return Err(Error::Unsupported),
     };
-    decode_partition(bools, pic, row, col, child, above, left)?;
-    decode_partition(bools, pic, row, col + half, child, above, left)?;
-    decode_partition(bools, pic, row + half, col, child, above, left)?;
-    decode_partition(bools, pic, row + half, col + half, child, above, left)?;
+    decode_partition(bools, pic, row, col, child)?;
+    decode_partition(bools, pic, row, col + half, child)?;
+    decode_partition(bools, pic, row + half, col, child)?;
+    decode_partition(bools, pic, row + half, col + half, child)?;
     Ok(())
 }
 
 fn partition_ctx(
+    pic: &Pic,
     bsize: usize,
     row: usize,
     col: usize,
-    above: &[u8],
-    left: &[u8],
     num8: usize,
-) -> usize {
+) -> Result<usize, Error> {
     let bsl = MI_WIDTH_LOG2[bsize];
     let boffset = MI_WIDTH_LOG2[BLOCK_64X64] - bsl;
     let mut above_acc = 0u8;
     let mut left_acc = 0u8;
     for i in 0..num8 {
-        above_acc |= above[col + i];
-        left_acc |= left[row + i];
+        above_acc |= *pic.above_part.get(col + i).ok_or(Error::Unsupported)?;
+        left_acc |= *pic.left_part.get(row + i).ok_or(Error::Unsupported)?;
     }
     let above_bit = u8::from(above_acc & (1 << boffset) != 0);
     let left_bit = u8::from(left_acc & (1 << boffset) != 0);
-    bsl * 4 + usize::from(left_bit) * 2 + usize::from(above_bit)
+    Ok(bsl * 4 + usize::from(left_bit) * 2 + usize::from(above_bit))
+}
+
+fn update_partition(
+    pic: &mut Pic,
+    row: usize,
+    col: usize,
+    subsize: usize,
+    num8: usize,
+) -> Result<(), Error> {
+    let above = 15u8 >> B_WIDTH_LOG2[subsize];
+    let left = 15u8 >> B_HEIGHT_LOG2[subsize];
+    for i in 0..num8 {
+        *pic.above_part.get_mut(col + i).ok_or(Error::Unsupported)? = above;
+        *pic.left_part.get_mut(row + i).ok_or(Error::Unsupported)? = left;
+    }
+    Ok(())
 }
 
 fn decode_block(
@@ -249,10 +277,11 @@ fn decode_block(
     row: usize,
     col: usize,
 ) -> Result<(), Error> {
-    let avail_u = row > 0;
-    let avail_l = col > 0;
-    let skip_ctx = usize::from(avail_u) + usize::from(avail_l);
+    let skip_ctx = neighbor_skip(pic, row, col)?;
     let skip = bools.tree(&BINARY_TREE, |_| SKIP_PROB[skip_ctx])?;
+    *pic.skips
+        .get_mut(row * pic.mi + col)
+        .ok_or(Error::Unsupported)? = u8::from(skip != 0);
     let above_mode = DC_PRED;
     let left_mode = DC_PRED;
     let y_mode = bools.tree(&INTRA_MODE_TREE, |node| {
@@ -262,18 +291,45 @@ fn decode_block(
     if y_mode != DC_PRED || uv_mode != DC_PRED {
         return Err(Error::Unsupported);
     }
-    residual(bools, pic, skip != 0)?;
+    residual(bools, pic, row, col, skip != 0)?;
     Ok(())
 }
 
-fn residual(bools: &mut BoolDecoder<'_, '_>, pic: &mut Pic, skip: bool) -> Result<(), Error> {
-    // 8x8 luma is four 4x4 transforms. 4:2:0 chroma is one 4x4 each.
-    let luma = [(0usize, 0usize), (4, 0), (0, 4), (4, 4)];
+fn neighbor_skip(pic: &Pic, row: usize, col: usize) -> Result<usize, Error> {
+    let mut ctx = 0usize;
+    if row > 0 {
+        ctx += usize::from(
+            *pic.skips
+                .get((row - 1) * pic.mi + col)
+                .ok_or(Error::Unsupported)?,
+        );
+    }
+    if col > 0 {
+        ctx += usize::from(
+            *pic.skips
+                .get(row * pic.mi + col - 1)
+                .ok_or(Error::Unsupported)?,
+        );
+    }
+    Ok(ctx)
+}
+
+fn residual(
+    bools: &mut BoolDecoder<'_, '_>,
+    pic: &mut Pic,
+    row: usize,
+    col: usize,
+    skip: bool,
+) -> Result<(), Error> {
+    // Each 8x8 luma block is four 4x4 transforms. 4:2:0 chroma is one 4x4 each.
+    let x0 = col * 8;
+    let y0 = row * 8;
+    let luma = [(x0, y0), (x0 + 4, y0), (x0, y0 + 4), (x0 + 4, y0 + 4)];
     for (x, y) in luma {
         transform(bools, pic, 0, x, y, skip)?;
     }
-    transform(bools, pic, 1, 0, 0, skip)?;
-    transform(bools, pic, 2, 0, 0, skip)?;
+    transform(bools, pic, 1, col * 4, row * 4, skip)?;
+    transform(bools, pic, 2, col * 4, row * 4, skip)?;
     Ok(())
 }
 
@@ -297,6 +353,9 @@ fn transform(
     }
     let x4 = x >> 2;
     let y4 = y >> 2;
+    if plane >= 3 || x4 >= 4 || y4 >= 4 {
+        return Err(Error::Unsupported);
+    }
     pic.above_nz[plane][x4] = nonzero;
     pic.left_nz[plane][y4] = nonzero;
     Ok(())

@@ -2,6 +2,8 @@ use export_vp9::{decode_ivf, decode_keyframe, Error};
 
 const IVF: &[u8] = include_bytes!("../testdata/keyframe.ivf");
 const YUV: &[u8] = include_bytes!("../testdata/ffmpeg.yuv");
+const IVF16: &[u8] = include_bytes!("../testdata/keyframe-16.ivf");
+const YUV16: &[u8] = include_bytes!("../testdata/ffmpeg-16.yuv");
 
 fn payload() -> &'static [u8] {
     &IVF[44..]
@@ -62,6 +64,34 @@ fn vp8_unsupported() {
     let mut file = IVF.to_vec();
     file[8..12].copy_from_slice(b"VP80");
     assert_eq!(decode_ivf(&file), Err(Error::Unsupported));
+}
+
+#[test]
+fn pixels_16_match_ffmpeg_within_bound() {
+    let frame = decode_ivf(IVF16).expect("16x16 keyframe");
+    assert_eq!((frame.width, frame.height), (16, 16));
+    let mut got = Vec::new();
+    got.extend_from_slice(&frame.y);
+    got.extend_from_slice(&frame.u);
+    got.extend_from_slice(&frame.v);
+    assert_eq!(got.len(), YUV16.len());
+    let mut max_abs = 0i32;
+    for (decoded, ffmpeg) in got.iter().zip(YUV16.iter()) {
+        let diff = (i32::from(*decoded) - i32::from(*ffmpeg)).abs();
+        max_abs = max_abs.max(diff);
+    }
+    let error_bound = 0;
+    assert!(
+        max_abs <= error_bound,
+        "max abs error {max_abs} exceeds bound {error_bound}"
+    );
+    assert_eq!(got.as_slice(), YUV16);
+}
+
+#[test]
+fn truncated_16_errors() {
+    assert_eq!(decode_ivf(&IVF16[..10]), Err(Error::Truncated));
+    assert_eq!(decode_keyframe(&IVF16[44..52]), Err(Error::Truncated));
 }
 
 #[test]
