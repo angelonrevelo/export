@@ -14,6 +14,10 @@
 //! whose encoded size fits the cap. A source already at or under the cap is
 //! copied. The content hash is SHA-256, computed once per call, and a repeat
 //! of the same bytes and cap returns the cached encode without running it again.
+//!
+//! [`thumbnail_jpeg`] is a separate path: the long edge is at most 220 pixels
+//! and the JPEG quality is 72. Buffers larger than 50 MiB are rejected before
+//! decode. Progressive, arithmetic, and unknown JPEG markers stay errors.
 
 #![forbid(unsafe_code)]
 
@@ -26,6 +30,7 @@ mod resize;
 mod sha256;
 mod shrink;
 mod sniff;
+mod thumb;
 
 pub use error::{Error, ErrorCode};
 pub use jpeg::{decode_jpeg, encode_jpeg};
@@ -35,6 +40,7 @@ pub use resize::{resize, Filter};
 pub use sha256::{sha256, Sha256};
 pub use shrink::{shrink_png, Probe, ShrinkCache, ShrinkOutcome};
 pub use sniff::{sniff, Format};
+pub use thumb::{thumbnail_jpeg, Thumbnail, THUMB_LONG_EDGE, THUMB_QUALITY, THUMB_READ_LIMIT};
 
 /// Decompressed pixel cap. Matches the product limit of 64 million pixels.
 pub const MAX_PIXELS: u64 = 64_000_000;

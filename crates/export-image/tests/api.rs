@@ -1,6 +1,6 @@
 use export_image::{
     decode_jpeg, decode_png, encode_jpeg, encode_png, resize, restore_lossless_all, sha256,
-    shrink_png, sniff, Filter, Format, Raster, ShrinkCache,
+    shrink_png, sniff, thumbnail_jpeg, Filter, Format, Raster, ShrinkCache,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -217,6 +217,47 @@ fn impossible_cap_is_an_error() {
     let mut cache = ShrinkCache::new();
     let err = shrink_png(&png, 80, &mut cache).unwrap_err();
     assert_eq!(err.code, export_image::ErrorCode::OverBudget);
+}
+
+#[test]
+fn thumbnail_fits_the_long_edge_and_encodes_at_72() {
+    let src = solid(640, 480, [20, 40, 60]);
+    let png = encode_png(&src).unwrap();
+    let thumb = thumbnail_jpeg(&png).unwrap();
+    assert_eq!((thumb.width, thumb.height), (220, 165));
+    let fitted = resize(&src, 220, 165, Filter::Area).unwrap();
+    assert_eq!(thumb.jpeg, encode_jpeg(&fitted, 72).unwrap());
+    let back = decode_jpeg(&thumb.jpeg).unwrap();
+    assert_eq!((back.width, back.height), (220, 165));
+
+    let small = thumbnail_jpeg(&encode_png(&solid(8, 8, [1, 2, 3])).unwrap()).unwrap();
+    assert_eq!((small.width, small.height), (8, 8));
+
+    let portrait = thumbnail_jpeg(&encode_png(&solid(480, 640, [9, 9, 9])).unwrap()).unwrap();
+    assert_eq!((portrait.width, portrait.height), (165, 220));
+}
+
+#[test]
+fn foreign_baseline_420_matches_an_independent_decode() {
+    let jpeg = include_bytes!("fixtures/baseline_420.jpg");
+    assert!(jpeg.windows(4).any(|w| w == b"Lavc"));
+    let decoded = decode_jpeg(jpeg).unwrap();
+    let reference = include_bytes!("fixtures/baseline_420.rgb");
+    assert_eq!((decoded.width, decoded.height, decoded.channels), (32, 24, 3));
+    assert_eq!(decoded.pixels.len(), reference.len());
+    let mut max_abs = 0u8;
+    let mut sum = 0u64;
+    for (&got, &want) in decoded.pixels.iter().zip(reference.iter()) {
+        let d = got.abs_diff(want);
+        max_abs = max_abs.max(d);
+        sum += u64::from(d);
+    }
+    assert!(max_abs <= 3, "max channel error {max_abs}");
+    assert!(
+        sum < reference.len() as u64,
+        "mae {}",
+        sum as f64 / reference.len() as f64
+    );
 }
 
 #[test]

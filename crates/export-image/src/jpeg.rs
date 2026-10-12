@@ -1,7 +1,11 @@
-//! Baseline JPEG (ITU-T T.81), 8-bit Huffman, 4:2:0 encode.
+//! Baseline JPEG (ITU-T T.81), 8-bit Huffman, 4:2:0.
 //!
-//! The decoder accepts the files this encoder writes: SOF0, three components,
-//! 2×2 luma and 1×1 chroma. Progressive and arithmetic streams are rejected.
+//! Decode accepts SOF0 files with three components, 2×2 luma and 1×1 chroma,
+//! including files this encoder did not write, as long as the scan uses
+//! baseline spectral selection (Ss = 0, Se = 63, Ah = Al = 0) and the Huffman
+//! tables carried in the file. Progressive (SOF2), arithmetic (SOF9/SOF10 and
+//! the other arithmetic frames), and unknown markers are errors. They are not
+//! decoded.
 
 use crate::error::{Error, INVALID, TOO_LARGE, TRUNCATED, UNSUPPORTED};
 use crate::raster::Raster;
@@ -616,6 +620,11 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
         if marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
             continue;
         }
+        // Progressive, extended, lossless, and arithmetic frames are rejected
+        // before the segment length is read. They are not decoded.
+        if unsupported_frame(marker) {
+            return Err(UNSUPPORTED);
+        }
         if i + 2 > bytes.len() {
             return Err(TRUNCATED);
         }
@@ -650,17 +659,24 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
                     let p = 6 + c * 3;
                     let hv = payload[p + 1];
                     comps.push(Comp {
+                        id: payload[p],
                         h: hv >> 4,
                         v: hv & 0x0f,
                         tq: payload[p + 2],
+                        dc: 0,
+                        ac: 0,
                     });
                 }
-                if comps[0].h != 2 || comps[0].v != 2 || comps[1].h != 1 || comps[1].v != 1 || comps[2].h != 1 || comps[2].v != 1
+                if comps[0].h != 2
+                    || comps[0].v != 2
+                    || comps[1].h != 1
+                    || comps[1].v != 1
+                    || comps[2].h != 1
+                    || comps[2].v != 1
                 {
                     return Err(UNSUPPORTED);
                 }
             }
-            0xc2 | 0xc1 => return Err(UNSUPPORTED),
             0xdb => {
                 let mut p = 0;
                 while p < payload.len() {
@@ -709,7 +725,10 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
                     }
                 }
             }
-            0xda => break,
+            0xda => {
+                bind_scan(&mut comps, payload)?;
+                break;
+            }
             0xdd => {
                 if payload != [0, 0] {
                     return Err(UNSUPPORTED);
@@ -736,12 +755,15 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
     let mcus_x = width.div_ceil(16);
     let mcus_y = height.div_ceil(16);
     let mut prev = [0i32; 3];
-    let qy = &quant[comps[0].tq as usize];
-    let qc1 = &quant[comps[1].tq as usize];
-    let qc2 = &quant[comps[2].tq as usize];
-    if !quant_set[comps[0].tq as usize] {
-        return Err(INVALID);
+    for comp in &comps {
+        let tq = usize::from(comp.tq);
+        if tq > 3 || !quant_set[tq] {
+            return Err(INVALID);
+        }
     }
+    let qy = &quant[usize::from(comps[0].tq)];
+    let qc1 = &quant[usize::from(comps[1].tq)];
+    let qc2 = &quant[usize::from(comps[2].tq)];
     for my in 0..mcus_y {
         for mx in 0..mcus_x {
             let mut yplane = [0u8; 256];
@@ -749,8 +771,8 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
                 for bx in 0..2u32 {
                     let block = decode_block(
                         &mut reader,
-                        table(&huff_dc, 0)?,
-                        table(&huff_ac, 0)?,
+                        table(&huff_dc, usize::from(comps[0].dc))?,
+                        table(&huff_ac, usize::from(comps[0].ac))?,
                         qy,
                         &mut prev[0],
                     )?;
@@ -764,15 +786,15 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
             }
             let cb = decode_block(
                 &mut reader,
-                table(&huff_dc, 1)?,
-                table(&huff_ac, 1)?,
+                table(&huff_dc, usize::from(comps[1].dc))?,
+                table(&huff_ac, usize::from(comps[1].ac))?,
                 qc1,
                 &mut prev[1],
             )?;
             let cr = decode_block(
                 &mut reader,
-                table(&huff_dc, 1)?,
-                table(&huff_ac, 1)?,
+                table(&huff_dc, usize::from(comps[2].dc))?,
+                table(&huff_ac, usize::from(comps[2].ac))?,
                 qc2,
                 &mut prev[2],
             )?;
@@ -800,9 +822,50 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
 }
 
 struct Comp {
+    id: u8,
     h: u8,
     v: u8,
     tq: u8,
+    dc: u8,
+    ac: u8,
+}
+
+fn unsupported_frame(marker: u8) -> bool {
+    matches!(
+        marker,
+        0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7 | 0xc9 | 0xca | 0xcb | 0xcd | 0xce | 0xcf
+    )
+}
+
+/// Record the Huffman table selectors from SOS. Component order must match SOF.
+/// Spectral selection and successive approximation are rejected.
+fn bind_scan(comps: &mut [Comp], payload: &[u8]) -> Result<(), Error> {
+    if payload.is_empty() {
+        return Err(INVALID);
+    }
+    let ns = usize::from(payload[0]);
+    if ns != comps.len() || payload.len() < 1 + ns * 2 + 3 {
+        return Err(INVALID);
+    }
+    for s in 0..ns {
+        let id = payload[1 + s * 2];
+        let sel = payload[2 + s * 2];
+        if id != comps[s].id {
+            return Err(UNSUPPORTED);
+        }
+        let dc = sel >> 4;
+        let ac = sel & 0x0f;
+        if dc > 3 || ac > 3 {
+            return Err(INVALID);
+        }
+        comps[s].dc = dc;
+        comps[s].ac = ac;
+    }
+    let spec = &payload[1 + ns * 2..];
+    if spec[0] != 0 || spec[1] != 63 || spec[2] != 0 {
+        return Err(UNSUPPORTED);
+    }
+    Ok(())
 }
 
 fn table(tables: &[Option<HuffDec>; 4], id: usize) -> Result<&HuffDec, Error> {
@@ -842,5 +905,25 @@ mod tests {
         assert_eq!(sum(&BITS_DC_CHROMA), VALS_DC_CHROMA.len());
         assert_eq!(sum(&BITS_AC_LUMA), VALS_AC_LUMA.len());
         assert_eq!(sum(&BITS_AC_CHROMA), VALS_AC_CHROMA.len());
+    }
+
+    #[test]
+    fn progressive_arithmetic_and_unknown_markers_error() {
+        for marker in [0xc2u8, 0xc9, 0xca, 0x02] {
+            let bytes = [
+                0xff, 0xd8, 0xff, marker, 0x00, 0x0b, 0x08, 0x00, 0x08, 0x00, 0x08, 0x01, 0x01,
+                0x11, 0x00,
+            ];
+            let err = decode_jpeg(&bytes).unwrap_err();
+            assert_eq!(err.code, crate::error::ErrorCode::Unsupported, "marker {marker:#x}");
+        }
+        // APP0 is a known marker and is skipped. The next frame is arithmetic.
+        let bytes = [
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xca, 0x00, 0x03, 0x00,
+        ];
+        assert_eq!(
+            decode_jpeg(&bytes).unwrap_err().code,
+            crate::error::ErrorCode::Unsupported
+        );
     }
 }

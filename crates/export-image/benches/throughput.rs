@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_image::{
-    decode_png, encode_jpeg, encode_png, resize, restore_lossless_all, shrink_png, Filter, Raster,
-    ShrinkCache,
+    decode_png, encode_jpeg, encode_png, resize, restore_lossless_all, shrink_png, thumbnail_jpeg,
+    Filter, Raster, ShrinkCache,
 };
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
@@ -205,5 +205,27 @@ fn main() {
     println!(
         "lossless_restore seen={} restored={} failed={}",
         report.seen, report.restored, report.failed
+    );
+
+    // Appended measurement. The rows above are unchanged.
+    for _ in 0..2 {
+        let _ = thumbnail_jpeg(&png).unwrap();
+    }
+    let (p50, p99) = time_n(20, || {
+        let _ = thumbnail_jpeg(&png).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let thumb = thumbnail_jpeg(&png).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    println!(
+        "thumbnail_q72 {w}x{h}->{}x{} quality=72 read_limit={} out_bytes={} samples=20 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        thumb.width,
+        thumb.height,
+        export_image::THUMB_READ_LIMIT,
+        thumb.jpeg.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(pixel_bytes, p50),
+        allocs as f64 / (pixels / 1_000_000.0),
     );
 }

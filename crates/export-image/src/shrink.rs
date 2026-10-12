@@ -220,7 +220,7 @@ fn remember(cache: &mut ShrinkCache, target: u64, outcome: &ShrinkOutcome) {
     );
 }
 
-fn into_rgb(src: Raster) -> Result<Raster, Error> {
+pub(crate) fn into_rgb(src: Raster) -> Result<Raster, Error> {
     match src.channels {
         3 => Ok(src),
         1 => {
