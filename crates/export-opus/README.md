@@ -19,10 +19,11 @@ The library does not call ffmpeg. A host script may call ffmpeg only to decode t
 cargo test
 cargo bench --bench packet
 cargo bench --bench sine
+cargo bench --bench sine-third
 cargo build --release --target wasm32-unknown-unknown --lib
 python3 scripts/verify-ffmpeg.py
 ```
 
-The silence bench is single-threaded (threading off) and prints p50 and p99 for the silence packet, including the truncated-packet error. The silence encode row (p50 350 ns) and the sine encode rows (p50 52 ns and 49 ns) are unchanged. `cargo bench --bench sine` times only the first half-scale 440 Hz packet.
+The silence bench is single-threaded (threading off) and prints p50 and p99 for the silence packet, including the truncated-packet error. The silence encode row (p50 350 ns) and the first sine encode rows (p50 52 ns and 49 ns) are unchanged. `cargo bench --bench sine` times only the first half-scale 440 Hz packet. `cargo bench --bench sine-third` times encode of the third 20 ms packet only.
 
 License: MIT OR Apache-2.0.

@@ -29,6 +29,11 @@ harness = false
 name = "sine"
 harness = false
 
+[[bench]]
+name = "sine-third"
+path = "benches/sine_third.rs"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "thin"
