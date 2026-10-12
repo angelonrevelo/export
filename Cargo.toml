@@ -17,6 +17,7 @@ members = [
     "crates/export-meta",
     "crates/export-mp3",
     "crates/export-opus",
+    "crates/export-oracle",
     "crates/export-pack",
     "crates/export-pdf",
     "crates/export-sheet",
