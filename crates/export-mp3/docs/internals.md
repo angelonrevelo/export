@@ -11,21 +11,21 @@ Not implemented, and rejected rather than guessed:
 - stereo, joint stereo, dual channel (`Error::Unsupported`)
 - sample rates other than 44.1 kHz (`Error::Unsupported`)
 - short blocks and mixed blocks (`Error::Unsupported`)
-- big-value Huffman tables and count-1 table B (`Error::Unsupported`)
+- big-value Huffman tables other than table 5, and count-1 table B (`Error::Unsupported`)
 - scale-factor bits (`scalefac_compress != 0` is `Error::Unsupported`)
 - MPEG-2 / MPEG-2.5, Layer I/II, free bitrate, reserved header fields (`Error::BadHeader`)
 
 ## Signal model
 
-Silence is `part2_3_length = 0` for both granules. The hybrid filterbank of a zero spectrum is exact silence, so decode returns `0.0` without running it.
+Silence is `part2_3_length = 0` and `big_values = 0` for both granules. The hybrid filterbank of a zero spectrum is exact silence, so decode returns `0.0` without running it.
 
-A non-silent block stores table A code `0111` plus a sign bit in each granule. That quadruple is `(±1, 0, 0, 0)`. `global_gain` is `round(210 + 4 * log2(peak))` clamped to `0..=255`, which is the Layer III unit-line exponent. The decoder requantizes with `sign * |is|^(4/3) * 2^((global_gain - 210) / 4)`, then a 36-point IMDCT, alias reduction, and a 32-band polyphase synthesis.
+A non-silent block stores the first 16 long-block MDCT lines of subband 0 in each granule. `big_values` is 8, region 0 ends at line 16 (`region0_count = 3`), and the pairs are Huffman table 5 (magnitudes 0..=3, no linbits). Lines 16 and 17, and every other subband, stay zero. `global_gain` is chosen so the largest rounded magnitude is at most 3 and as large as that limit allows. The decoder requantizes with `sign * |is|^(4/3) * 2^((global_gain - 210) / 4)`, then alias reduction, a 36-point IMDCT, and a 32-band polyphase synthesis. A `big_values == 0` payload is still count-1 table A. The encoder does not write that payload.
 
-The synthesis window is a 512-tap sine prototype, not a claim that the 512 ISO window coefficients were copied. Sample-level agreement with ffmpeg is therefore not claimed. The host script only checks that ffmpeg accepts the bytes and emits non-silent PCM for a non-silent frame.
+The analysis window is the 512-point polyphase window. The synthesis window is a 512-tap sine prototype. Sample-level agreement with ffmpeg is therefore not claimed. The host script only checks that ffmpeg accepts the bytes.
 
-This is not a waveform encoder. `half_scale_440hz` is `0.5 * sin(2π * 440 * n / 44100)` for 1152 samples. `decode_frame(encode_frame(...))` against that buffer has max absolute error 2.956202984 (same figure in debug and release). The decoded block is the filterbank output of one count-1 pulse, not the sine.
+`half_scale_440hz` is `0.5 * sin(2π * 440 * n / 44100)` for 1152 samples. `decode_frame(encode_frame(...))` against that buffer has max absolute error 0.680283487 (same figure in debug and release). The decoded block is those 16 quantized lines through this crate's filterbank, not the sine.
 
-On the two-copy file ffmpeg already opens, the host decode is 2304 float samples, absolute peak 0.361100197, RMS 0.297404371. That is neither near the half-scale sine (best absolute correlation 0.040; estimated 440 Hz amplitude 0.0024) nor near zero (about 1614 samples have absolute value above 0.25). The shape is a slow negative offset. The library does not call ffmpeg.
+On the two-copy file ffmpeg already opens, the host decode is 2304 float samples, absolute peak 0.537770271, RMS 0.185432036, best absolute correlation with the sine 0.750842570. That correlation is above 0.5. The sample-aligned error in this crate is 0.680283487, so the frame is not a waveform encoding of the sine. The library does not call ffmpeg.
 
 ## ffmpeg
 

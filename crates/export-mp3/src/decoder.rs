@@ -297,16 +297,33 @@ fn decode_granules(side: &SideInfo, main: &[u8], pcm: &mut [f32]) -> Result<(), 
     Ok(())
 }
 
+/// 44.1 kHz long-block scalefactor-band starts. Region 0 with
+/// `region0_count = 3` ends at line 16.
+const LONG_BANDS: [usize; 23] = [
+    0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 52, 62, 74, 90, 110, 134, 162, 196, 238, 288, 342, 418,
+    576,
+];
+
 /// Huffman-decode one granule and requantize it.
 ///
 /// An empty region (`part2_3_length == 0`, `big_values == 0`) is 576 zeros.
-/// A count-1 region (table A, `big_values == 0`) is the pulse
-/// [`crate::encode_frame`] writes for non-silent PCM. Big-value Huffman
+/// `big_values == 0` with a payload is count-1 table A. Non-zero `big_values`
+/// are Huffman table 5 only (magnitudes 0..=3, no linbits). Other big-value
 /// tables, table B, and scale-factor payloads are rejected.
 fn decode_spectrum(granule: &Granule, reader: &mut BitReader<'_>) -> Result<[f32; 576], Error> {
-    if granule.big_values != 0 || granule.scalefac_compress != 0 {
+    if granule.scalefac_compress != 0 {
         return Err(Error::Unsupported);
     }
+    if granule.big_values == 0 {
+        return decode_count1(granule, reader);
+    }
+    if granule.preflag || granule.scalefac_scale != 0 {
+        return Err(Error::Unsupported);
+    }
+    decode_table5(granule, reader)
+}
+
+fn decode_count1(granule: &Granule, reader: &mut BitReader<'_>) -> Result<[f32; 576], Error> {
     if granule.part2_3_length == 0 {
         return Ok([0.0; 576]);
     }
@@ -336,6 +353,107 @@ fn decode_spectrum(granule: &Granule, reader: &mut BitReader<'_>) -> Result<[f32
         *dest = if *quant < 0 { -shaped } else { shaped };
     }
     Ok(xr)
+}
+
+fn decode_table5(granule: &Granule, reader: &mut BitReader<'_>) -> Result<[f32; 576], Error> {
+    let r0 = granule.region0_count as usize + 1;
+    let r1 = granule.region0_count as usize + granule.region1_count as usize + 2;
+    if r0 >= LONG_BANDS.len() || r1 >= LONG_BANDS.len() {
+        return Err(Error::InvalidFrame);
+    }
+    let region0_end = LONG_BANDS[r0];
+    let region1_end = LONG_BANDS[r1];
+    let mut lines = [0i32; 576];
+    for pair in 0..granule.big_values as usize {
+        let line = pair * 2;
+        let table = if line < region0_end {
+            granule.table_select[0]
+        } else if line < region1_end {
+            granule.table_select[1]
+        } else {
+            granule.table_select[2]
+        };
+        if table != 5 {
+            return Err(Error::Unsupported);
+        }
+        let (x, y) = decode_table5_pair(reader)?;
+        lines[line] = x;
+        lines[line + 1] = y;
+    }
+    Ok(requantize(&lines, granule.global_gain))
+}
+
+fn requantize(lines: &[i32; 576], global_gain: i32) -> [f32; 576] {
+    let scale = requant_scale(global_gain);
+    let mut xr = [0.0f32; 576];
+    for (dest, quant) in xr.iter_mut().zip(lines.iter()) {
+        if *quant == 0 {
+            continue;
+        }
+        let mag = (*quant).abs() as f32;
+        let shaped = mag.powf(4.0 / 3.0) * scale;
+        *dest = if *quant < 0 { -shaped } else { shaped };
+    }
+    xr
+}
+
+/// ISO/IEC 11172-3 Huffman table 5. A non-zero component takes one sign bit
+/// (1 = negative).
+fn decode_table5_pair(reader: &mut BitReader<'_>) -> Result<(i32, i32), Error> {
+    let (x, y) = if reader.bits(1)? == 1 {
+        (0, 0)
+    } else {
+        match reader.bits(2)? {
+            0b10 => (0, 1),
+            0b11 => (1, 0),
+            0b01 => (1, 1),
+            0b00 => decode_table5_rest(reader)?,
+            _ => return Err(Error::InvalidFrame),
+        }
+    };
+    Ok((apply_sign(reader, x)?, apply_sign(reader, y)?))
+}
+
+fn decode_table5_rest(reader: &mut BitReader<'_>) -> Result<(i32, i32), Error> {
+    Ok(match reader.bits(3)? {
+        0b110 => (0, 2),
+        0b111 => (2, 0),
+        0b100 => (1, 2),
+        0b101 => (2, 1),
+        0b010 => {
+            if reader.bits(1)? == 1 {
+                (0, 3)
+            } else {
+                (1, 3)
+            }
+        }
+        0b011 => {
+            if reader.bits(1)? == 1 {
+                (2, 2)
+            } else {
+                (3, 0)
+            }
+        }
+        0b001 => (3, 1),
+        0b000 => {
+            if reader.bits(1)? == 1 {
+                (3, 2)
+            } else if reader.bits(1)? == 1 {
+                (2, 3)
+            } else {
+                (3, 3)
+            }
+        }
+        _ => return Err(Error::InvalidFrame),
+    })
+}
+
+fn apply_sign(reader: &mut BitReader<'_>, mag: i32) -> Result<i32, Error> {
+    if mag == 0 {
+        return Ok(0);
+    }
+    let sign = reader.bits(1)?;
+    Ok(if sign == 1 { -mag } else { mag })
 }
 
 fn requant_scale(global_gain: i32) -> f32 {
@@ -615,9 +733,9 @@ mod tests {
             .iter()
             .zip(decoded.iter())
             .fold(0.0f32, |max, (src, out)| max.max((src - out).abs()));
-        // Measured on this pulse frame. Not a waveform match.
+        // Measured on the 16-line frame, debug and release. Not a sample match.
         assert!(
-            (max_abs - 2.956_203).abs() < 1.0e-5,
+            (f64::from(max_abs) - 0.680_283_487).abs() < 1.0e-8,
             "max abs error {max_abs}"
         );
         assert!(decoded.iter().all(|sample| sample.is_finite()));
@@ -637,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn pulse_sign_flips_the_waveform() {
+    fn negated_pcm_flips_the_waveform() {
         let mut positive = [0.0f32; FRAME_SAMPLES];
         let mut negative = [0.0f32; FRAME_SAMPLES];
         positive[0] = 0.5;

@@ -7,9 +7,9 @@ This is not a song encoder. There is no bit reservoir, no ID3 tag, no second fra
 ## What the frame contains
 
 - Silence (every sample `0.0`) is an empty Huffman region. Decoding it returns 1152 exact zeros.
-- Any other finite block is one count-1 pulse per granule (`±1` on the first spectral line, `global_gain` taken from the peak). Decoding runs requantization, the long-block IMDCT, and the polyphase synthesis filter, and returns 1152 PCM samples.
+- Any other finite block stores the first 16 quantized long-block MDCT lines of each granule (Huffman table 5, magnitudes 0..=3). Decoding runs requantization, alias reduction, the long-block IMDCT, and the polyphase synthesis filter, and returns 1152 PCM samples.
 
-This is not a waveform encoder. A half-scale 440 Hz sine (1152 samples at 44.1 kHz) encodes as that same pulse. Decoding it does not return the sine. The max absolute sample error is 2.956202984. ffmpeg, given two copies of that frame, emits 2304 samples with absolute peak 0.361100197 and RMS 0.297404371. Those samples are neither the sine nor silence. A negative block decodes to the negation of the positive block at the same peak. That is the whole signal model.
+A half-scale 440 Hz sine (1152 samples at 44.1 kHz) encodes as those 16 lines. Decoding it in this crate does not return the sine. The sample-aligned max absolute error is 0.680283487 in both debug and release. ffmpeg still opens that frame only after the host repeats it. On that two-copy file the decode is 2304 samples, absolute peak 0.537770271, RMS 0.185432036, and the best absolute correlation with the sine is 0.750842570. That correlation is above 0.5. The sample-aligned error is 0.680283487, so the decoded block is not the sine and this is not a waveform encoder. A negative block decodes to the negation of the positive block.
 
 Stereo, joint stereo, and dual channel return `Error::Unsupported`. A buffer shorter than the frame declared by the header returns `Error::Truncated`. An illegal sync, layer, bitrate, sample-rate, or emphasis field returns `Error::BadHeader`.
 
