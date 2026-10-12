@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.74"
-description = "Portable file-metadata record: times, comment, tags, and an in-place header scrub."
+description = "Portable file-metadata record, header scrub, and ECMA-376 standard OOXML decrypt."
 
 # Zero dependencies. Checksums and the byte layout are hand-written so a wrong
 # decoder cannot hide behind a crate that "usually" matches.
@@ -23,4 +23,8 @@ codegen-units = 1
 
 [[bench]]
 name = "scrub"
+harness = false
+
+[[bench]]
+name = "ooxml"
 harness = false

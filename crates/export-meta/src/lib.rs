@@ -51,6 +51,8 @@
 //!   one temporary name.
 //! - The record starts at byte 0 of the stream. There is no embedded offset.
 //! - No older magic is recognised. This is the first one.
+//! - [`decrypt_ooxml`] is a separate path. It does not read or write this record,
+//!   and [`scrub`] does not decrypt.
 //!
 //! ```
 //! use export_meta::{read, scrub, write, Record};
@@ -76,7 +78,12 @@
 
 #![forbid(unsafe_code)]
 
+mod aes;
 mod crc;
+mod ooxml;
+mod sha1;
+
+pub use ooxml::{decrypt_ooxml, encrypt_ooxml, DecryptError};
 
 use crc::{crc32, Crc32};
 use std::fs::{self, File};
