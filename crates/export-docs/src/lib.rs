@@ -23,6 +23,7 @@ mod htmlpdf;
 mod markdown;
 mod pdf;
 mod pptx;
+mod rtf;
 mod stats;
 mod xml;
 mod zip;

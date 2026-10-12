@@ -54,7 +54,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "pdf", target: "decrypt", ready: false, note: "MISS: decryption is not implemented" },
     Pair { source: "pdf", target: "docx", ready: false, note: "MISS: pdf2docx layout rebuild is not implemented" },
     Pair { source: "pdf", target: "png", ready: false, note: "MISS: rasterize is out of scope" },
-    Pair { source: "rtf", target: "html", ready: false, note: "MISS: rtf reader is not implemented" },
+    Pair { source: "rtf", target: "html", ready: false, note: "MISS: only a generated rtf of paragraphs and bold converts; other files stay a miss" },
     Pair { source: "epub", target: "html", ready: false, note: "MISS: only a generated epub whose spine is one xhtml file converts; other packages stay a miss" },
     Pair { source: "pptx", target: "html", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: legacy .doc has no reader; LibreOffice was the only hop" },
@@ -90,6 +90,9 @@ pub fn convert_to<R: Read + Seek, W: Write>(
     }
     if source == "epub" && target == "html" {
         return crate::epub::epub_to_html(input, output);
+    }
+    if source == "rtf" && target == "html" {
+        return crate::rtf::rtf_to_html(input, output);
     }
     if !pair_ready(&source, &target) {
         let note = PAIRS

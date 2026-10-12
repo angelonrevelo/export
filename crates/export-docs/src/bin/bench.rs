@@ -382,6 +382,56 @@ fn epub_two_spine() -> Vec<u8> {
     ])
 }
 
+fn report_rtf() {
+    let doc = rtf_paragraphs();
+    let sample = measure(|| ready_bytes("rtf", "html", &doc));
+    emit_ready("rtf→html text", doc.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "rtf→html text p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(doc.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            doc.len(),
+            sample.output_bytes,
+        );
+    }
+    let pict = rtf_pict();
+    match convert("rtf", "html", &pict) {
+        Ok(_) => {
+            eprintln!("pict rtf produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", pict.len()))
+            {
+                eprintln!("rtf miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("rtf→html pict", pict.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn rtf_paragraphs() -> Vec<u8> {
+    let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}");
+    for i in 0..200 {
+        if i % 2 == 0 {
+            s.push_str(&format!("Paragraph {i} of the generated rtf file.\\par"));
+        } else {
+            s.push_str(&format!("{{\\b Paragraph {i} bold.}}\\par"));
+        }
+    }
+    s.push('}');
+    s.into_bytes()
+}
+
+fn rtf_pict() -> Vec<u8> {
+    b"{\\rtf1\\ansi{\\pict hello}\\par}".to_vec()
+}
+
 fn shrink_pdf_fixture() -> Vec<u8> {
     let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
     for i in 0..80 {
@@ -446,6 +496,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_epub();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--rtf") {
+        println!("export-docs rtf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_rtf();
         return;
     }
     let xml = docx_xml(2500);
