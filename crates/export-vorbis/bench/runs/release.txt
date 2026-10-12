@@ -1,0 +1,12 @@
+command: cargo bench --manifest-path crates/export-vorbis/Cargo.toml --bench latency
+profile: bench (opt-level 3, lto thin, codegen-units 1)
+rounds: 4000
+host: this workspace, 2026-10-12
+
+encode_ns p50=1375 p99=1824
+decode_ns p50=2057 p99=3328
+truncated_error_ns p50=195 p99=242
+combined_ns p50=1375 p99=3239
+
+The combined row includes encode, decode, and the truncated-packet error.
+These are timings, not a speedup claim.
