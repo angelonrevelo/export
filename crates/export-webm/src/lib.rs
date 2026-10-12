@@ -80,6 +80,41 @@ fn vp8_padded_webm(payload_len: usize) -> Vec<u8> {
     remux(&movie).expect("padded vp8 webm")
 }
 
+/// One WebM block whose payload is 4096 bytes and begins with the VP9 frame
+/// from [`vp9_webm`]. The payload is copied and is not decoded.
+pub fn vp9_4096_webm() -> Vec<u8> {
+    let parsed = demux(vp9_webm()).expect("one-block vp9 fixture");
+    let frame = &parsed.blocks[0].payload;
+    assert!(frame.len() < 4096);
+    let mut payload = vec![0u8; 4096];
+    payload[..frame.len()].copy_from_slice(frame);
+    let track = &parsed.tracks[0];
+    let movie = Movie {
+        doctype: "webm".to_owned(),
+        timestamp_scale: parsed.timestamp_scale,
+        tracks: vec![Track {
+            number: track.number,
+            uid: track.uid,
+            track_type: track.track_type,
+            codec_id: track.codec_id.clone(),
+            codec_private: track.codec_private.clone(),
+            pixel_width: track.pixel_width,
+            pixel_height: track.pixel_height,
+            colour_space: None,
+            sampling_frequency: None,
+            channels: None,
+        }],
+        blocks: vec![MediaBlock {
+            track: track.number,
+            cluster_timestamp: parsed.blocks[0].cluster_timestamp,
+            rel_timestamp: parsed.blocks[0].rel_timestamp,
+            flags: parsed.blocks[0].flags,
+            payload,
+        }],
+    };
+    remux(&movie).expect("padded vp9 webm")
+}
+
 use std::collections::BTreeMap;
 
 /// Remuxed bytes plus the single SHA-256 of the input that produced them.
@@ -301,6 +336,25 @@ mod tests {
             assert_eq!(left.payload, right.payload);
             assert_eq!(left.timestamp(), right.timestamp());
         }
+    }
+
+    #[test]
+    fn vp9_4096_payload_is_copied() {
+        let original_frame = demux(vp9_webm()).unwrap().blocks[0].payload.clone();
+        let file = vp9_4096_webm();
+        let parsed = demux(&file).unwrap();
+        assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_VP9);
+        assert_eq!(parsed.blocks.len(), 1);
+        assert_eq!(parsed.blocks[0].payload.len(), 4096);
+        assert_eq!(
+            &parsed.blocks[0].payload[..original_frame.len()],
+            &original_frame[..]
+        );
+        let copied = stream_copy(&file).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_VP9);
+        assert_eq!(again.blocks[0].payload, parsed.blocks[0].payload);
+        assert_eq!(again.blocks[0].timestamp(), parsed.blocks[0].timestamp());
     }
 
     #[test]
