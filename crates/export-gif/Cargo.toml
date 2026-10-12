@@ -22,3 +22,7 @@ codegen-units = 1
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "quantize"
+harness = false
