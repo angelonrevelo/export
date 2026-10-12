@@ -7,7 +7,8 @@
 //! only reference. [`encode_ip_motion`] uses one shared 16×16 vector instead.
 //! [`encode_sequence`] writes that I-frame plus up to fifteen P-frames. Each
 //! P-frame references the previous reconstruction and uses either zero motion
-//! or one shared vector.
+//! or one shared vector. [`encode_ip_split`] is one P-frame whose left and
+//! right macroblocks use two different vectors.
 //! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
@@ -194,6 +195,9 @@ pub struct Motion {
 /// Four luma samples to the right. Chroma follows by two samples.
 pub const SHIFTED_MV: Motion = Motion { mvx: 16, mvy: 0 };
 
+/// Four luma samples to the left. The right half of a split P-frame.
+pub const SPLIT_RIGHT_MV: Motion = Motion { mvx: -16, mvy: 0 };
+
 /// I-frame, then one P-frame that references only that reconstruction.
 ///
 /// Motion is zero. The leading bytes are exactly [`encode`] of `intra`.
@@ -246,6 +250,48 @@ pub fn encode_ip_motion(
     let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
     let (p_bytes, p_rec) =
         encode::encode_pframe_mv(predicted, &i_rec, opts.qp, motion.mvx, motion.mvy)?;
+    let mut annex_b = i_bytes;
+    annex_b.extend(p_bytes);
+    Ok(EncodedPair {
+        annex_b,
+        intra: i_rec,
+        predicted: p_rec,
+        qp: opts.qp,
+    })
+}
+
+/// I-frame, then one P-frame with two motion vectors.
+///
+/// Macroblock columns in the left half use `left`. The right half uses `right`.
+/// When both vectors are equal, the bytes match [`encode_ip_motion`]. A B-frame
+/// and a second pass are refused. A lone P-frame is still refused by [`encode`].
+pub fn encode_ip_split(
+    intra: &Yuv420,
+    predicted: &Yuv420,
+    opts: &EncodeOptions,
+    left: Motion,
+    right: Motion,
+) -> Result<EncodedPair, Error> {
+    intra.check()?;
+    predicted.check()?;
+    check_common(opts)?;
+    if matches!(opts.picture, Picture::Bipredicted) {
+        return Err(Error::BipredictedFrame);
+    }
+    if intra.width != predicted.width || intra.height != predicted.height {
+        return Err(Error::Shape);
+    }
+    let mb_w = (intra.width / 16) as usize;
+    let mb_h = (intra.height / 16) as usize;
+    let mut mvs = Vec::with_capacity(mb_w * mb_h);
+    for _row in 0..mb_h {
+        for mx in 0..mb_w {
+            let motion = if mx < mb_w / 2 { left } else { right };
+            mvs.push((motion.mvx, motion.mvy));
+        }
+    }
+    let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
+    let (p_bytes, p_rec) = encode::encode_pframe_mvs(predicted, &i_rec, opts.qp, &mvs, 1, false)?;
     let mut annex_b = i_bytes;
     annex_b.extend(p_bytes);
     Ok(EncodedPair {
@@ -441,6 +487,44 @@ pub fn fixture_160x160_shifted() -> Yuv420 {
 /// [`SHIFTED_MV`] predicts this picture from that I-frame.
 pub fn fixture_320x240_shifted() -> Yuv420 {
     shift_frame(&fixture_320x240(), 4)
+}
+
+/// 320×240 fixture split down the middle.
+///
+/// The left half is moved four luma samples left, so [`SHIFTED_MV`] predicts it.
+/// The right half is moved four luma samples right, so [`SPLIT_RIGHT_MV`] predicts it.
+pub fn fixture_320x240_split() -> Yuv420 {
+    let src = fixture_320x240();
+    let w = src.width as usize;
+    let h = src.height as usize;
+    let cw = w / 2;
+    let ch = h / 2;
+    Yuv420 {
+        width: src.width,
+        height: src.height,
+        y: shift_plane_halves(&src.y, w, h, 4, -4),
+        u: shift_plane_halves(&src.u, cw, ch, 2, -2),
+        v: shift_plane_halves(&src.v, cw, ch, 2, -2),
+    }
+}
+
+fn shift_plane_halves(
+    src: &[u8],
+    width: usize,
+    height: usize,
+    left_dx: i32,
+    right_dx: i32,
+) -> Vec<u8> {
+    let mid = width / 2;
+    let mut out = vec![0u8; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let dx = if x < mid { left_dx } else { right_dx };
+            let sx = (x as i32 + dx).clamp(0, width as i32 - 1) as usize;
+            out[y * width + x] = src[y * width + sx];
+        }
+    }
+    out
 }
 
 fn shift_frame(src: &Yuv420, dx_luma: i32) -> Yuv420 {

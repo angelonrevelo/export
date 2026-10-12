@@ -1,9 +1,10 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_160x160_eight,
-    fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_320x240,
-    fixture_320x240_predicted, fixture_320x240_shifted, fixture_32x32, fixture_32x32_eight,
-    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
-    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
+    encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence, fixture_160x160,
+    fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
+    fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
+    fixture_320x240_split, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
+    fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
+    PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -458,6 +459,75 @@ fn qvga_iframe_keeps_the_sixteen_picture_file() {
     assert_ne!(moved.annex_b, pair.annex_b);
     let mae = mean_absolute_error(&shifted, &moved.predicted);
     assert!(mae < 8.0, "shifted mae {mae}");
+}
+
+#[test]
+fn qvga_split_keeps_the_shifted_pair() {
+    let opts = EncodeOptions::default();
+    let frame = fixture_320x240();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.annex_b.len(), 19337);
+    let shifted = fixture_320x240_shifted();
+    let moved = encode_ip_motion(&frame, &shifted, &opts, SHIFTED_MV).unwrap();
+    assert_eq!(moved.annex_b.len(), 20024);
+    let uniform = encode_ip_split(&frame, &shifted, &opts, SHIFTED_MV, SHIFTED_MV).unwrap();
+    assert_eq!(uniform.annex_b, moved.annex_b);
+    let brighter = fixture_320x240_predicted();
+    let zero = encode_ip(&frame, &brighter, &opts).unwrap();
+    assert_eq!(zero.annex_b.len(), 29090);
+    let zero_split = encode_ip_split(
+        &frame,
+        &brighter,
+        &opts,
+        Motion { mvx: 0, mvy: 0 },
+        Motion { mvx: 0, mvy: 0 },
+    )
+    .unwrap();
+    assert_eq!(zero_split.annex_b, zero.annex_b);
+    let (intra, predicted) = fixture_160x160_sixteen();
+    assert_eq!(
+        encode_sequence(&intra, &predicted, &opts)
+            .unwrap()
+            .annex_b
+            .len(),
+        7814
+    );
+    let picture = fixture_320x240_split();
+    let pair = encode_ip_split(&frame, &picture, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(pair.annex_b.len(), 19954);
+    assert_eq!(&pair.annex_b[..19337], &encoded.annex_b[..]);
+    assert_ne!(pair.annex_b, moved.annex_b);
+    assert_ne!(pair.annex_b, zero.annex_b);
+    let mae = mean_absolute_error(&picture, &pair.predicted);
+    assert!(mae < 8.0, "split mae {mae}");
+    assert_eq!(
+        encode_ip_split(
+            &frame,
+            &picture,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            },
+            SHIFTED_MV,
+            SPLIT_RIGHT_MV,
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_ip_split(
+            &frame,
+            &picture,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            },
+            SHIFTED_MV,
+            SPLIT_RIGHT_MV,
+        )
+        .unwrap_err(),
+        Error::SecondPass
+    );
 }
 
 #[test]

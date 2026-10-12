@@ -739,8 +739,7 @@ fn mvp_16x16(mvs: &[(i32, i32)], mb_w: usize, mx: usize, my: usize) -> (i32, i32
 
 fn write_p_slice(
     slice: &Slice<'_>,
-    mvx: i32,
-    mvy: i32,
+    mvs: &[(i32, i32)],
     frame_num: u32,
     reference: bool,
 ) -> Vec<u8> {
@@ -759,13 +758,12 @@ fn write_p_slice(
     }
     b.write_se(0);
     b.write_ue(1);
-    let mb_count = mb_w * mb_h;
-    let mvs = vec![(mvx, mvy); mb_count];
     for my in 0..mb_h {
         for mx in 0..mb_w {
             let mb = my * mb_w + mx;
             let blocks = &slice.luma[mb * 16..(mb + 1) * 16];
-            let (px, py) = mvp_16x16(&mvs, mb_w, mx, my);
+            let (mvx, mvy) = mvs[mb];
+            let (px, py) = mvp_16x16(mvs, mb_w, mx, my);
             b.write_ue(0);
             b.write_ue(0);
             b.write_se(mvx - px);
@@ -843,22 +841,32 @@ pub fn encode_pframe_at(
     frame_num: u32,
     is_reference: bool,
 ) -> Result<(Vec<u8>, Yuv420), Error> {
+    let mb_w = (source.width / 16) as usize;
+    let mb_h = (source.height / 16) as usize;
+    let mvs = vec![(mvx, mvy); mb_w * mb_h];
+    encode_pframe_mvs(source, reference, qp, &mvs, frame_num, is_reference)
+}
+
+/// P slice whose macroblocks do not all share one motion vector.
+///
+/// `mvs` is one quarter-pel `(mvx, mvy)` per macroblock, raster order. A list of
+/// identical vectors matches [`encode_pframe_at`].
+pub fn encode_pframe_mvs(
+    source: &Yuv420,
+    reference: &Yuv420,
+    qp: u8,
+    mvs: &[(i32, i32)],
+    frame_num: u32,
+    is_reference: bool,
+) -> Result<(Vec<u8>, Yuv420), Error> {
     if source.width != reference.width || source.height != reference.height {
         return Err(Error::Shape);
     }
     if frame_num > 15 {
         return Err(Error::Count);
     }
-    if mvx % 8 != 0 || mvy % 8 != 0 || !(-512..=512).contains(&mvx) || !(-512..=512).contains(&mvy)
-    {
-        return Err(Error::Motion);
-    }
     let width = source.width;
     let height = source.height;
-    let luma_dx = mvx / 4;
-    let luma_dy = mvy / 4;
-    let chroma_dx = mvx >> 3;
-    let chroma_dy = mvy >> 3;
     let qp_i = qp as i32;
     let mb_w = (width / 16) as usize;
     let mb_h = (height / 16) as usize;
@@ -871,10 +879,27 @@ pub fn encode_pframe_at(
     let mut luma_blocks = Vec::with_capacity(mb_w * mb_h * 16);
     let mut chroma_u = Vec::with_capacity(mb_w * mb_h);
     let mut chroma_v = Vec::with_capacity(mb_w * mb_h);
+    if mvs.len() != mb_w * mb_h {
+        return Err(Error::Motion);
+    }
+    for &(mvx, mvy) in mvs {
+        if mvx % 8 != 0
+            || mvy % 8 != 0
+            || !(-512..=512).contains(&mvx)
+            || !(-512..=512).contains(&mvy)
+        {
+            return Err(Error::Motion);
+        }
+    }
     let y_stride = width as usize;
     let c_stride = (width / 2) as usize;
     for my in 0..mb_h {
         for mx in 0..mb_w {
+            let (mvx, mvy) = mvs[my * mb_w + mx];
+            let luma_dx = mvx / 4;
+            let luma_dy = mvy / 4;
+            let chroma_dx = mvx >> 3;
+            let chroma_dy = mvy >> 3;
             let lb = encode_inter_luma(
                 &mut Inter {
                     src: &source.y,
@@ -941,8 +966,7 @@ pub fn encode_pframe_at(
             u_nnz: &u_nnz,
             v_nnz: &v_nnz,
         },
-        mvx,
-        mvy,
+        mvs,
         frame_num,
         is_reference,
     ));
