@@ -1362,10 +1362,9 @@ mod tests {
     fn two_text_and_eight_bit_picture_become_pdf() {
         let (first, second) = two_indexed_slide_text();
         let file = ppt_two_text_indexed_document(&first, &second).unwrap();
-        for banned in [2560, 5632, 6656, 7168, 7680, 8704, 9216, 14336] {
-            assert_ne!(file.len(), banned);
-        }
+        assert_eq!(file.len(), 9728);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        assert_eq!(pdf.len(), 3085);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&first), "{got}");
         assert!(got.contains(&second), "{got}");
