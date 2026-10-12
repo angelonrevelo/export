@@ -1,6 +1,9 @@
-//! Cross-converts CSV, TSV, and JSON without holding the table.
+//! Cross-converts CSV, TSV, JSON, one BIFF8 workbook, and one-sheet XLSX.
 //!
-//! XLS is read-only: one generated BIFF8 workbook converts to CSV or TSV.
+//! The delimited and JSON paths do not hold the table. XLS is read-only: one
+//! generated BIFF8 workbook converts to CSV or TSV. XLSX is a zip, so that
+//! path keeps the worksheet and the shared-string table until the package is
+//! finished.
 //!
 //! CSV and TSV share one reader. JSON is an array of objects when the
 //! delimited input has a header, or an array of arrays when it does not.
@@ -24,6 +27,7 @@ pub enum Format {
     Tsv,
     Json,
     Xls,
+    Xlsx,
 }
 
 impl Format {
@@ -33,6 +37,7 @@ impl Format {
             Format::Tsv => "tsv",
             Format::Json => "json",
             Format::Xls => "xls",
+            Format::Xlsx => "xlsx",
         }
     }
 
@@ -40,7 +45,7 @@ impl Format {
         match self {
             Format::Csv => Some(b','),
             Format::Tsv => Some(b'\t'),
-            Format::Json | Format::Xls => None,
+            Format::Json | Format::Xls | Format::Xlsx => None,
         }
     }
 }
@@ -82,6 +87,9 @@ pub fn convert<R: BufRead, W: Write>(
     if from == Format::Xls || to == Format::Xls {
         return convert_xls(from, to, input, &mut output);
     }
+    if from == Format::Xlsx || to == Format::Xlsx {
+        return convert_xlsx(from, to, input, &mut output);
+    }
     match (from.delim(), to.delim()) {
         (Some(src_delim), Some(dst_delim)) => {
             delim_to_delim(input, &mut output, src_delim, dst_delim)
@@ -113,6 +121,21 @@ fn convert_xls<R: BufRead, W: Write>(
         (Format::Xls, Format::Csv) => crate::xls::to_delim(input, output, b','),
         (Format::Xls, Format::Tsv) => crate::xls::to_delim(input, output, b'\t'),
         _ => Err(Error::new("xls converts to csv and tsv")),
+    }
+}
+
+fn convert_xlsx<R: BufRead, W: Write>(
+    from: Format,
+    to: Format,
+    input: R,
+    output: &mut W,
+) -> Result<Stats> {
+    match (from, to) {
+        (Format::Csv, Format::Xlsx) => crate::xlsx::delim_to_xlsx(input, output, b','),
+        (Format::Tsv, Format::Xlsx) => crate::xlsx::delim_to_xlsx(input, output, b'\t'),
+        (Format::Xlsx, Format::Csv) => crate::xlsx::xlsx_to_delim(input, output, b','),
+        (Format::Xlsx, Format::Tsv) => crate::xlsx::xlsx_to_delim(input, output, b'\t'),
+        _ => Err(Error::new("xlsx converts to and from csv and tsv")),
     }
 }
 

@@ -134,6 +134,7 @@ fn main() {
             .expect("json to csv");
     assert_eq!(back, csv, "csv → json → csv changed a cell");
     let csv_tsv = best_of_three(&csv, Format::Csv, Format::Tsv, DATA_ROWS + 1);
+    let csv_xlsx = best_of_three(&csv, Format::Csv, Format::Xlsx, DATA_ROWS + 1);
 
     println!("rows {DATA_ROWS}");
     println!("columns 4");
@@ -149,6 +150,10 @@ fn main() {
     println!(
         "csv_to_tsv rows_per_sec={:.0} allocs={} output_rows={}",
         csv_tsv.rows_per_sec, csv_tsv.allocs, csv_tsv.rows
+    );
+    println!(
+        "csv_to_xlsx rows_per_sec={:.0} allocs={} output_rows={}",
+        csv_xlsx.rows_per_sec, csv_xlsx.allocs, csv_xlsx.rows
     );
     println!(
         "note rows_per_sec divides by {DATA_ROWS} data rows; allocs counts alloc+realloc during that one conversion, including output buffer growth"
