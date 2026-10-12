@@ -12,3 +12,10 @@ version = "0.1.0"
 dependencies = [
  "export-kernel",
 ]
+
+[[package]]
+name = "export-web"
+version = "0.1.0"
+dependencies = [
+ "export-kernel",
+]
