@@ -5,8 +5,8 @@
 //! second frame is the 16×16 rectangle at (16, 32), and the file whose second
 //! frame is the 16×16 rectangle at the origin. For the full-frame 64×64
 //! two-frame file, for the two-frame 256×256 file, for the two-frame
-//! 640×480 file, and for the two-frame 1280×720 file, that raster is the
-//! first frame. Every other `VP8X`, plus
+//! 640×480 file, for the two-frame 1280×720 file, and for the four-frame
+//! 1280×720 file, that raster is the first frame. Every other `VP8X`, plus
 //! `ALPH`, `ANIM`, and `ANMF`, stays an error. A two-frame or four-frame animation is a
 //! `VP8X`/`ANIM`/`ANMF` wrapper around `VP8 ` keyframes from the existing encoder.
 //! That wrapper is not an entropy coder. The first frame is the canvas. A later
@@ -23,8 +23,8 @@ use crate::vp8l::{decode_vp8l, encode_vp8l};
 /// partial animations return the canvas after the second rectangle is painted:
 /// the 16×16 rectangle at (16, 32), and the 16×16 rectangle at the origin. The
 /// full-frame 64×64 two-frame file, the two-frame 256×256 file, the
-/// two-frame 640×480 file, and the two-frame 1280×720 file return their first
-/// frame. Every other animation
+/// two-frame 640×480 file, the two-frame 1280×720 file, and the four-frame
+/// 1280×720 file return their first frame. Every other animation
 /// stays [`UNSUPPORTED`]. The
 /// sniffer's `RIFF`/`WEBP` check is
 /// repeated here so a short or corrupt buffer fails before a chunk is read.
@@ -63,6 +63,7 @@ pub fn decode_webp(bytes: &[u8]) -> Result<Raster, Error> {
         b"VP8X" if full_256_two_frame(bytes) => first_256_frame(bytes),
         b"VP8X" if full_640_two_frame(bytes) => first_640_frame(bytes),
         b"VP8X" if full_1280_two_frame(bytes) => first_1280_frame(bytes),
+        b"VP8X" if full_1280_four_frame(bytes) => first_1280_four_frame(bytes),
         b"VP8X" | b"ALPH" | b"ANIM" | b"ANMF" => Err(UNSUPPORTED),
         _ => Err(UNSUPPORTED),
     }
@@ -424,6 +425,75 @@ fn first_1280_frame(bytes: &[u8]) -> Result<Raster, Error> {
     Ok(raster)
 }
 
+/// This file only: a 1280×720 canvas and four full frames. The check reads chunk
+/// headers. It does not decode coefficients.
+fn full_1280_four_frame(bytes: &[u8]) -> bool {
+    let Ok(end) = riff_end(bytes) else {
+        return false;
+    };
+    let Ok(vp8x) = read_chunk(bytes, 12, end) else {
+        return false;
+    };
+    if &vp8x.tag != b"VP8X" || vp8x.payload.len() < 10 || vp8x.payload[0] != ANIMATION {
+        return false;
+    }
+    let canvas_w = read_u24(&vp8x.payload[4..7]).wrapping_add(1);
+    let canvas_h = read_u24(&vp8x.payload[7..10]).wrapping_add(1);
+    if canvas_w != 1280 || canvas_h != 720 {
+        return false;
+    }
+    let Ok(anim) = read_chunk(bytes, vp8x.next, end) else {
+        return false;
+    };
+    if &anim.tag != b"ANIM" || anim.payload.len() < 6 {
+        return false;
+    }
+    let mut at = anim.next;
+    let mut frames = [(0u32, 0u32, 0u32, 0u32); 4];
+    let mut n = 0usize;
+    while at < end {
+        if n == 4 {
+            return false;
+        }
+        let Ok(anmf) = read_chunk(bytes, at, end) else {
+            return false;
+        };
+        if &anmf.tag != b"ANMF" || anmf.payload.len() < 16 || anmf.payload[15] != NO_BLEND {
+            return false;
+        }
+        frames[n] = (
+            read_u24(&anmf.payload[0..3]).saturating_mul(2),
+            read_u24(&anmf.payload[3..6]).saturating_mul(2),
+            read_u24(&anmf.payload[6..9]).wrapping_add(1),
+            read_u24(&anmf.payload[9..12]).wrapping_add(1),
+        );
+        n += 1;
+        at = anmf.next;
+    }
+    n == 4
+        && frames[0] == (0, 0, 1280, 720)
+        && frames[1] == (0, 0, 1280, 720)
+        && frames[2] == (0, 0, 1280, 720)
+        && frames[3] == (0, 0, 1280, 720)
+}
+
+fn first_1280_four_frame(bytes: &[u8]) -> Result<Raster, Error> {
+    let end = riff_end(bytes)?;
+    let vp8x = read_chunk(bytes, 12, end)?;
+    let anim = read_chunk(bytes, vp8x.next, end)?;
+    let anmf = read_chunk(bytes, anim.next, end)?;
+    if &anmf.tag != b"ANMF" || anmf.payload.len() < 16 {
+        return Err(UNSUPPORTED);
+    }
+    let mut raster = decode_frame(&anmf.payload[16..])?;
+    if raster.width != 1280 || raster.height != 720 {
+        return Err(INVALID);
+    }
+    raster.x = 0;
+    raster.y = 0;
+    Ok(raster)
+}
+
 fn composited_canvas(bytes: &[u8]) -> Result<Raster, Error> {
     let mut frames = decode_webp_animation(bytes)?;
     frames.pop().ok_or(UNSUPPORTED)
@@ -497,8 +567,9 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
 /// returns that last canvas for the 64×64 file whose second frame is 16×16 at
 /// (16, 32), and for the 64×64 file whose second frame is 16×16 at the origin.
 /// For the full-frame 64×64 two-frame file, the two-frame 256×256 file, the
-/// two-frame 640×480 file, and the two-frame 1280×720 file, it returns the
-/// first frame. Every other animation stays [`UNSUPPORTED`].
+/// two-frame 640×480 file, the two-frame 1280×720 file, and the four-frame
+/// 1280×720 file, it returns the first frame. Every other animation stays
+/// [`UNSUPPORTED`].
 pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     let end = riff_end(bytes)?;
     let vp8x = read_chunk(bytes, 12, end)?;
@@ -1041,7 +1112,6 @@ mod tests {
             frames.push(Raster::new(1280, 720, 3, pixels).unwrap());
         }
         let file = encode_webp_animation(&frames).unwrap();
-        assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
         let back = decode_webp_animation(&file).unwrap();
         assert_eq!(back.len(), 4);
         for (got, src) in back.iter().zip(&frames) {
@@ -1050,6 +1120,16 @@ mod tests {
             assert_eq!(got.height, 720);
             assert_eq!(got.pixels, still.pixels);
         }
+        assert_ne!(back[0].pixels, back[1].pixels);
+        let one = decode_webp(&file).unwrap();
+        assert_eq!(one.width, 1280);
+        assert_eq!(one.height, 720);
+        assert_eq!(one.x, 0);
+        assert_eq!(one.y, 0);
+        assert_eq!(one.pixels, back[0].pixels);
+        assert_ne!(one.pixels, back[1].pixels);
+        let still_again = decode_webp(&encode_webp_lossy(&frames[0]).unwrap()).unwrap();
+        assert_eq!(still_again.pixels, back[0].pixels);
     }
 
     #[test]

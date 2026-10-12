@@ -1029,4 +1029,42 @@ fn main() {
         mb_s(anim720.len() as f64, p50),
         allocs as f64 / (first720_pixels / 1_000_000.0),
     );
+
+    // decode_webp of the four-frame 1280×720 file only. The rows above are unchanged.
+    for _ in 0..2 {
+        let _ = decode_webp(&anim4_720).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(decode_webp(black_box(&anim4_720)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let first4 = decode_webp(&anim4_720).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let first4_pixels = 1280.0 * 720.0;
+    let first_match = first4.width == 1280
+        && first4.height == 720
+        && first4.x == 0
+        && first4.y == 0
+        && first4.pixels == decoded4_720[0].pixels
+        && first4.pixels != decoded4_720[1].pixels;
+    let two_same = decode_webp(&anim720).unwrap().pixels == first720.pixels;
+    let small_same = decode_webp(&anim_hd).unwrap().pixels == first640.pixels
+        && decode_webp(&anim256).unwrap().pixels == first256.pixels
+        && decode_webp(&anim64).unwrap().pixels == first.pixels
+        && decode_webp(&anim_part).unwrap().pixels == origin.pixels
+        && decode_webp(&anim_placed).unwrap().pixels == one.pixels;
+    let still_same = decode_webp(&encode_webp_lossy(&quad720[0]).unwrap())
+        .unwrap()
+        .pixels
+        == still720_a.pixels;
+    println!(
+        "webp_anim1280x4_first_decode canvas=1280x720 frames=4 samples=40 file_bytes={} p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2} first_match={first_match} two_same={two_same} small_same={small_same} still_same={still_same}",
+        anim4_720.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(first4_pixels * 3.0, p50),
+        mb_s(first4_pixels * 3.0, p99),
+        mb_s(anim4_720.len() as f64, p50),
+        allocs as f64 / (first4_pixels / 1_000_000.0),
+    );
 }
