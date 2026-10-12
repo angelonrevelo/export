@@ -729,6 +729,7 @@ mod tests {
         assert_eq!(file.len(), 5632);
         assert_ne!(file.len() as u64, ONE_SHAPE_PDF_MISS);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        assert_eq!(pdf.len(), 3981);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&text), "{got}");
     }
