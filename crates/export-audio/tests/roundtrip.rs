@@ -178,14 +178,66 @@ fn four_thousand_sample_wav_matches_title_hello() {
 }
 
 fn with_title(flac: &[u8], title: &str) -> Vec<u8> {
+    with_comments(flac, &[("TITLE", title)])
+}
+
+#[test]
+fn four_thousand_sample_wav_matches_every_list_key() {
+    let pcm = fixture_pcm();
+    let flac = with_comments(
+        &export_audio::encode(&pcm).unwrap(),
+        &[
+            ("TITLE", "TitleV"),
+            ("ARTIST", "ArtistV"),
+            ("ALBUM", "AlbumV"),
+            ("COMMENT", "CommentV"),
+            ("GENRE", "GenreV"),
+            ("DATE", "DateV"),
+            ("TRACKNUMBER", "TrackV"),
+            ("COPYRIGHT", "CopyV"),
+            ("DESCRIPTION", "DescV"),
+            ("LANGUAGE", "LangV"),
+        ],
+    );
+    let Output::Fresh { data, .. } = export(&flac, Job::ToWav, &mut Dedup::new()).unwrap() else {
+        panic!("expected a fresh wav");
+    };
+    assert_eq!(data.len(), 8406);
+    assert_eq!(
+        &data[36..206],
+        b"LIST\xa2\x00\x00\x00INFOIART\x08\x00\x00\x00ArtistV\x00ICMT\x06\x00\x00\x00DescV\x00ICOP\x06\x00\x00\x00CopyV\x00ICRD\x06\x00\x00\x00DateV\x00IGNR\x07\x00\x00\x00GenreV\x00\x00ILNG\x06\x00\x00\x00LangV\x00INAM\x07\x00\x00\x00TitleV\x00\x00IPRD\x07\x00\x00\x00AlbumV\x00\x00IPRT\x07\x00\x00\x00TrackV\x00\x00ISFT\x0e\x00\x00\x00Lavf60.16.100\x00"
+    );
+    assert_eq!(
+        hex(&hash(&data)),
+        "d06c6bed0e66a2536738daac10d79827bd4ca4884095292f4bb914cd783d04dc"
+    );
+}
+
+fn fixture_pcm() -> export_audio::Pcm {
+    let mut samples = Vec::with_capacity(4096);
+    for i in 0..4096i32 {
+        let s = ((i % 200) - 100) * 40 + (i * i) % 30;
+        samples.push(s.clamp(-32_768, 32_767));
+    }
+    export_audio::Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    }
+}
+
+fn with_comments(flac: &[u8], pairs: &[(&str, &str)]) -> Vec<u8> {
     assert_eq!(&flac[..5], b"fLaC\x80");
-    let comment = format!("TITLE={title}");
-    let text = comment.as_bytes();
     let mut body = Vec::new();
     body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&1u32.to_le_bytes());
-    body.extend_from_slice(&(text.len() as u32).to_le_bytes());
-    body.extend_from_slice(text);
+    body.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+    for (key, value) in pairs {
+        let text = format!("{key}={value}");
+        let text = text.as_bytes();
+        body.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        body.extend_from_slice(text);
+    }
     let mut out = Vec::with_capacity(flac.len() + 4 + body.len());
     out.extend_from_slice(b"fLaC\x00");
     out.extend_from_slice(&flac[5..42]);

@@ -94,9 +94,15 @@ fn export_hashed(bytes: &[u8], digest: [u8; 32], job: Job, dedup: &mut Dedup) ->
         Job::ToWav => match kind {
             Kind::Flac => {
                 let pcm = flac::decode(bytes)?;
-                match flac::title(bytes) {
-                    Some(title) => wav::encode_with_title(&pcm, Some(&title))?,
-                    None => wav::encode(&pcm)?,
+                let tags = flac::info_fields(bytes);
+                if tags.is_empty() {
+                    wav::encode(&pcm)?
+                } else {
+                    let fields: Vec<([u8; 4], &[u8])> = tags
+                        .iter()
+                        .map(|(id, value)| (*id, value.as_slice()))
+                        .collect();
+                    wav::encode_with_info(&pcm, &fields)?
                 }
             }
             Kind::Mp3 => return Err(Error::Unsupported("MP3")),

@@ -85,12 +85,12 @@ pub fn decode(data: &[u8]) -> Result<Pcm> {
 }
 
 pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
-    encode_with_title(pcm, None)
+    encode_with_info(pcm, &[])
 }
 
-/// 16-bit PCM WAV. `title` is written as `INAM` before `ISFT` (`Lavf60.16.100`).
-/// An empty title is omitted. Other source tags are not copied.
-pub fn encode_with_title(pcm: &Pcm, title: Option<&str>) -> Result<Vec<u8>> {
+/// 16-bit PCM WAV. `fields` are INFO ids in the order FFmpeg writes them.
+/// `ISFT` is always `Lavf60.16.100` and is not taken from `fields`.
+pub fn encode_with_info(pcm: &Pcm, fields: &[([u8; 4], &[u8])]) -> Result<Vec<u8>> {
     let width = match pcm.bits {
         8 => 1usize,
         16 => 2,
@@ -104,7 +104,7 @@ pub fn encode_with_title(pcm: &Pcm, title: Option<&str>) -> Result<Vec<u8>> {
     let frames = pcm.samples.len() / channels;
     let data_len = frames * channels * width;
     let list = if pcm.bits == 16 {
-        info_list(title)
+        info_list(fields)
     } else {
         Vec::new()
     };
@@ -149,15 +149,18 @@ pub fn encode_with_title(pcm: &Pcm, title: Option<&str>) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `LIST`/`INFO` placed before `data`. `ISFT` is `Lavf60.16.100`.
-/// A title is `INAM`, NUL-terminated, padded to an even field length.
-fn info_list(title: Option<&str>) -> Vec<u8> {
+/// `LIST`/`INFO` placed before `data`. Each value is NUL-terminated.
+/// An odd field is padded inside the LIST body. `ISFT` is `Lavf60.16.100`.
+fn info_list(fields: &[([u8; 4], &[u8])]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(b"INFO");
-    if let Some(title) = title.filter(|text| !text.is_empty()) {
-        let mut text = title.as_bytes().to_vec();
+    for (id, value) in fields {
+        if value.is_empty() || *id == *b"ISFT" {
+            continue;
+        }
+        let mut text = value.to_vec();
         text.push(0);
-        push_info(&mut body, b"INAM", &text);
+        push_info(&mut body, id, &text);
     }
     push_info(&mut body, b"ISFT", b"Lavf60.16.100\x00");
     let mut out = Vec::with_capacity(8 + body.len());

@@ -197,16 +197,24 @@ impl BitWriter {
     }
 }
 
-/// Vorbis `TITLE` from the first comment block, if the text is UTF-8 and not empty.
+/// Vorbis `TITLE` after the same comment folding FFmpeg uses for `INAM`.
 pub fn title(bytes: &[u8]) -> Option<String> {
+    let fields = info_fields(bytes);
+    let (_, value) = fields.iter().find(|(id, _)| *id == *b"INAM")?;
+    String::from_utf8(value.clone()).ok()
+}
+
+/// INFO ids copied into a 16-bit WAV, in the order FFmpeg writes them.
+/// `ISFT` is omitted; the WAV writer supplies `Lavf60.16.100`.
+pub fn info_fields(bytes: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+    let mut entries = Vec::new();
     if bytes.len() < 4 || &bytes[0..4] != b"fLaC" {
-        return None;
+        return Vec::new();
     }
     let mut pos = 4usize;
-    let mut found = None;
     loop {
         if pos + 4 > bytes.len() {
-            return found;
+            break;
         }
         let last = bytes[pos] & 0x80 != 0;
         let kind = bytes[pos] & 0x7f;
@@ -215,58 +223,171 @@ pub fn title(bytes: &[u8]) -> Option<String> {
             | u32::from(bytes[pos + 3])) as usize;
         pos += 4;
         if pos + len > bytes.len() {
-            return found;
+            break;
         }
-        if kind == 4 && found.is_none() {
-            found = vorbis_title(&bytes[pos..pos + len]);
+        if kind == 4 {
+            ingest_comment_block(&mut entries, &bytes[pos..pos + len]);
         }
         pos += len;
         if last {
             break;
         }
     }
-    found
+    riff_fields(&entries)
 }
 
-fn vorbis_title(body: &[u8]) -> Option<String> {
+struct Entry {
+    key: String,
+    value: Vec<u8>,
+}
+
+fn ingest_comment_block(entries: &mut Vec<Entry>, body: &[u8]) {
     if body.len() < 8 {
-        return None;
+        return;
     }
-    let vendor = u32::from_le_bytes(body[0..4].try_into().ok()?) as usize;
-    let mut pos = 4usize.checked_add(vendor)?;
-    if pos + 4 > body.len() {
-        return None;
+    let vendor = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
+    let Some(after_vendor) = 4usize.checked_add(vendor) else {
+        return;
+    };
+    if after_vendor
+        .checked_add(4)
+        .map(|end| end > body.len())
+        .unwrap_or(true)
+    {
+        return;
     }
-    let count = u32::from_le_bytes(body[pos..pos + 4].try_into().ok()?) as usize;
+    let mut pos = after_vendor;
+    let mut n = u32::from_le_bytes(body[pos..pos + 4].try_into().unwrap());
     pos += 4;
-    for _ in 0..count {
-        if pos + 4 > body.len() {
-            return None;
-        }
-        let len = u32::from_le_bytes(body[pos..pos + 4].try_into().ok()?) as usize;
+    while pos + 4 <= body.len() && n > 0 {
+        let len = u32::from_le_bytes(body[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         if pos + len > body.len() {
-            return None;
+            break;
         }
-        let comment = &body[pos..pos + len];
+        push_comment(entries, &body[pos..pos + len]);
         pos += len;
-        if let Some(value) = title_value(comment) {
-            return Some(value);
-        }
+        n -= 1;
     }
-    None
+    apply_vorbis_conv(entries);
 }
 
-fn title_value(comment: &[u8]) -> Option<String> {
-    let eq = comment.iter().position(|byte| *byte == b'=')?;
-    if !comment[..eq].eq_ignore_ascii_case(b"TITLE") {
-        return None;
+fn push_comment(entries: &mut Vec<Entry>, comment: &[u8]) {
+    let Some(eq) = comment.iter().position(|byte| *byte == b'=') else {
+        return;
+    };
+    if eq == 0 || eq + 1 >= comment.len() {
+        return;
     }
-    let value = &comment[eq + 1..];
-    if value.is_empty() {
-        return None;
+    let Ok(key) = std::str::from_utf8(&comment[..eq]) else {
+        return;
+    };
+    let raw = &comment[eq + 1..];
+    let value = match raw.iter().position(|byte| *byte == 0) {
+        Some(at) => &raw[..at],
+        None => raw,
+    };
+    if entries
+        .iter()
+        .any(|entry| entry.key.eq_ignore_ascii_case(key))
+    {
+        dict_append(entries, key, b";");
     }
-    String::from_utf8(value.to_vec()).ok()
+    dict_append(entries, key, value);
+}
+
+fn dict_append(entries: &mut Vec<Entry>, key: &str, extra: &[u8]) {
+    if let Some(index) = entries
+        .iter()
+        .position(|entry| entry.key.eq_ignore_ascii_case(key))
+    {
+        let mut entry = entries.remove(index);
+        entry.key = key.to_string();
+        entry.value.extend_from_slice(extra);
+        entries.push(entry);
+    } else {
+        entries.push(Entry {
+            key: key.to_string(),
+            value: extra.to_vec(),
+        });
+    }
+}
+
+fn apply_vorbis_conv(entries: &mut Vec<Entry>) {
+    let src = std::mem::take(entries);
+    for entry in src {
+        let key = vorbis_renamed(&entry.key)
+            .map(str::to_string)
+            .unwrap_or(entry.key);
+        dict_replace_owned(entries, key, entry.value);
+    }
+}
+
+fn vorbis_renamed(key: &str) -> Option<&'static str> {
+    if key.eq_ignore_ascii_case("ALBUMARTIST") {
+        Some("album_artist")
+    } else if key.eq_ignore_ascii_case("TRACKNUMBER") {
+        Some("track")
+    } else if key.eq_ignore_ascii_case("DISCNUMBER") {
+        Some("disc")
+    } else if key.eq_ignore_ascii_case("DESCRIPTION") {
+        Some("comment")
+    } else {
+        None
+    }
+}
+
+fn dict_replace_owned(entries: &mut Vec<Entry>, key: String, value: Vec<u8>) {
+    if let Some(index) = entries
+        .iter()
+        .position(|entry| entry.key.eq_ignore_ascii_case(&key))
+    {
+        entries.remove(index);
+    }
+    entries.push(Entry { key, value });
+}
+
+fn riff_fields(entries: &[Entry]) -> Vec<([u8; 4], Vec<u8>)> {
+    let mut mapped = Vec::new();
+    for entry in entries {
+        let key = riff_native(&entry.key).to_string();
+        dict_replace_owned(&mut mapped, key, entry.value.clone());
+    }
+    const ORDER: [&[u8; 4]; 9] = [
+        b"IART", b"ICMT", b"ICOP", b"ICRD", b"IGNR", b"ILNG", b"INAM", b"IPRD", b"IPRT",
+    ];
+    let mut out = Vec::new();
+    for id in ORDER {
+        if let Some(entry) = mapped.iter().find(|entry| entry.key.as_bytes() == &id[..]) {
+            if !entry.value.is_empty() {
+                out.push((*id, entry.value.clone()));
+            }
+        }
+    }
+    out
+}
+
+fn riff_native(key: &str) -> &str {
+    const MAP: &[(&str, &str)] = &[
+        ("artist", "IART"),
+        ("comment", "ICMT"),
+        ("copyright", "ICOP"),
+        ("date", "ICRD"),
+        ("genre", "IGNR"),
+        ("language", "ILNG"),
+        ("title", "INAM"),
+        ("album", "IPRD"),
+        ("track", "IPRT"),
+        ("encoder", "ISFT"),
+        ("timecode", "ISMP"),
+        ("encoded_by", "ITCH"),
+    ];
+    for (generic, native) in MAP {
+        if key.eq_ignore_ascii_case(generic) {
+            return native;
+        }
+    }
+    key
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Pcm> {
