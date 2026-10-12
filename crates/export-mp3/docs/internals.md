@@ -25,6 +25,8 @@ The synthesis window is a 512-tap sine prototype, not a claim that the 512 ISO w
 
 This is not a waveform encoder. `half_scale_440hz` is `0.5 * sin(2π * 440 * n / 44100)` for 1152 samples. `decode_frame(encode_frame(...))` against that buffer has max absolute error 2.956202984 (same figure in debug and release). The decoded block is the filterbank output of one count-1 pulse, not the sine.
 
+On the two-copy file ffmpeg already opens, the host decode is 2304 float samples, absolute peak 0.361100197, RMS 0.297404371. That is neither near the half-scale sine (best absolute correlation 0.040; estimated 440 Hz amplitude 0.0024) nor near zero (about 1614 samples have absolute value above 0.25). The shape is a slow negative offset. The library does not call ffmpeg.
+
 ## ffmpeg
 
 ffmpeg 6.1 `mp3_read_header` seeks to `frame_size` and reads four bytes. If that read fails it returns `Invalid frame size (N): Could not seek to N` and does not decode. A one-frame file still hits that path. Checked again on the 440 Hz sine frame: one copy exits 234 with `Invalid frame size (417): Could not seek to 417`; two copies of that same frame exit 0 with no error line and 9216 bytes of PCM. `scripts/ffmpeg-decode.sh` records the single-file refusal, repeats the same frame, and requires a clean decode of that copy. The library does not link or spawn ffmpeg.
