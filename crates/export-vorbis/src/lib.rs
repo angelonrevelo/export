@@ -13,7 +13,8 @@ mod encoder;
 
 pub use decoder::decode_packet;
 pub use encoder::{
-    encode_half_scale_sine, encode_half_scale_sine_frame, encode_packet, half_scale_sine,
+    encode_half_scale_sine, encode_half_scale_sine_frame, encode_half_scale_sine_pair,
+    encode_packet, half_scale_sine,
 };
 
 /// Sample rate of the one packet this crate writes.
@@ -152,6 +153,22 @@ mod tests {
             let phase = 2.0 * std::f64::consts::PI * 440.0 * n / f64::from(SAMPLE_RATE_HZ);
             let want = 0.5 * phase.sin();
             let delta = *sample - want as f32;
+            error += delta * delta;
+        }
+        let rms = (error / FRAME_SAMPLES as f32).sqrt();
+        assert!(rms < 0.02, "rms {rms}");
+    }
+
+    #[test]
+    fn continuation_is_second_in_the_pair() {
+        let packet = encode_half_scale_sine_pair().expect("encode");
+        let decoded = decode_packet(&packet).expect("decode");
+        assert_eq!(decoded.len(), FRAME_SAMPLES);
+        let mut error = 0.0f32;
+        for (offset, sample) in decoded.iter().enumerate() {
+            let n = (FRAME_SAMPLES + offset) as f64;
+            let phase = 2.0 * std::f64::consts::PI * 440.0 * n / f64::from(SAMPLE_RATE_HZ);
+            let delta = *sample - (0.5 * phase.sin()) as f32;
             error += delta * delta;
         }
         let rms = (error / FRAME_SAMPLES as f32).sqrt();

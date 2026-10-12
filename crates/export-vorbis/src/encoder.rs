@@ -92,6 +92,53 @@ pub fn encode_half_scale_sine() -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
+/// Two audible frames: n = 0 through 31, then n = 32 through 63.
+///
+/// The first frame leaves the overlap state the continuation needs, so the
+/// continuation is the second frame. This is not a song encoder.
+pub fn encode_half_scale_sine_pair() -> Result<Vec<u8>, Error> {
+    let tone_packets = tone_packets()?;
+    let (_bridge, continuation) =
+        continuation_packets(tone_packets.setup_min, tone_packets.setup_step)?;
+    let first = handoff_packet(tone_packets.setup_min, tone_packets.setup_step)?;
+    let id = identification_packet();
+    let comment = comment_packet();
+    let mut out = Vec::with_capacity(1024);
+    out.extend(ogg_page(0x02, 0, SERIAL, 0, &[&id]));
+    out.extend(ogg_page(0x00, 0, SERIAL, 1, &[&comment]));
+    out.extend(ogg_page(0x00, 0, SERIAL, 2, &[&tone_packets.setup]));
+    out.extend(ogg_page(
+        0x00,
+        FRAME_SAMPLES as u64,
+        SERIAL,
+        3,
+        &[&tone_packets.delay],
+    ));
+    out.extend(ogg_page(
+        0x00,
+        (FRAME_SAMPLES * 2) as u64,
+        SERIAL,
+        4,
+        &[&first],
+    ));
+    out.extend(ogg_page(
+        0x04,
+        (FRAME_SAMPLES * 3) as u64,
+        SERIAL,
+        5,
+        &[&continuation],
+    ));
+    Ok(out)
+}
+
+fn handoff_packet(min: f32, step: f32) -> Result<Vec<u8>, Error> {
+    let (_delay, first) = dsp::overlap_pair(&ideal_sine());
+    let (bridge, _continuation) = dsp::overlap_pair(&continuation_sine());
+    let mut time = first;
+    time[16..].copy_from_slice(&bridge[16..]);
+    Ok(tone_audio(&quantize_time(&time, min, step)?))
+}
+
 /// The sine frame packet with no audio frame before it.
 ///
 /// Overlap history is empty. This is the same audio packet as the second frame

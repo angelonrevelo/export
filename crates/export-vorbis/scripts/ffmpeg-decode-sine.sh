@@ -6,10 +6,12 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 cargo run --manifest-path "$root/Cargo.toml" --quiet --release --example write_sine -- "$out/sine.ogg"
 cargo run --manifest-path "$root/Cargo.toml" --quiet --release --example write_sine_frame -- "$out/frame.ogg"
+cargo run --manifest-path "$root/Cargo.toml" --quiet --release --example write_sine_pair -- "$out/pair.ogg"
 ffmpeg -hide_banner -v error -i "$out/sine.ogg" -f f32le -ac 1 -ar 48000 "$out/sine.pcm"
+ffmpeg -hide_banner -v error -i "$out/pair.ogg" -f f32le -ac 1 -ar 48000 "$out/pair.pcm"
 ffmpeg -hide_banner -v error -i "$out/frame.ogg" -f f32le -ac 1 -ar 48000 "$out/frame-default.pcm"
 ffmpeg -hide_banner -v error -flags2 +skip_manual -i "$out/frame.ogg" -f f32le -ac 1 -ar 48000 "$out/frame.pcm"
-python3 - "$out/sine.pcm" "$out/frame.pcm" "$out/frame-default.pcm" << 'PY'
+python3 - "$out/sine.pcm" "$out/frame.pcm" "$out/frame-default.pcm" "$out/pair.pcm" << 'PY'
 import math
 import struct
 import sys
@@ -47,4 +49,8 @@ elif len(file_samples) >= 96:
     report("continuation", file_samples[64:96], 32)
 report("packet alone default", load(sys.argv[3]), 0)
 report("packet alone skip_manual", load(sys.argv[2]), 0)
+pair = load(sys.argv[4])
+print(f"pair file samples={len(pair)}")
+if len(pair) >= 64:
+    report("pair second", pair[32:64], 32)
 PY
