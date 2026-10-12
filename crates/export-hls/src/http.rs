@@ -56,6 +56,22 @@ impl Fetcher {
         self.get(&segment.uri)
     }
 
+    /// Fetch every segment named by one media playlist with this cleartext client.
+    ///
+    /// Each URI is requested with [`Fetcher::get_segment`], in playlist order.
+    /// `https` URIs are unsupported. This method does not run yt-dlp or any
+    /// other program. An empty segment list returns [`Error::BadTag`].
+    pub fn get_segments(&self, playlist: &MediaPlaylist) -> Result<Vec<Vec<u8>>, Error> {
+        if playlist.segments.is_empty() {
+            return Err(Error::BadTag);
+        }
+        let mut bodies = Vec::with_capacity(playlist.segments.len());
+        for index in 0..playlist.segments.len() {
+            bodies.push(self.get_segment(playlist, index)?);
+        }
+        Ok(bodies)
+    }
+
     fn fetch(&self, url: &str, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
         let timeout = self.timeout;
         let max_body = self.max_body_bytes;
@@ -675,5 +691,25 @@ mod tests {
             Fetcher::default().get_segment(&playlist, 1),
             Err(Error::BadTag)
         );
+    }
+
+    #[test]
+    fn two_named_segments_stay_on_the_cleartext_client() {
+        assert_eq!(
+            parse_media_playlist(
+                "#EXTM3U\n#EXTINF:1,\nhttp://cdn.example/a.ts\n#EXTINF:1,\nhttps://cdn.example/b.ts\n"
+            ),
+            Err(Error::Unsupported)
+        );
+        let playlist =
+            parse_media_playlist("#EXTM3U\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n").unwrap();
+        assert_eq!(playlist.segments.len(), 2);
+        assert_eq!(
+            Fetcher::default().get_segments(&playlist),
+            Err(Error::BadTag)
+        );
+        let empty = parse_media_playlist("#EXTM3U\n#EXT-X-ENDLIST\n").unwrap();
+        assert!(empty.segments.is_empty());
+        assert_eq!(Fetcher::default().get_segments(&empty), Err(Error::BadTag));
     }
 }

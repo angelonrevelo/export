@@ -1,9 +1,9 @@
 //! Release bench.
 //!
 //! Parse timings and the bulk local-stack GETs run on one thread. The
-//! one-segment fetch calls the library client and uses one local accept
-//! thread beside it. Loopback GETs run only here, on 127.0.0.1. They are
-//! not CDN downloads.
+//! one-segment and two-segment fetches call the library client and use one
+//! local accept thread beside the client. Loopback GETs run only here, on
+//! 127.0.0.1. They are not CDN downloads.
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -79,6 +79,14 @@ fn main() {
         Ok(report) => println!("{report}"),
         Err(err) => {
             eprintln!("local stack segment GET failed: {err}");
+            std::process::exit(1);
+        }
+    }
+
+    match local_stack_two_segment_row() {
+        Ok(report) => println!("{report}"),
+        Err(err) => {
+            eprintln!("local stack two-segment GET failed: {err}");
             std::process::exit(1);
         }
     }
@@ -389,6 +397,116 @@ fn local_stack_segment_row() -> Result<String, Box<dyn std::error::Error>> {
     Ok(format!(
         "local stack segment GET bytes={SEGMENT_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
+}
+
+/// One media playlist names two cleartext segments. Both are fetched with
+/// [`Fetcher::get_segments`] on the local stack, not a CDN.
+///
+/// Loopback is allowed only here. `check_hop` still runs inside the client
+/// before each connect. The bodies are raw text, not a transcode. The
+/// reported byte count is the sum of the two segment bodies.
+fn local_stack_two_segment_row() -> Result<String, Box<dyn std::error::Error>> {
+    const FIRST_BYTES: usize = 64 * 1024;
+    const SECOND_BYTES: usize = 64 * 1024;
+    const COMBINED_BYTES: usize = FIRST_BYTES + SECOND_BYTES;
+    let first = vec![b'a'; FIRST_BYTES];
+    let second = vec![b'b'; SECOND_BYTES];
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let first_url = format!("http://127.0.0.1:{port}/seg0.ts");
+    let second_url = format!("http://127.0.0.1:{port}/seg1.ts");
+    if check_hop(&first_url, ConnectPolicy::default()) != Err(Error::Blocked)
+        || check_hop(&second_url, ConnectPolicy::default()) != Err(Error::Blocked)
+    {
+        return Err("loopback segment was accepted without the bench opt-in".into());
+    }
+    let playlist_text = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXTINF:10.0,\n{first_url}\n#EXTINF:10.0,\n{second_url}\n#EXT-X-ENDLIST\n"
+    );
+    let playlist = parse_media_playlist(&playlist_text)?;
+    if playlist.segments.len() != 2
+        || playlist.segments[0].uri != first_url
+        || playlist.segments[1].uri != second_url
+    {
+        return Err("playlist did not name two cleartext segments".into());
+    }
+    let fetcher = Fetcher {
+        policy: ConnectPolicy::new(true),
+        timeout: Duration::from_secs(2),
+        max_redirects: 5,
+        max_body_bytes: 8 * 1024 * 1024,
+    };
+    let warmup = 5;
+    let iters = 100;
+    let samples = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            serve_two_cleartext_segments(listener, &first, &second, 2 * (warmup + iters));
+        });
+        let mut samples = Vec::with_capacity(iters);
+        for index in 0..(warmup + iters) {
+            let started = Instant::now();
+            let got = fetcher
+                .get_segments(&playlist)
+                .expect("two cleartext segments");
+            let elapsed = started.elapsed().as_nanos() as f64;
+            let combined: usize = got.iter().map(Vec::len).sum();
+            assert_eq!(got.len(), 2);
+            assert_eq!(got[0].len(), FIRST_BYTES);
+            assert_eq!(got[1].len(), SECOND_BYTES);
+            assert_eq!(combined, COMBINED_BYTES);
+            if index >= warmup {
+                samples.push(elapsed);
+            }
+            std::hint::black_box(combined);
+        }
+        samples
+    });
+    let mut sorted = samples;
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let p50 = percentile(&sorted, 0.50);
+    let p99 = percentile(&sorted, 0.99);
+    Ok(format!(
+        "local stack two-segment GET bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+    ))
+}
+
+fn serve_two_cleartext_segments(
+    listener: TcpListener,
+    first: &[u8],
+    second: &[u8],
+    accepts: usize,
+) {
+    listener.set_nonblocking(true).expect("nonblocking accept");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut served = 0;
+    while served < accepts && Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut sock, _)) => {
+                sock.set_nonblocking(false).expect("blocking socket");
+                sock.set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read timeout");
+                sock.set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("write timeout");
+                let request = read_http_request(&mut sock).expect("segment request");
+                let body = if request.starts_with("GET /seg0.ts ") {
+                    first
+                } else if request.starts_with("GET /seg1.ts ") {
+                    second
+                } else {
+                    panic!("unexpected segment path");
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n",
+                    body.len()
+                );
+                sock.write_all(header.as_bytes()).expect("segment header");
+                sock.write_all(body).expect("segment body");
+                served += 1;
+            }
+            Err(err) if waited(&err) => std::hint::spin_loop(),
+            Err(err) => panic!("two-segment accept failed: {err}"),
+        }
+    }
 }
 
 fn serve_cleartext_segment(listener: TcpListener, body: &[u8], accepts: usize) {
