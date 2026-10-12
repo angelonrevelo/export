@@ -1,0 +1,319 @@
+//! Release timings for export-docs.
+//!
+//! Latency is published only from a release build. A debug build prints
+//! `latency NOT JUDGED` and still lists every miss.
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::hint::black_box;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
+use export_docs::{
+    convert, pack_deflated, pack_stored, pairs, pdf_merge, pdf_rotate, pdf_split, pdf_watermark,
+};
+
+const WARMUP: usize = 4;
+const SAMPLES: usize = 64;
+
+static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+static BYTES: AtomicUsize = AtomicUsize::new(0);
+
+struct CountAlloc;
+
+// SAFETY: every method forwards the pointer and layout to the system allocator.
+// Counters move only after a non-null pointer comes back.
+unsafe impl GlobalAlloc for CountAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: `layout` is a valid layout from the allocator, and `System` is the default allocator.
+        let ptr = unsafe { System.alloc(layout) };
+        if !ptr.is_null() {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` came from this allocator with `layout`.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: same contract as `alloc`.
+        let ptr = unsafe { System.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        }
+        ptr
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: `ptr` came from this allocator with `layout`; `new_size` is the requested size.
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
+        if !new_ptr.is_null() {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(new_size, Ordering::Relaxed);
+        }
+        new_ptr
+    }
+}
+
+#[global_allocator]
+static GLOBAL: CountAlloc = CountAlloc;
+
+struct Sample {
+    p50_ns: u128,
+    p99_ns: u128,
+    cold_ns: u128,
+    allocs_p50: usize,
+    alloc_bytes_p50: usize,
+    output_bytes: u64,
+}
+
+fn tally() -> (usize, usize) {
+    (ALLOCS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed))
+}
+
+fn percentile_u128(sorted: &[u128], pct: f64) -> u128 {
+    let n = sorted.len();
+    let rank = (pct / 100.0 * n as f64).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(n - 1)]
+}
+
+fn percentile_usize(sorted: &[usize], pct: f64) -> usize {
+    let n = sorted.len();
+    let rank = (pct / 100.0 * n as f64).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(n - 1)]
+}
+
+fn measure(mut op: impl FnMut() -> u64) -> Sample {
+    let t0 = Instant::now();
+    let output_bytes = op();
+    let cold_ns = t0.elapsed().as_nanos();
+    for _ in 0..WARMUP {
+        let _ = black_box(op());
+    }
+    let mut times = vec![0u128; SAMPLES];
+    let mut allocs = vec![0usize; SAMPLES];
+    let mut abytes = vec![0usize; SAMPLES];
+    for i in 0..SAMPLES {
+        let (before_a, before_b) = tally();
+        let started = Instant::now();
+        let _ = black_box(op());
+        let dt = started.elapsed().as_nanos();
+        let (after_a, after_b) = tally();
+        times[i] = dt;
+        allocs[i] = after_a.saturating_sub(before_a);
+        abytes[i] = after_b.saturating_sub(before_b);
+    }
+    times.sort_unstable();
+    allocs.sort_unstable();
+    abytes.sort_unstable();
+    Sample {
+        p50_ns: percentile_u128(&times, 50.0),
+        p99_ns: percentile_u128(&times, 99.0),
+        cold_ns,
+        allocs_p50: percentile_usize(&allocs, 50.0),
+        alloc_bytes_p50: percentile_usize(&abytes, 50.0),
+        output_bytes,
+    }
+}
+
+fn mb_per_s(input_bytes: u64, p50_ns: u128) -> f64 {
+    if p50_ns == 0 {
+        return f64::INFINITY;
+    }
+    (input_bytes as f64) * 1_000.0 / (p50_ns as f64)
+}
+
+fn emit_ready(label: &str, input_bytes: u64, sample: &Sample) {
+    if cfg!(debug_assertions) {
+        println!(
+            "{label:<32} {input_bytes:>10} {out:>10} {nj:>12} {nj:>12} {nj:>12} {nj:>10} {nj:>12} {nj:>12} ready",
+            out = sample.output_bytes,
+            nj = "NOT_JUDGED",
+        );
+        return;
+    }
+    let mb_s = mb_per_s(input_bytes, sample.p50_ns);
+    println!(
+        "{label:<32} {input_bytes:>10} {out:>10} {p50:>12} {p99:>12} {mb_s:>12.2} {allocs:>10} {abytes:>12} {cold:>12} ready",
+        out = sample.output_bytes,
+        p50 = sample.p50_ns / 1_000,
+        p99 = sample.p99_ns / 1_000,
+        allocs = sample.allocs_p50,
+        abytes = sample.alloc_bytes_p50,
+        cold = sample.cold_ns / 1_000,
+    );
+}
+
+fn emit_miss(label: &str, note: &str) {
+    println!(
+        "{label:<32} {d:>10} {d:>10} {d:>12} {d:>12} {d:>12} {d:>10} {d:>12} {d:>12} {note}",
+        d = "-",
+    );
+}
+
+fn docx_xml(paras: usize) -> String {
+    let mut xml = String::new();
+    xml.push_str(
+        r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>"#,
+    );
+    xml.push_str(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title &amp; Co</w:t></w:r></w:p>"#,
+    );
+    for i in 0..paras {
+        xml.push_str("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>");
+        xml.push_str(&format!("para {i} alpha beta gamma"));
+        xml.push_str("</w:t></w:r></w:p>");
+    }
+    xml.push_str("</w:body></w:document>");
+    xml
+}
+
+fn ready_bytes(source: &str, target: &str, input: &[u8]) -> u64 {
+    let out = convert(source, target, input).unwrap_or_else(|e| {
+        eprintln!("ready pair {source}→{target} failed: {e}");
+        std::process::exit(1);
+    });
+    let n = out.len() as u64;
+    black_box(out);
+    n
+}
+
+fn main() {
+    let xml = docx_xml(2500);
+    let docx_deflate = pack_deflated(&[("word/document.xml", xml.as_bytes())]);
+    let docx_store = pack_stored(&[("word/document.xml", xml.as_bytes())]);
+    let odt_xml = br#"<?xml version="1.0"?>
+<office:document-content xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:body><office:text>
+    <text:h text:outline-level="1">Chapter</text:h>
+    <text:p>Body text for the odt path.</text:p>
+  </office:text></office:body>
+</office:document-content>"#;
+    let odt = pack_stored(&[("content.xml", odt_xml)]);
+    let markdown = {
+        let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
+        for i in 0..80 {
+            md.push_str(&format!("Paragraph {i} of the markdown fixture stays in the stream.\n\n"));
+        }
+        md
+    };
+    let html = convert("md", "html", markdown.as_bytes()).expect("md html fixture");
+    let text = b"Plain paragraph one.\n\nPlain paragraph two.\n";
+    let pdf = convert("md", "pdf", markdown.as_bytes()).expect("md pdf fixture");
+    let page_a = convert("txt", "pdf", b"PAGEONEWORD\n").expect("page a");
+    let page_b = convert("txt", "pdf", b"PAGETWOWORD\n").expect("page b");
+
+    println!("export-docs bench");
+    println!("samples {SAMPLES}");
+    println!("warmup {WARMUP}");
+    if cfg!(debug_assertions) {
+        println!("latency NOT JUDGED");
+    } else {
+        println!("profile release");
+    }
+    println!(
+        "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+        "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+    );
+
+    let headline = measure(|| ready_bytes("docx", "html", &docx_deflate));
+    emit_ready("docx→html deflate", docx_deflate.len() as u64, &headline);
+    if !cfg!(debug_assertions) {
+        println!(
+            "headline docx→html deflate p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            headline.p50_ns / 1_000,
+            headline.p99_ns / 1_000,
+            mb_per_s(docx_deflate.len() as u64, headline.p50_ns),
+            headline.allocs_p50,
+            headline.alloc_bytes_p50,
+            docx_deflate.len(),
+            headline.output_bytes,
+        );
+    }
+
+    let rows: [(&str, &str, &str, &[u8]); 12] = [
+        ("docx→txt deflate", "docx", "txt", &docx_deflate),
+        ("docx→pdf deflate", "docx", "pdf", &docx_deflate),
+        ("docx→html store", "docx", "html", &docx_store),
+        ("odt→html store", "odt", "html", &odt),
+        ("md→html", "md", "html", markdown.as_bytes()),
+        ("md→txt", "md", "txt", markdown.as_bytes()),
+        ("md→pdf", "md", "pdf", markdown.as_bytes()),
+        ("html→pdf", "html", "pdf", &html),
+        ("html→txt", "html", "txt", &html),
+        ("txt→html", "txt", "html", text),
+        ("txt→pdf", "txt", "pdf", text),
+        ("pdf→txt", "pdf", "txt", &pdf),
+    ];
+    for (label, source, target, input) in rows {
+        let sample = measure(|| ready_bytes(source, target, input));
+        emit_ready(label, input.len() as u64, &sample);
+    }
+
+    let split = measure(|| {
+        let parts = pdf_split(&pdf).unwrap_or_else(|e| {
+            eprintln!("pdf split failed: {e}");
+            std::process::exit(1);
+        });
+        let n = parts.iter().map(Vec::len).sum::<usize>() as u64;
+        black_box(parts);
+        n
+    });
+    emit_ready("pdf→split", pdf.len() as u64, &split);
+
+    let merge = measure(|| {
+        let out = pdf_merge(&[&page_a, &page_b]).unwrap_or_else(|e| {
+            eprintln!("pdf merge failed: {e}");
+            std::process::exit(1);
+        });
+        let n = out.len() as u64;
+        black_box(out);
+        n
+    });
+    emit_ready("pdf→merge", (page_a.len() + page_b.len()) as u64, &merge);
+
+    let rotate = measure(|| {
+        let out = pdf_rotate(&page_a, 90).unwrap_or_else(|e| {
+            eprintln!("pdf rotate failed: {e}");
+            std::process::exit(1);
+        });
+        let n = out.len() as u64;
+        black_box(out);
+        n
+    });
+    emit_ready("pdf→rotate", page_a.len() as u64, &rotate);
+
+    let watermark = measure(|| {
+        let out = pdf_watermark(&page_a, "SECRET").unwrap_or_else(|e| {
+            eprintln!("pdf watermark failed: {e}");
+            std::process::exit(1);
+        });
+        let n = out.len() as u64;
+        black_box(out);
+        n
+    });
+    emit_ready("pdf→watermark", page_a.len() as u64, &watermark);
+
+    let mut misses = 0usize;
+    for pair in pairs().iter().filter(|p| !p.ready) {
+        let label = format!("{}→{}", pair.source, pair.target);
+        let err = match convert(pair.source, pair.target, b"%PDF-1.4 miss") {
+            Err(e) => e,
+            Ok(_) => {
+                eprintln!("miss {label} produced output");
+                std::process::exit(1);
+            }
+        };
+        if !err.message.starts_with("MISS:") {
+            eprintln!("miss {label} hid its failure: {err}");
+            std::process::exit(1);
+        }
+        emit_miss(&label, &err.message);
+        misses += 1;
+    }
+    println!("misses {misses}");
+}

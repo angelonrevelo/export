@@ -1,0 +1,281 @@
+//! Dispatch for the document pairs export actually runs through
+//! pandoc, WeasyPrint, LibreOffice (docx→pdf), pdfplumber, and pypdf.
+//! Ghostscript shrink, encryption, and the formats with no reader here are misses.
+
+use std::io::{Cursor, Read, Seek, Write};
+use std::path::{Path, PathBuf};
+
+use crate::container::{self, Meta};
+use crate::docx::{self, CountWrite};
+use crate::error::{Error, Result};
+use crate::htmlpdf::{html_to_pdf, html_to_text, text_to_html};
+use crate::markdown::{markdown_to_html, markdown_to_text};
+use crate::pdf;
+use crate::stats::RunStats;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pair {
+    pub source: &'static str,
+    pub target: &'static str,
+    pub ready: bool,
+    pub note: &'static str,
+}
+
+/// Pairs this crate owns, plus the misses it will not pretend to run.
+pub fn pairs() -> &'static [Pair] {
+    PAIRS
+}
+
+const PAIRS: &[Pair] = &[
+    Pair { source: "docx", target: "txt", ready: true, note: "OOXML word/document.xml, replaces pandoc" },
+    Pair { source: "docx", target: "html", ready: true, note: "OOXML word/document.xml, replaces pandoc" },
+    Pair { source: "docx", target: "pdf", ready: true, note: "docx→html→text PDF, replaces LibreOffice for this hop" },
+    Pair { source: "odt", target: "txt", ready: true, note: "ODF content.xml, replaces pandoc" },
+    Pair { source: "odt", target: "html", ready: true, note: "ODF content.xml, replaces pandoc" },
+    Pair { source: "odt", target: "pdf", ready: true, note: "odt→html→text PDF" },
+    Pair { source: "md", target: "html", ready: true, note: "replaces pandoc" },
+    Pair { source: "md", target: "txt", ready: true, note: "replaces pandoc plain writer" },
+    Pair { source: "md", target: "pdf", ready: true, note: "md→html→text PDF, replaces WeasyPrint" },
+    Pair { source: "markdown", target: "html", ready: true, note: "same path as md" },
+    Pair { source: "html", target: "pdf", ready: true, note: "text pages, replaces WeasyPrint" },
+    Pair { source: "html", target: "txt", ready: true, note: "tag strip" },
+    Pair { source: "htm", target: "pdf", ready: true, note: "same path as html" },
+    Pair { source: "txt", target: "html", ready: true, note: "paragraph wrap" },
+    Pair { source: "txt", target: "pdf", ready: true, note: "txt→html→text PDF" },
+    Pair { source: "pdf", target: "txt", ready: true, note: "literal strings in content streams; no ToUnicode" },
+    Pair { source: "pdf", target: "split", ready: true, note: "one PDF per page, classic xref rewritten" },
+    Pair { source: "pdf", target: "merge", ready: true, note: "new trailer, pages concatenated" },
+    Pair { source: "pdf", target: "rotate", ready: true, note: "sets /Rotate, does not rasterize" },
+    Pair { source: "pdf", target: "watermark", ready: true, note: "appends a text stream when contents are uncompressed" },
+    Pair { source: "pdf", target: "shrink", ready: false, note: "MISS: Ghostscript /screen|/ebook|/printer is not implemented" },
+    Pair { source: "pdf", target: "encrypt", ready: false, note: "MISS: encryption is not implemented" },
+    Pair { source: "pdf", target: "decrypt", ready: false, note: "MISS: decryption is not implemented" },
+    Pair { source: "pdf", target: "docx", ready: false, note: "MISS: pdf2docx layout rebuild is not implemented" },
+    Pair { source: "pdf", target: "png", ready: false, note: "MISS: rasterize is out of scope" },
+    Pair { source: "rtf", target: "html", ready: false, note: "MISS: rtf reader is not implemented" },
+    Pair { source: "epub", target: "html", ready: false, note: "MISS: epub reader is not implemented" },
+    Pair { source: "pptx", target: "html", ready: false, note: "MISS: pptx reader is not implemented" },
+    Pair { source: "doc", target: "pdf", ready: false, note: "MISS: legacy .doc has no reader; LibreOffice was the only hop" },
+    Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
+    Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
+];
+
+pub fn pair_ready(source: &str, target: &str) -> bool {
+    let source = key(source);
+    let target = key(target);
+    PAIRS
+        .iter()
+        .any(|p| p.ready && key(p.source) == source && key(p.target) == target)
+}
+
+pub fn convert(source_ext: &str, target: &str, input: &[u8]) -> Result<Vec<u8>> {
+    let mut cur = Cursor::new(input);
+    let mut out = Vec::new();
+    convert_to(&mut cur, source_ext, target, &mut out)?;
+    Ok(out)
+}
+
+pub fn convert_to<R: Read + Seek, W: Write>(
+    input: &mut R,
+    source_ext: &str,
+    target: &str,
+    output: &mut W,
+) -> Result<RunStats> {
+    let source = key(source_ext);
+    let target = key(target);
+    if !pair_ready(&source, &target) {
+        let note = PAIRS
+            .iter()
+            .find(|p| key(p.source) == source && key(p.target) == target)
+            .map(|p| p.note)
+            .unwrap_or("MISS: no bridge");
+        return Err(Error::new(note));
+    }
+    match (source.as_str(), target.as_str()) {
+        ("docx", "txt") => docx::docx_to_text(input, output),
+        ("docx", "html") => docx::docx_to_html(input, output),
+        ("docx", "pdf") => pipe_html_pdf(input, output, |r, w| docx::docx_to_html(r, w)),
+        ("odt", "txt") => docx::odt_to_text(input, output),
+        ("odt", "html") => docx::odt_to_html(input, output),
+        ("odt", "pdf") => pipe_html_pdf(input, output, |r, w| docx::odt_to_html(r, w)),
+        ("md", "html") => {
+            let raw = read_string(input)?;
+            let html = markdown_to_html(&raw);
+            write_str(input, output, &html)
+        }
+        ("md", "txt") => {
+            let raw = read_string(input)?;
+            let text = markdown_to_text(&raw);
+            write_str(input, output, &text)
+        }
+        ("md", "pdf") => {
+            let raw = read_string(input)?;
+            let pdf = html_to_pdf(&markdown_to_html(&raw))?;
+            write_bytes(input, output, &pdf)
+        }
+        ("html", "txt") => {
+            let raw = read_string(input)?;
+            let text = html_to_text(&raw)?;
+            write_str(input, output, &text)
+        }
+        ("html", "pdf") => {
+            let raw = read_string(input)?;
+            let pdf = html_to_pdf(&raw)?;
+            write_bytes(input, output, &pdf)
+        }
+        ("txt", "html") => {
+            let raw = read_string(input)?;
+            let html = text_to_html(&raw);
+            write_str(input, output, &html)
+        }
+        ("txt", "pdf") => {
+            let raw = read_string(input)?;
+            let pdf = html_to_pdf(&text_to_html(&raw))?;
+            write_bytes(input, output, &pdf)
+        }
+        ("pdf", "txt") => {
+            let bytes = read_bytes(input)?;
+            write_str_known(bytes.len() as u64, output, &pdf::plain_text(&bytes)?)
+        }
+        ("pdf", "split") | ("pdf", "merge") | ("pdf", "rotate") | ("pdf", "watermark") => Err(Error::new(
+            "pdf split, merge, rotate, and watermark are pdf_split, pdf_merge, pdf_rotate, and pdf_watermark",
+        )),
+        _ => Err(Error::new("MISS: no bridge")),
+    }
+}
+
+fn pipe_html_pdf<R, W, F>(input: &mut R, output: &mut W, mut to_html: F) -> Result<RunStats>
+where
+    R: Read + Seek,
+    W: Write,
+    F: FnMut(&mut R, &mut Vec<u8>) -> Result<RunStats>,
+{
+    let input_bytes = stream_len(input)?;
+    let mut html = Vec::new();
+    let stats = to_html(input, &mut html)?;
+    let text = String::from_utf8_lossy(&html);
+    let pdf = html_to_pdf(&text)?;
+    output.write_all(&pdf)?;
+    Ok(RunStats {
+        scratch_peak: stats.scratch_peak,
+        input_bytes,
+        output_bytes: pdf.len() as u64,
+    })
+}
+
+fn read_string<R: Read + Seek>(input: &mut R) -> Result<String> {
+    let bytes = read_bytes(input)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn read_bytes<R: Read + Seek>(input: &mut R) -> Result<Vec<u8>> {
+    input.seek(std::io::SeekFrom::Start(0))?;
+    let mut buf = Vec::new();
+    input.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+fn stream_len<R: Seek>(input: &mut R) -> Result<u64> {
+    let n = input.seek(std::io::SeekFrom::End(0))?;
+    input.seek(std::io::SeekFrom::Start(0))?;
+    Ok(n)
+}
+
+fn write_str<R: Read + Seek, W: Write>(input: &mut R, output: &mut W, text: &str) -> Result<RunStats> {
+    let input_bytes = stream_len(input)?;
+    let mut counted = CountWrite::new(output);
+    counted.write_all(text.as_bytes())?;
+    Ok(RunStats {
+        scratch_peak: text.len(),
+        input_bytes,
+        output_bytes: counted.n,
+    })
+}
+
+fn write_str_known<W: Write>(input_bytes: u64, output: &mut W, text: &str) -> Result<RunStats> {
+    output.write_all(text.as_bytes())?;
+    Ok(RunStats {
+        scratch_peak: text.len(),
+        input_bytes,
+        output_bytes: text.len() as u64,
+    })
+}
+
+fn write_bytes<R: Read + Seek, W: Write>(input: &mut R, output: &mut W, bytes: &[u8]) -> Result<RunStats> {
+    let input_bytes = stream_len(input)?;
+    output.write_all(bytes)?;
+    Ok(RunStats {
+        scratch_peak: bytes.len(),
+        input_bytes,
+        output_bytes: bytes.len() as u64,
+    })
+}
+
+pub fn pdf_split(input: &[u8]) -> Result<Vec<Vec<u8>>> {
+    pdf::split(input)
+}
+
+pub fn pdf_merge(inputs: &[&[u8]]) -> Result<Vec<u8>> {
+    pdf::merge(inputs)
+}
+
+pub fn pdf_rotate(input: &[u8], degrees: i32) -> Result<Vec<u8>> {
+    pdf::rotate(input, degrees)
+}
+
+pub fn pdf_watermark(input: &[u8], text: &str) -> Result<Vec<u8>> {
+    pdf::watermark(input, text)
+}
+
+pub fn pdf_page_count(input: &[u8]) -> Result<usize> {
+    pdf::page_count(input)
+}
+
+pub fn pdf_text(input: &[u8]) -> Result<String> {
+    pdf::plain_text(input)
+}
+
+fn kind_code(ext: &str) -> u16 {
+    match key(ext).as_str() {
+        "docx" => 1,
+        "md" => 2,
+        "html" => 3,
+        "txt" => 4,
+        "pdf" => 5,
+        "odt" => 6,
+        "rtf" => 7,
+        "epub" => 8,
+        "pptx" => 9,
+        "split" => 10,
+        "merge" => 11,
+        _ => 0,
+    }
+}
+
+/// Encode the converted body as one `EXDOC001` segment and rename it into place.
+pub fn save_conversion(dir: &Path, index: u32, source: &str, target: &str, input: &[u8]) -> Result<PathBuf> {
+    let body = convert(source, target, input)?;
+    let pages = if key(target) == "pdf" {
+        (pdf::page_count(&body).unwrap_or(0) as u32).to_le_bytes().to_vec()
+    } else {
+        Vec::new()
+    };
+    let meta = Meta {
+        source: kind_code(source),
+        target: kind_code(target),
+        flags: 0,
+        input_bytes: input.len() as u64,
+        output_bytes: body.len() as u64,
+    };
+    let bytes = container::encode(&meta, &body, &pages)?;
+    container::write_segment(dir, index, &bytes)
+}
+
+fn key(ext: &str) -> String {
+    let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    match ext.as_str() {
+        "markdown" => "md".to_string(),
+        "htm" => "html".to_string(),
+        _ => ext,
+    }
+}

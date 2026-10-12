@@ -1,0 +1,27 @@
+[package]
+name = "export-docs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Streaming document conversions for export. No LibreOffice, pandoc, or Ghostscript."
+autobins = false
+autobenches = false
+
+[[bin]]
+name = "export-docs-bench"
+path = "src/bin/bench.rs"
+
+[dependencies]
+
+# This package is the crate root. Profiles live here because the hot crate
+# builds on its own and is not a workspace member.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
