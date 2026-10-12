@@ -9,7 +9,8 @@
 //! P-frame references the previous reconstruction and uses either zero motion
 //! or one shared vector. [`encode_ip_split`] is one P-frame whose left and
 //! right macroblocks use two different vectors. [`encode_sequence_split`]
-//! writes up to fifteen of those P-frames.
+//! writes up to thirty-one of those P-frames. More than fifteen widens the
+//! frame number so the shorter files stay on four bits.
 //! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
@@ -286,7 +287,8 @@ pub fn encode_ip_split(
     let mb_h = (intra.height / 16) as usize;
     let mvs = half_mvs(mb_w, mb_h, left, right);
     let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
-    let (p_bytes, p_rec) = encode::encode_pframe_mvs(predicted, &i_rec, opts.qp, &mvs, 1, false)?;
+    let (p_bytes, p_rec) =
+        encode::encode_pframe_mvs(predicted, &i_rec, opts.qp, &mvs, 1, false, 4)?;
     let mut annex_b = i_bytes;
     annex_b.extend(p_bytes);
     Ok(EncodedPair {
@@ -362,12 +364,14 @@ pub fn encode_sequence(
     })
 }
 
-/// I-frame, then one to fifteen P-frames, each with two motion vectors.
+/// I-frame, then one to thirty-one P-frames, each with two motion vectors.
 ///
 /// Every P-frame uses `left` on the left half of the macroblocks and `right`
 /// on the right half, predicted from the previous reconstruction. The last
-/// P-frame is not a reference. One P-frame matches [`encode_ip_split`]. A
-/// B-frame and a second pass are refused.
+/// P-frame is not a reference. One P-frame matches [`encode_ip_split`]. Up to
+/// fifteen P-frames keep a four-bit frame number. Sixteen to thirty-one use
+/// five bits, so those files do not share the shorter SPS. A B-frame and a
+/// second pass are refused.
 pub fn encode_sequence_split(
     intra: &Yuv420,
     predicted: &[Yuv420],
@@ -380,7 +384,7 @@ pub fn encode_sequence_split(
     if matches!(opts.picture, Picture::Bipredicted) {
         return Err(Error::BipredictedFrame);
     }
-    if predicted.is_empty() || predicted.len() > 15 {
+    if predicted.is_empty() || predicted.len() > 31 {
         return Err(Error::Count);
     }
     for frame in predicted {
@@ -389,17 +393,26 @@ pub fn encode_sequence_split(
             return Err(Error::Shape);
         }
     }
+    let frame_bits = if predicted.len() > 15 { 5 } else { 4 };
     let mb_w = (intra.width / 16) as usize;
     let mb_h = (intra.height / 16) as usize;
     let mvs = half_mvs(mb_w, mb_h, left, right);
-    let (mut annex_b, mut reference) = encode::encode_iframe(intra, opts.qp)?;
+    let (mut annex_b, mut reference) =
+        encode::encode_iframe_frame_bits(intra, opts.qp, frame_bits)?;
     let mut reconstructed = Vec::with_capacity(predicted.len() + 1);
     reconstructed.push(reference.clone());
     for (i, frame) in predicted.iter().enumerate() {
         let frame_num = (i + 1) as u32;
         let is_reference = i + 1 < predicted.len();
-        let (bytes, rec) =
-            encode::encode_pframe_mvs(frame, &reference, opts.qp, &mvs, frame_num, is_reference)?;
+        let (bytes, rec) = encode::encode_pframe_mvs(
+            frame,
+            &reference,
+            opts.qp,
+            &mvs,
+            frame_num,
+            is_reference,
+            frame_bits,
+        )?;
         annex_b.extend(bytes);
         reference = rec.clone();
         reconstructed.push(rec);
@@ -597,6 +610,11 @@ pub fn fixture_1280x720_split_eight() -> (Yuv420, Vec<Yuv420>) {
 /// Sixteen 1280×720 pictures. The eight-picture chain continued for fifteen P-frames.
 pub fn fixture_1280x720_split_sixteen() -> (Yuv420, Vec<Yuv420>) {
     split_chain(fixture_1280x720(), 15)
+}
+
+/// Thirty-two 1280×720 pictures. The sixteen-picture chain continued for thirty-one P-frames.
+pub fn fixture_1280x720_split_thirtytwo() -> (Yuv420, Vec<Yuv420>) {
+    split_chain(fixture_1280x720(), 31)
 }
 
 fn split_four(intra: Yuv420) -> (Yuv420, Vec<Yuv420>) {

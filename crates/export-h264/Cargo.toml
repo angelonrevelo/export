@@ -90,6 +90,10 @@ name = "seqsixteen720"
 path = "src/bin/seqsixteen720.rs"
 
 [[bin]]
+name = "seqthirtytwo720"
+path = "src/bin/seqthirtytwo720.rs"
+
+[[bin]]
 name = "seqframe"
 path = "src/bin/seqframe.rs"
 

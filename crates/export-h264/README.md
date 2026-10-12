@@ -193,3 +193,12 @@ Same profile and QP. One I-frame and fifteen P-frames. Each P-frame uses the sam
 - release p50: 95698 µs, p99: 117708 µs on the recorded run. Three later runs on that binary were p50 94787–95840 µs and p99 105864–140903 µs
 
 ffmpeg decoded all sixteen pictures and matched the encoder reconstruction. Mean absolute error versus the sources was 3.2405. The I-frame is 3.2467. The fifteen P-frames together are 3.2401. `scripts/check-seqsixteen720.sh` may run ffmpeg only to decode that file.
+
+## Thirty-two 1280×720 pictures
+
+Same profile and QP. One I-frame and thirty-one P-frames. Each P-frame uses the same left/right split, predicted from the previous reconstruction. Sixteen to thirty-one P-frames use a five-bit frame number, so this file does not share the SPS of the 272,518-byte sixteen-picture file. The last P-frame is not a reference. 200 calls after 20 warmup.
+
+- output: 308774 bytes
+- release p50: 197548 µs, p99: 242052 µs on the recorded run. Two later runs on that binary were p50 199406–199729 µs and p99 231920–276922 µs
+
+ffmpeg decoded all thirty-two pictures and matched the encoder reconstruction. Mean absolute error versus the sources was 3.2412. The I-frame is 3.2467. The thirty-one P-frames together are 3.2410. `scripts/check-seqthirtytwo720.sh` may run ffmpeg only to decode that file.

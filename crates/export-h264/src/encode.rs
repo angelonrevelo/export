@@ -379,7 +379,7 @@ fn nc_at(nnz: &[u8], stride: usize, x: usize, y: usize) -> i32 {
     }
 }
 
-fn write_sps(width: u32, height: u32) -> Vec<u8> {
+fn write_sps(width: u32, height: u32, log2_max_frame_num_minus4: u32) -> Vec<u8> {
     let mut b = BitWriter::new();
     let macroblocks = (width / 16) * (height / 16);
     // Level 1.0 allows 99 macroblocks. 32×32 stays on level 1.0.
@@ -401,7 +401,7 @@ fn write_sps(width: u32, height: u32) -> Vec<u8> {
     b.write_bits(0, 6);
     b.write_bits(level, 8);
     b.write_ue(0);
-    b.write_ue(0);
+    b.write_ue(log2_max_frame_num_minus4);
     b.write_ue(2);
     b.write_ue(1);
     b.write_bit(0);
@@ -451,14 +451,14 @@ struct Slice<'a> {
     v_nnz: &'a [u8],
 }
 
-fn write_slice(slice: &Slice<'_>) -> Vec<u8> {
+fn write_slice(slice: &Slice<'_>, frame_bits: u32) -> Vec<u8> {
     let mb_w = (slice.width / 16) as usize;
     let mb_h = (slice.height / 16) as usize;
     let mut b = BitWriter::new();
     b.write_ue(0);
     b.write_ue(7);
     b.write_ue(0);
-    b.write_bits(0, 4);
+    b.write_bits(0, frame_bits);
     b.write_ue(0);
     b.write_bit(0);
     b.write_bit(0);
@@ -535,6 +535,14 @@ fn write_slice(slice: &Slice<'_>) -> Vec<u8> {
 }
 
 pub fn encode_iframe(frame: &Yuv420, qp: u8) -> Result<(Vec<u8>, Yuv420), Error> {
+    encode_iframe_frame_bits(frame, qp, 4)
+}
+
+pub(crate) fn encode_iframe_frame_bits(
+    frame: &Yuv420,
+    qp: u8,
+    frame_bits: u32,
+) -> Result<(Vec<u8>, Yuv420), Error> {
     let width = frame.width;
     let height = frame.height;
     let qp_i = qp as i32;
@@ -594,18 +602,21 @@ pub fn encode_iframe(frame: &Yuv420, qp: u8) -> Result<(Vec<u8>, Yuv420), Error>
     }
     let mut out = Vec::new();
     out.extend(write_aud());
-    out.extend(write_sps(width, height));
+    out.extend(write_sps(width, height, frame_bits - 4));
     out.extend(write_pps(qp_i));
-    out.extend(write_slice(&Slice {
-        width,
-        height,
-        luma: &luma_blocks,
-        chroma_u: &chroma_u,
-        chroma_v: &chroma_v,
-        luma_nnz: &luma_nnz,
-        u_nnz: &u_nnz,
-        v_nnz: &v_nnz,
-    }));
+    out.extend(write_slice(
+        &Slice {
+            width,
+            height,
+            luma: &luma_blocks,
+            chroma_u: &chroma_u,
+            chroma_v: &chroma_v,
+            luma_nnz: &luma_nnz,
+            u_nnz: &u_nnz,
+            v_nnz: &v_nnz,
+        },
+        frame_bits,
+    ));
     let reconstructed = Yuv420 {
         width,
         height,
@@ -753,6 +764,7 @@ fn write_p_slice(
     mvs: &[(i32, i32)],
     frame_num: u32,
     reference: bool,
+    frame_bits: u32,
 ) -> Vec<u8> {
     let mb_w = (slice.width / 16) as usize;
     let mb_h = (slice.height / 16) as usize;
@@ -760,7 +772,7 @@ fn write_p_slice(
     b.write_ue(0);
     b.write_ue(0);
     b.write_ue(0);
-    b.write_bits(frame_num, 4);
+    b.write_bits(frame_num, frame_bits);
     b.write_bit(0);
     b.write_bit(0);
     if reference {
@@ -855,7 +867,7 @@ pub fn encode_pframe_at(
     let mb_w = (source.width / 16) as usize;
     let mb_h = (source.height / 16) as usize;
     let mvs = vec![(mvx, mvy); mb_w * mb_h];
-    encode_pframe_mvs(source, reference, qp, &mvs, frame_num, is_reference)
+    encode_pframe_mvs(source, reference, qp, &mvs, frame_num, is_reference, 4)
 }
 
 /// P slice whose macroblocks do not all share one motion vector.
@@ -869,11 +881,15 @@ pub fn encode_pframe_mvs(
     mvs: &[(i32, i32)],
     frame_num: u32,
     is_reference: bool,
+    frame_bits: u32,
 ) -> Result<(Vec<u8>, Yuv420), Error> {
     if source.width != reference.width || source.height != reference.height {
         return Err(Error::Shape);
     }
-    if frame_num > 15 {
+    if frame_bits != 4 && frame_bits != 5 {
+        return Err(Error::Count);
+    }
+    if frame_num >= 1 << frame_bits {
         return Err(Error::Count);
     }
     let width = source.width;
@@ -980,6 +996,7 @@ pub fn encode_pframe_mvs(
         mvs,
         frame_num,
         is_reference,
+        frame_bits,
     ));
     Ok((
         out,
