@@ -11,7 +11,7 @@ use crate::png::decode_png;
 use crate::resize::{resize, Filter};
 use crate::shrink::into_rgb;
 use crate::sniff::{sniff, Format};
-use crate::webp::{decode_webp, full_640_two_frame};
+use crate::webp::{decode_webp, full_1280_four_frame, full_640_two_frame};
 
 /// Longest side of a thumbnail, in pixels.
 pub const THUMB_LONG_EDGE: u32 = 220;
@@ -29,9 +29,9 @@ pub struct Thumbnail {
     pub height: u32,
 }
 
-/// Decode a PNG, a baseline JPEG, or the two-frame 640×480 WebP, fit the long
-/// edge, and encode JPEG q=72. That WebP file contributes its first frame.
-/// Every other WebP stays [`UNSUPPORTED`].
+/// Decode a PNG, a baseline JPEG, the two-frame 640×480 WebP, or the four-frame
+/// 1280×720 WebP, fit the long edge, and encode JPEG q=72. Each of those WebP
+/// files contributes its first frame. Every other WebP stays [`UNSUPPORTED`].
 pub fn thumbnail_jpeg(bytes: &[u8]) -> Result<Thumbnail, Error> {
     if bytes.len() > THUMB_READ_LIMIT {
         return Err(TOO_LARGE);
@@ -39,7 +39,9 @@ pub fn thumbnail_jpeg(bytes: &[u8]) -> Result<Thumbnail, Error> {
     let decoded = match sniff(bytes) {
         Format::Png => decode_png(bytes)?,
         Format::Jpeg => decode_jpeg(bytes)?,
-        Format::Webp if full_640_two_frame(bytes) => decode_webp(bytes)?,
+        Format::Webp if full_640_two_frame(bytes) || full_1280_four_frame(bytes) => {
+            decode_webp(bytes)?
+        }
         _ => return Err(UNSUPPORTED),
     };
     let rgb = into_rgb(decoded)?;
@@ -85,6 +87,7 @@ mod tests {
         assert_eq!(fit_long_edge(480, 640, 220), (165, 220));
         assert_eq!(fit_long_edge(100, 80, 220), (100, 80));
         assert_eq!(fit_long_edge(221, 100, 220), (220, 100));
+        assert_eq!(fit_long_edge(1280, 720, 220), (220, 124));
     }
 
     #[test]
@@ -135,5 +138,36 @@ mod tests {
         }
         let small = encode_webp_animation(&tiny).unwrap();
         assert_eq!(thumbnail_jpeg(&small).unwrap_err(), UNSUPPORTED);
+    }
+
+    #[test]
+    fn four_frame_1280_first_frame_is_a_220_jpeg() {
+        use crate::raster::Raster;
+        use crate::webp::{encode_webp_animation, encode_webp_lossy};
+
+        let mut frames = Vec::new();
+        for rgb in [[40u8, 90, 160], [210, 50, 30], [15, 180, 70], [240, 220, 40]] {
+            let mut pixels = vec![0u8; 1280 * 720 * 3];
+            for px in pixels.chunks_exact_mut(3) {
+                px.copy_from_slice(&rgb);
+            }
+            frames.push(Raster::new(1280, 720, 3, pixels).unwrap());
+        }
+        let file = encode_webp_animation(&frames).unwrap();
+        let thumb = thumbnail_jpeg(&file).unwrap();
+        assert_eq!((thumb.width, thumb.height), (220, 124));
+        assert_eq!(thumb.width.max(thumb.height), 220);
+        assert!(thumb.jpeg.starts_with(&[0xff, 0xd8, 0xff]));
+        let first = decode_webp(&file).unwrap();
+        assert_eq!((first.width, first.height), (1280, 720));
+        let fitted = resize(&first, 220, 124, Filter::Area).unwrap();
+        assert_eq!(thumb.jpeg, encode_jpeg(&fitted, THUMB_QUALITY).unwrap());
+        let back = decode_jpeg(&thumb.jpeg).unwrap();
+        assert_eq!((back.width, back.height), (220, 124));
+
+        let still = encode_webp_lossy(&frames[0]).unwrap();
+        assert_eq!(thumbnail_jpeg(&still).unwrap_err(), UNSUPPORTED);
+        let two = encode_webp_animation(&frames[..2]).unwrap();
+        assert_eq!(thumbnail_jpeg(&two).unwrap_err(), UNSUPPORTED);
     }
 }

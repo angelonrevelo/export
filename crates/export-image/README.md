@@ -39,7 +39,7 @@ Color conversion is limited-range BT.601. `decode_webp(encode_webp_lossy(image))
 
 The VP8 bool decoder zero-fills a coefficient partition that ends early, which is what the frame format specifies. That shortfall is not reported as `Truncated`. Truncation is decided from the container and the frame header.
 
-`thumbnail_jpeg` of the existing two-frame 640×480 WebP writes a JPEG of that file's first frame. The long edge is 220 and the quality is 72. Every other WebP stays `Unsupported` on the thumbnail path. `shrink_png` still requires a PNG.
+`thumbnail_jpeg` of the existing two-frame 640×480 WebP, and of the existing four-frame 1280×720 WebP, writes a JPEG of that file's first frame. The long edge is 220 and the quality is 72. Every other WebP stays `Unsupported` on the thumbnail path. `shrink_png` still requires a PNG.
 
 ## SVG rect
 

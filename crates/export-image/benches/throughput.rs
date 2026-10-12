@@ -1169,4 +1169,36 @@ fn main() {
         p50 as f64 / 1_000.0,
         p99 as f64 / 1_000.0,
     );
+
+    // Thumbnail the existing four-frame 1280×720 file's first frame.
+    // The thumbnail rows above are unchanged.
+    for _ in 0..2 {
+        let _ = thumbnail_jpeg(&anim4_720).unwrap();
+    }
+    let (p50, p99) = time_n(20, || {
+        let _ = thumbnail_jpeg(&anim4_720).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let webp_thumb4 = thumbnail_jpeg(&anim4_720).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let jpeg = webp_thumb4.jpeg.len() >= 3
+        && webp_thumb4.jpeg[0] == 0xff
+        && webp_thumb4.jpeg[1] == 0xd8
+        && webp_thumb4.jpeg[2] == 0xff;
+    let decoded_jpeg = decode_jpeg(&webp_thumb4.jpeg).unwrap();
+    let long_side = webp_thumb4.width.max(webp_thumb4.height);
+    let first = decode_webp(&anim4_720).unwrap();
+    let fitted = resize(&first, webp_thumb4.width, webp_thumb4.height, Filter::Area).unwrap();
+    let first_frame_match = webp_thumb4.jpeg == encode_jpeg(&fitted, 72).unwrap()
+        && decoded_jpeg.width == webp_thumb4.width
+        && decoded_jpeg.height == webp_thumb4.height;
+    println!(
+        "thumbnail_webp1280x4_first file_bytes={} out_bytes={} width={} height={} long_side={long_side} jpeg={jpeg} samples=20 p50_us={:.1} p99_us={:.1} allocs={allocs} first_frame_match={first_frame_match}",
+        anim4_720.len(),
+        webp_thumb4.jpeg.len(),
+        webp_thumb4.width,
+        webp_thumb4.height,
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+    );
 }
