@@ -122,6 +122,16 @@ Agile, same bench and the same machine, recorded 2026-10-12:
 | 65,536 | 70,144 | 32.636 ms | 2.01 | 2,819 |
 | 1,048,576 | 1,060,864 | 54.381 ms | 19.28 | 2,819 |
 
+Same password and AES-256-CBC SHA-512 path, with four times the 1 MiB
+plaintext. 100 timed decrypts after one warmup. Every sample matched the
+plaintext. p50 and p99 are those times; MB/s divides the plaintext length
+by that time. Recorded 2026-10-12.
+
+| plaintext | file | p50 | MB/s p50 | MB/s p99 |
+|---|---|---|---|---|
+| 4,194,304 | 4,231,168 | 114.998 ms | 36.47 | 28.33 |
+
 Same release profile as the scrub table. The bench aborts if peak extra
-reaches 64 KiB. A later rerun of the standard rows on the agile bench
-binary stayed at 1,832 extra bytes.
+reaches 64 KiB, and aborts this size when MB/s p50 is below 17.4. A later
+rerun of the standard rows on the agile bench binary stayed at 1,832 extra
+bytes.

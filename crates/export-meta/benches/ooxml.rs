@@ -156,4 +156,52 @@ fn main() {
         .unwrap();
         measure("agile", &file, &plain, judged);
     }
+    measure_agile_four_mib(&password_salt, &key_salt, judged);
+}
+
+fn measure_agile_four_mib(password_salt: &[u8; 16], key_salt: &[u8; 16], judged: bool) {
+    let n = 4 * 1024 * 1024;
+    let mut plain = vec![0x5au8; n];
+    plain[..4].copy_from_slice(b"PK\x03\x04");
+    let mut file = Vec::new();
+    encrypt_ooxml_agile("bench-password", password_salt, key_salt, &plain, &mut file).unwrap();
+    decrypt_once(&file, &plain);
+    let mut times = Vec::with_capacity(100);
+    for _ in 0..100 {
+        let before = CURRENT.load(Ordering::Relaxed);
+        PEAK.store(before, Ordering::Relaxed);
+        let started = Instant::now();
+        decrypt_once(&file, &plain);
+        let elapsed = started.elapsed().as_nanos() as f64;
+        let extra = PEAK.load(Ordering::Relaxed).saturating_sub(before);
+        assert!(extra < 64 * 1024, "agile 4MiB allocated {extra} bytes");
+        times.push(elapsed);
+    }
+    times.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    let p50 = percentile(&times, 50);
+    let p99 = percentile(&times, 99);
+    let ms = p50 / 1_000_000.0;
+    let mb_p50 = mb_per_s(n, p50);
+    let mb_p99 = mb_per_s(n, p99);
+    if !judged {
+        println!("NOT JUDGED agile plain={n} p50_ms={ms:.3}");
+        return;
+    }
+    println!(
+        "agile plain={n} file={} p50_ms={ms:.3} mb_s_p50={mb_p50:.2} mb_s_p99={mb_p99:.2}",
+        file.len()
+    );
+    assert!(
+        mb_p50 >= 17.4,
+        "agile 4MiB throughput p50 {mb_p50:.2} MB/s is below 17.4"
+    );
+}
+
+fn mb_per_s(bytes: usize, ns: f64) -> f64 {
+    (bytes as f64) / (ns / 1_000_000_000.0) / 1_000_000.0
+}
+
+fn percentile(sorted: &[f64], pct: usize) -> f64 {
+    let rank = ((pct as f64 / 100.0) * (sorted.len() as f64 - 1.0)).round() as usize;
+    sorted[rank.min(sorted.len() - 1)]
 }
