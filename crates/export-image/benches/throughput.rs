@@ -1201,4 +1201,33 @@ fn main() {
         p50 as f64 / 1_000.0,
         p99 as f64 / 1_000.0,
     );
+
+    // Same gradient as the 96×72 shrink, next edge 192×144. Same cap.
+    // The 96×72 loop above is unchanged.
+    let mid = gradient(192, 144);
+    let mid_png = encode_png(&mid).unwrap();
+    for _ in 0..2 {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&mid_png, target, &mut c).unwrap();
+    }
+    let (p50, p99) = time_n(12, || {
+        let mut c = ShrinkCache::new();
+        let _ = shrink_png(&mid_png, target, &mut c).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let mut c = ShrinkCache::new();
+    let shrunk = shrink_png(&mid_png, target, &mut c).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let smaller = shrunk.bytes.len() < mid_png.len();
+    let mid_pixels = 192.0 * 144.0;
+    println!(
+        "shrink_png192 file_bytes={} out_bytes={} samples=12 p50_us={:.1} p99_us={:.1} smaller={smaller} copied={} pixel_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        mid_png.len(),
+        shrunk.bytes.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        shrunk.copied,
+        mb_s(mid_pixels * 3.0, p50),
+        allocs as f64 / (mid_pixels / 1_000_000.0),
+    );
 }
