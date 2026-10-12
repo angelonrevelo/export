@@ -211,3 +211,11 @@ The reconstruction `encode` already stored for the 272-byte I-frame, returned as
 - release p50: 58 ns, p99: 80 ns on the recorded run. Two later runs on that binary were p50 58–62 ns and p99 83–168 ns
 
 Mean absolute error versus the source is 2.4974, the same reconstruction already measured for that frame. `scripts/check-still32.sh` checks those pixels. It does not run ffmpeg.
+
+## 32×32 decode
+
+The same 272-byte I-frame, read back into those pixels. The call parses the Annex B bytes. Encode time is outside this timer. 200 calls after 20 warmup.
+
+- release p50: 39 µs, p99: 49 µs on the recorded run (38517 ns and 48412 ns). Two later runs on that binary were p50 39 µs and p99 40–41 µs
+
+The pixels match the encoder reconstruction. Mean absolute error versus the source is 2.4974. `scripts/check-decode32.sh` checks those pixels. It does not run ffmpeg. This is not a decoder for an arbitrary bitstream.

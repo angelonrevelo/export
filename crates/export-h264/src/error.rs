@@ -25,6 +25,8 @@ pub enum Error {
     Motion,
     /// A sequence was not one I-frame plus one to fifteen P-frames, or one to thirty-one when each P-frame uses two motion vectors.
     Count,
+    /// The bytes are not one I-frame written by this encoder.
+    Bytes,
 }
 
 impl fmt::Display for Error {
@@ -41,6 +43,7 @@ impl fmt::Display for Error {
             Error::Shape => "the P-frame size does not match the I-frame",
             Error::Motion => "motion must land on a whole chroma sample",
             Error::Count => "a sequence is one I-frame and one to fifteen P-frames, or up to thirty-one when each P-frame uses two motion vectors",
+            Error::Bytes => "only one I-frame from this encoder can be read",
         })
     }
 }

@@ -15,13 +15,16 @@
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
 //! return an error. [`still`] returns the reconstruction [`encode`] already
-//! stored. It does not read Annex B. Nothing here links or spawns ffmpeg.
-//! This is not a video shrink of a real MP4, and it is not a decoder.
+//! stored. It does not read Annex B. [`decode_iframe`] reads one I-frame this
+//! encoder wrote and rebuilds that reconstruction. Anything else is refused.
+//! Nothing here links or spawns ffmpeg. This is not a video shrink of a real
+//! MP4, and it is not a decoder for an arbitrary bitstream.
 
 #![forbid(unsafe_code)]
 
 mod bitstream;
 mod cavlc;
+mod decode;
 mod encode;
 mod error;
 
@@ -178,6 +181,14 @@ pub fn encode(frame: &Yuv420, opts: &EncodeOptions) -> Result<Encoded, Error> {
 /// A lone P-frame, a B-frame, and a second pass are still refused by [`encode`].
 pub fn still(encoded: &Encoded) -> Vec<u8> {
     encoded.reconstructed.i420()
+}
+
+/// Read one I-frame Annex B produced by [`encode`] and return its reconstruction.
+///
+/// The 272-byte 32×32 frame is parsed. A stored buffer is not returned in its
+/// place. A P-frame, a B-frame, and any other bitstream are refused.
+pub fn decode_iframe(annex_b: &[u8]) -> Result<Yuv420, Error> {
+    decode::decode_iframe(annex_b)
 }
 
 fn check_common(opts: &EncodeOptions) -> Result<(), Error> {

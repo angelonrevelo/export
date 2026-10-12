@@ -3,9 +3,9 @@ use crate::cavlc::{inter_cbp_code, intra_cbp_code, write_block};
 use crate::error::Error;
 use crate::Yuv420;
 
-const ZIGZAG: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
-const BLK_X: [usize; 16] = [0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3];
-const BLK_Y: [usize; 16] = [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3];
+pub(crate) const ZIGZAG: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
+pub(crate) const BLK_X: [usize; 16] = [0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3];
+pub(crate) const BLK_Y: [usize; 16] = [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3];
 
 const MF: [[i32; 6]; 3] = [
     [13107, 11916, 10082, 9362, 8192, 7282],
@@ -70,7 +70,7 @@ fn quant4(w: &[[i32; 4]; 4], qp: i32) -> [[i32; 4]; 4] {
     z
 }
 
-fn dequant4(z: &[[i32; 4]; 4], qp: i32) -> [[i32; 4]; 4] {
+pub(crate) fn dequant4(z: &[[i32; 4]; 4], qp: i32) -> [[i32; 4]; 4] {
     let shift = qp / 6;
     let m = (qp as usize) % 6;
     let mut d = [[0i32; 4]; 4];
@@ -83,7 +83,7 @@ fn dequant4(z: &[[i32; 4]; 4], qp: i32) -> [[i32; 4]; 4] {
     d
 }
 
-fn idct4(d: &[[i32; 4]; 4]) -> [[i32; 4]; 4] {
+pub(crate) fn idct4(d: &[[i32; 4]; 4]) -> [[i32; 4]; 4] {
     let mut tmp = [[0i32; 4]; 4];
     for i in 0..4 {
         let e0 = d[i][0] + d[i][2];
@@ -117,7 +117,7 @@ fn to_scan(z: &[[i32; 4]; 4]) -> [i32; 16] {
     s
 }
 
-fn clip8(v: i32) -> u8 {
+pub(crate) fn clip8(v: i32) -> u8 {
     if v < 0 {
         0
     } else if v > 255 {
@@ -149,7 +149,7 @@ fn quant_chroma_dc(dcs: [i32; 4], qp: i32) -> [i32; 4] {
     z
 }
 
-fn dequant_chroma_dc(z: [i32; 4], qp: i32) -> [i32; 4] {
+pub(crate) fn dequant_chroma_dc(z: [i32; 4], qp: i32) -> [i32; 4] {
     let h = hadamard2(z);
     let v = DEQ[0][(qp as usize) % 6];
     let mut out = [0i32; 4];
@@ -163,7 +163,7 @@ fn dequant_chroma_dc(z: [i32; 4], qp: i32) -> [i32; 4] {
     out
 }
 
-fn pred_luma_dc(rec: &[u8], stride: usize, x: usize, y: usize) -> [u8; 16] {
+pub(crate) fn pred_luma_dc(rec: &[u8], stride: usize, x: usize, y: usize) -> [u8; 16] {
     let left = x > 0;
     let top = y > 0;
     let sample = if left && top {
@@ -191,7 +191,7 @@ fn pred_luma_dc(rec: &[u8], stride: usize, x: usize, y: usize) -> [u8; 16] {
     [sample; 16]
 }
 
-fn pred_chroma_dc(rec: &[u8], stride: usize, x: usize, y: usize) -> [u8; 64] {
+pub(crate) fn pred_chroma_dc(rec: &[u8], stride: usize, x: usize, y: usize) -> [u8; 64] {
     let left = x > 0;
     let top = y > 0;
     let blk = if left && top {
@@ -360,7 +360,7 @@ fn encode_chroma_mb(plane: &mut Plane<'_>, mb_x: usize, mb_y: usize, qp: i32) ->
     }
 }
 
-fn nc_at(nnz: &[u8], stride: usize, x: usize, y: usize) -> i32 {
+pub(crate) fn nc_at(nnz: &[u8], stride: usize, x: usize, y: usize) -> i32 {
     let left = if x > 0 {
         Some(nnz[y * stride + x - 1] as i32)
     } else {

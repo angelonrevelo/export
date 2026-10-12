@@ -1,4 +1,5 @@
-use crate::bitstream::BitWriter;
+use crate::bitstream::{BitReader, BitWriter};
+use crate::error::Error;
 
 // coeff_token: index = trailing_ones + 4 * (total_coeff - trailing_ones).
 // (code, bit length). nC >= 8 is a fixed 6-bit code stored as the code value.
@@ -283,4 +284,212 @@ pub fn inter_cbp_code(cbp: usize) -> u32 {
         45, 38, 41, 39, 42, 43, 19, 6, 24, 25, 20, 26, 21, 46, 28, 27, 47, 22, 29, 23, 30, 31, 12,
     ];
     MAP[cbp]
+}
+
+pub(crate) fn intra_cbp_from_code(code: u32) -> Option<usize> {
+    (0..48).find(|&cbp| intra_cbp_code(cbp) == code)
+}
+
+fn take_code(
+    bits: &mut BitReader<'_>,
+    max_len: u32,
+    mut matches: impl FnMut(u32, u32) -> Option<usize>,
+) -> Result<usize, Error> {
+    for len in 1..=max_len {
+        let peeked = match bits.peek_bits(len) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        if let Some(found) = matches(len, peeked) {
+            bits.read_bits(len)?;
+            return Ok(found);
+        }
+    }
+    Err(Error::Bytes)
+}
+
+fn read_token(bits: &mut BitReader<'_>, nc: i32) -> Result<(usize, usize), Error> {
+    let max_bits: u32 = if nc < 0 {
+        8
+    } else if nc >= 8 {
+        6
+    } else {
+        16
+    };
+    let max_total = if nc < 0 { 4 } else { 16 };
+    let packed = take_code(bits, max_bits, |len, peeked| {
+        let mut found = None;
+        for total in 0..=max_total {
+            for trailing in 0..=total.min(3) {
+                let (code, clen) = token(total, trailing, nc);
+                if clen == 0 || clen as u32 != len || code != peeked {
+                    continue;
+                }
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(trailing + (total << 2));
+            }
+        }
+        found
+    })?;
+    Ok((packed >> 2, packed & 3))
+}
+
+fn read_level_code(bits: &mut BitReader<'_>, suffix: i32) -> Result<i32, Error> {
+    let mut zeros = 0i32;
+    loop {
+        if bits.read_bit()? == 1 {
+            break;
+        }
+        zeros += 1;
+        if zeros > 15 {
+            return Err(Error::Bytes);
+        }
+    }
+    if suffix == 0 {
+        if zeros < 14 {
+            return Ok(zeros);
+        }
+        if zeros == 14 {
+            return Ok(14 + bits.read_bits(4)? as i32);
+        }
+        return Ok(30 + bits.read_bits(12)? as i32);
+    }
+    if zeros < 15 {
+        let low = bits.read_bits(suffix as u32)? as i32;
+        return Ok((zeros << suffix) | low);
+    }
+    let esc = bits.read_bits(12)? as i32;
+    Ok((15 << suffix) + esc)
+}
+
+fn level_from_code(mut code: i32, first: bool, trailing: usize) -> i32 {
+    if first && trailing < 3 {
+        code += 2;
+    }
+    if code & 1 == 0 {
+        (code + 2) >> 1
+    } else {
+        -((code + 1) >> 1)
+    }
+}
+
+fn read_total_zeros(bits: &mut BitReader<'_>, total: usize, maxn: usize) -> Result<usize, Error> {
+    let max_zeros = maxn - total;
+    take_code(bits, 9, |len, peeked| {
+        let mut found = None;
+        for zeros in 0..=max_zeros {
+            let (code, clen) = if maxn == 4 {
+                total_zeros_chroma_dc(total, zeros)
+            } else {
+                total_zeros_16(total, zeros)
+            };
+            if clen as u32 != len || code != peeked {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(zeros);
+        }
+        found
+    })
+}
+
+fn read_run_before(bits: &mut BitReader<'_>, zeros_left: usize) -> Result<usize, Error> {
+    let max_run = if zeros_left >= 7 {
+        14.min(zeros_left)
+    } else {
+        zeros_left
+    };
+    take_code(bits, 11, |len, peeked| {
+        let mut found = None;
+        for run in 0..=max_run {
+            let (code, clen) = run_before(run, zeros_left);
+            if clen as u32 != len || code != peeked {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(run);
+        }
+        found
+    })
+}
+
+/// Inverse of [`write_block`]. `maxn` is 16, 15, or 4.
+pub(crate) fn read_block(
+    bits: &mut BitReader<'_>,
+    nc: i32,
+    maxn: usize,
+) -> Result<[i32; 16], Error> {
+    let (total, trailing) = read_token(bits, nc)?;
+    let mut scan = [0i32; 16];
+    if total == 0 {
+        return Ok(scan);
+    }
+    if total > maxn || trailing > total {
+        return Err(Error::Bytes);
+    }
+    let mut high_to_low = [0i32; 16];
+    for level in high_to_low.iter_mut().take(trailing) {
+        *level = if bits.read_bit()? == 1 { -1 } else { 1 };
+    }
+    let nlevels = total - trailing;
+    let mut suffix: i32 = if total > 10 && trailing < 3 { 1 } else { 0 };
+    for i in 0..nlevels {
+        let code = read_level_code(bits, suffix)?;
+        let level = level_from_code(code, i == 0, trailing);
+        high_to_low[trailing + i] = level;
+        if suffix == 0 {
+            suffix = 1;
+        }
+        if level.abs() > (3 << (suffix - 1)) && suffix < 6 {
+            suffix += 1;
+        }
+    }
+    let mut val = [0i32; 16];
+    for i in 0..total {
+        val[total - 1 - i] = high_to_low[i];
+    }
+    let mut pos = [0usize; 16];
+    if total < maxn {
+        let zeros = read_total_zeros(bits, total, maxn)?;
+        let last = zeros + total - 1;
+        if last >= maxn {
+            return Err(Error::Bytes);
+        }
+        pos[total - 1] = last;
+        let mut zeros_left = zeros;
+        for k in (1..total).rev() {
+            let run = if zeros_left > 0 {
+                let run = read_run_before(bits, zeros_left)?;
+                if run > zeros_left {
+                    return Err(Error::Bytes);
+                }
+                zeros_left -= run;
+                run
+            } else {
+                0
+            };
+            let prev = pos[k].checked_sub(run + 1).ok_or(Error::Bytes)?;
+            pos[k - 1] = prev;
+        }
+        if zeros_left != pos[0] {
+            return Err(Error::Bytes);
+        }
+    } else {
+        for i in 0..total {
+            pos[i] = i;
+        }
+    }
+    for i in 0..total {
+        if pos[i] >= maxn {
+            return Err(Error::Bytes);
+        }
+        scan[pos[i]] = val[i];
+    }
+    Ok(scan)
 }

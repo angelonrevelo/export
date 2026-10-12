@@ -1,6 +1,6 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence, encode_sequence_split,
-    fixture_1280x720, fixture_1280x720_split, fixture_1280x720_split_eight,
+    decode_iframe, encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence,
+    encode_sequence_split, fixture_1280x720, fixture_1280x720_split, fixture_1280x720_split_eight,
     fixture_1280x720_split_four, fixture_1280x720_split_sixteen, fixture_1280x720_split_thirtytwo,
     fixture_160x160, fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
     fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
@@ -151,6 +151,37 @@ fn still_is_the_measured_iframe_reconstruction() {
         .unwrap_err(),
         Error::SecondPass
     );
+}
+
+#[test]
+fn decode_reads_the_272_byte_iframe() {
+    let frame = fixture_32x32();
+    let opts = EncodeOptions::default();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.annex_b.len(), 272);
+    assert_eq!(still(&encoded).len(), 1536);
+    let decoded = decode_iframe(&encoded.annex_b).unwrap();
+    assert_eq!(decoded, encoded.reconstructed);
+    let mae = mean_absolute_error(&frame, &decoded);
+    assert!(
+        (mae - 2.4974).abs() < 0.00005,
+        "decode mae {mae:.4} is not the measured reconstruction"
+    );
+    let mut changed = false;
+    for i in 16..encoded.annex_b.len() {
+        let mut flipped = encoded.annex_b.clone();
+        flipped[i] ^= 0x1f;
+        match decode_iframe(&flipped) {
+            Ok(y) if y == encoded.reconstructed => {}
+            _ => {
+                changed = true;
+                break;
+            }
+        }
+    }
+    assert!(changed, "decode ignored the Annex B bytes");
+    let pair = encode_ip(&frame, &fixture_32x32_predicted(), &opts).unwrap();
+    assert_eq!(decode_iframe(&pair.annex_b).unwrap_err(), Error::Bytes);
 }
 
 #[test]
