@@ -192,6 +192,25 @@ fn picture_bytes_are_the_raw_sample() {
 }
 
 #[test]
+fn audio_bytes_are_the_stored_pcm() {
+    let wav = one_second();
+    let pcm = decode_wav(&wav).expect("wav").pcm.to_vec();
+    let file = audiogram(&wav).expect("audiogram");
+    assert_eq!(file.bytes, 327_420);
+    assert_eq!(file.video_samples, 1);
+    let movie = parse(&file.data).expect("parse");
+    let audio = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"soun")
+        .expect("audio");
+    assert_eq!(audio.codec, *b"sowt");
+    let samples = elementary(audio, &file.data).expect("pcm");
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0], pcm.as_slice());
+}
+
+#[test]
 fn rejects_non_wav() {
     let err = audiogram(b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2").expect_err("mp4");
     assert!(matches!(
