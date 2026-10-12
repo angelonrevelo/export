@@ -37,6 +37,20 @@ Filipino from that run:
 
 Two more release runs of the same binary were 1,643 ns and 1,630 ns. Heap stayed 1,862 bytes. VmHWM stayed between 2,846,720 and 2,891,776 bytes. That resident set is what to compare with NLLB's ~1.2 GB.
 
+A second paragraph, also not a stored fixture, uses only lemmas and clause shapes already in the crate. Three sentences, both directions, 2,000 iterations. Each sample is that iteration's time divided by sentences × 2. Nearest-rank percentiles, `cargo run --release --bin export-translate-tl-pctl`:
+
+> Today the teacher opened the new book about the city. The children want to play outside, but the weather is cold. I think we should buy food at the market before Sunday.
+
+> Ngayon binuksan ng guro ang bagong aklat tungkol sa lungsod. Gustong maglaro ang mga bata sa labas, pero malamig ang panahon. Sa palagay ko na dapat tayong bumili ng pagkain sa palengke bago ang Linggo.
+
+| | |
+|---|---|
+| sentences | **3** |
+| p50 per sentence | **1,510 ns** (1.510 µs) |
+| p99 per sentence | **1,970 ns** (1.970 µs) |
+
+A second release run of that binary was p50 1,508 ns and p99 2,255 ns. Both medians are within 1.88 µs.
+
 The English ↔ Spanish paragraph harness is still `export-translate-paragraph` and was not rewritten. Its paragraph still translates to:
 
 > Ayer yo hablé con mi amigo sobre la reunión. Ella dijo que nosotros necesitamos terminar el informe antes del viernes, pero el tren estaba tarde y nosotros lo perdimos. Yo creo que nosotros podemos enviar las notas mañana.
@@ -46,6 +60,7 @@ A re-run on this build, after the Filipino tables were added to `lexicon_static_
 ```sh
 cargo test --manifest-path crates/export-translate/Cargo.toml
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl
+cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-pctl
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-paragraph
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-bench
 cargo build --release --manifest-path crates/export-translate/Cargo.toml --target wasm32-unknown-unknown --lib

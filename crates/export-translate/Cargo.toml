@@ -19,6 +19,10 @@ path = "src/bin/paragraph-bench.rs"
 name = "export-translate-tl"
 path = "src/bin/tl-bench.rs"
 
+[[bin]]
+name = "export-translate-tl-pctl"
+path = "src/bin/tl-pctl.rs"
+
 [dependencies]
 
 [profile.release]
