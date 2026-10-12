@@ -558,4 +558,45 @@ fn main() {
         decoded_hd.len(),
         decode_webp(&anim_hd).is_err(),
     );
+
+    // Appended four-frame 640×480. The two-frame row above is unchanged.
+    let mut quad_hd = Vec::with_capacity(4);
+    for add in [0u8, 80, 160, 40] {
+        let mut pixels = image.pixels.clone();
+        for px in pixels.chunks_exact_mut(3) {
+            px[0] = px[0].wrapping_add(add);
+        }
+        quad_hd.push(Raster::new(w, h, 3, pixels).unwrap());
+    }
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&quad_hd).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&quad_hd)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim4_hd = encode_webp_animation(&quad_hd).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim4_hd_pixels = (w as f64) * (h as f64) * 4.0;
+    println!(
+        "webp_anim640x4_encode {w}x{h} frames=4 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim4_hd.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim4_hd_pixels * 3.0, p50),
+        mb_s(anim4_hd_pixels * 3.0, p99),
+        mb_s(anim4_hd.len() as f64, p50),
+        allocs as f64 / (anim4_hd_pixels / 1_000_000.0),
+    );
+    let decoded4_hd = decode_webp_animation(&anim4_hd).unwrap();
+    let mut all_four_hd = decoded4_hd.len() == 4;
+    for (got, src) in decoded4_hd.iter().zip(&quad_hd) {
+        let still = decode_webp(&encode_webp_lossy(src).unwrap()).unwrap();
+        all_four_hd &= got.pixels == still.pixels;
+    }
+    println!(
+        "webp_anim640x4_decode frames={} all_four={all_four_hd} still_match={all_four_hd} single_raster_errors={}",
+        decoded4_hd.len(),
+        decode_webp(&anim4_hd).is_err(),
+    );
 }
