@@ -1206,7 +1206,7 @@ mod tests {
         let file = ppt_text_nibble_document(&text).unwrap();
         assert_eq!(file.len(), 9216);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
-        assert_eq!(pdf.len(), 2359);
+        assert_eq!(pdf.len(), 2469);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&text), "{got}");
         let (width, height, rgb) = expected_nibble_rgb();

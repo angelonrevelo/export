@@ -543,7 +543,7 @@ fn find_match(data: &[u8], i: usize, head: &[i32], prev: &[i32]) -> (usize, usiz
     let mut best_len = 0usize;
     let mut best_dist = 0usize;
     let mut tries = 0u32;
-    while node >= 0 && tries < 96 {
+    while node >= 0 && tries < 8 {
         let j = node as usize;
         if j >= i {
             break;
@@ -560,7 +560,7 @@ fn find_match(data: &[u8], i: usize, head: &[i32], prev: &[i32]) -> (usize, usiz
         if len > best_len && len >= 3 {
             best_len = len;
             best_dist = dist;
-            if len >= 258 {
+            if len >= 200 {
                 break;
             }
         }
