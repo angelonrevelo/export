@@ -907,6 +907,29 @@ mod tests {
     }
 
     #[test]
+    fn sixteen_named_segments_stay_on_the_cleartext_client() {
+        let mut https_playlist = String::from("#EXTM3U\n");
+        for index in 0..15 {
+            https_playlist.push_str(&format!("#EXTINF:1,\n{index}.ts\n"));
+        }
+        https_playlist.push_str("#EXTINF:1,\nhttps://cdn.example/x.ts\n");
+        assert_eq!(
+            parse_media_playlist(&https_playlist),
+            Err(Error::Unsupported)
+        );
+        let mut text = String::from("#EXTM3U\n");
+        for index in 0..16 {
+            text.push_str(&format!("#EXTINF:1,\n{index}.ts\n"));
+        }
+        let playlist = parse_media_playlist(&text).unwrap();
+        assert_eq!(playlist.segments.len(), 16);
+        assert_eq!(
+            Fetcher::default().get_segments(&playlist),
+            Err(Error::BadTag)
+        );
+    }
+
+    #[test]
     fn coalesced_span_is_one_range_get() {
         assert_eq!(
             parse_media_playlist(
