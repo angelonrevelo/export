@@ -427,19 +427,19 @@ fn report_epub() {
             sample.output_bytes,
         );
     }
-    let five = epub_five_spine();
-    match convert("epub", "html", &five) {
+    let six = epub_six_spine();
+    match convert("epub", "html", &six) {
         Ok(_) => {
-            eprintln!("five-item spine produced html");
+            eprintln!("six-item spine produced html");
             std::process::exit(1);
         }
         Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", five.len()))
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", six.len()))
             {
                 eprintln!("epub miss hid the input size: {err}");
                 std::process::exit(1);
             }
-            emit_untimed("epub→html five", five.len() as u64, None, &err.message);
+            emit_untimed("epub→html six", six.len() as u64, None, &err.message);
         }
     }
 }
@@ -513,19 +513,19 @@ fn report_epub_two() {
             sample.output_bytes,
         );
     }
-    let five = epub_five_spine();
-    match convert("epub", "html", &five) {
+    let six = epub_six_spine();
+    match convert("epub", "html", &six) {
         Ok(_) => {
-            eprintln!("five-item spine produced html");
+            eprintln!("six-item spine produced html");
             std::process::exit(1);
         }
         Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", five.len()))
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", six.len()))
             {
                 eprintln!("epub miss hid the input size: {err}");
                 std::process::exit(1);
             }
-            emit_untimed("epub→html five", five.len() as u64, None, &err.message);
+            emit_untimed("epub→html six", six.len() as u64, None, &err.message);
         }
     }
 }
@@ -625,19 +625,19 @@ fn report_epub_three() {
             emit_untimed("epub→html three", book.len() as u64, None, &err.message);
         }
     }
-    let five = epub_five_spine();
-    match convert("epub", "html", &five) {
+    let six = epub_six_spine();
+    match convert("epub", "html", &six) {
         Ok(_) => {
-            eprintln!("five-item spine produced html");
+            eprintln!("six-item spine produced html");
             std::process::exit(1);
         }
         Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", five.len()))
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", six.len()))
             {
-                eprintln!("epub five miss hid the input size: {err}");
+                eprintln!("epub six miss hid the input size: {err}");
                 std::process::exit(1);
             }
-            emit_untimed("epub→html five", five.len() as u64, None, &err.message);
+            emit_untimed("epub→html six", six.len() as u64, None, &err.message);
         }
     }
 }
@@ -759,19 +759,160 @@ fn report_epub_four() {
             emit_untimed("epub→html four", book.len() as u64, None, &err.message);
         }
     }
-    let five = epub_five_spine();
-    match convert("epub", "html", &five) {
+    let six = epub_six_spine();
+    match convert("epub", "html", &six) {
         Ok(_) => {
-            eprintln!("five-item spine produced html");
+            eprintln!("six-item spine produced html");
             std::process::exit(1);
         }
         Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", five.len()))
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", six.len()))
             {
-                eprintln!("epub five miss hid the input size: {err}");
+                eprintln!("epub six miss hid the input size: {err}");
                 std::process::exit(1);
             }
-            emit_untimed("epub→html five", five.len() as u64, None, &err.message);
+            emit_untimed("epub→html six", six.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn report_epub_five() {
+    let four = epub_four_book();
+    match convert("epub", "html", &four) {
+        Ok(html) if four.len() == 28808 && html.len() == 27096 => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("First paragraph 0"),
+                text.find("Second paragraph 0"),
+                text.find("Third paragraph 0"),
+                text.find("Fourth paragraph 0"),
+            ) {
+                (Some(first), Some(second), Some(third), Some(fourth)) => {
+                    first < second && second < third && third < fourth
+                }
+                _ => false,
+            };
+            if !ordered {
+                eprintln!("four-item epub order changed");
+                std::process::exit(1);
+            }
+        }
+        Ok(html) => {
+            eprintln!(
+                "four-item epub size changed input_b={} output_b={}",
+                four.len(),
+                html.len()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("four-item epub failed: {err}");
+            std::process::exit(1);
+        }
+    }
+    let small = epub_five_spine();
+    match convert("epub", "html", &small) {
+        Ok(html) => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("<p>One</p>"),
+                text.find("<p>Two</p>"),
+                text.find("<p>Three</p>"),
+                text.find("<p>Four</p>"),
+                text.find("<p>Five</p>"),
+            ) {
+                (Some(one), Some(two), Some(three), Some(four), Some(five)) => {
+                    one < two && two < three && three < four && four < five
+                }
+                _ => false,
+            };
+            if small.len() != 2298 || !ordered {
+                eprintln!(
+                    "small five-item spine changed input_b={} output_b={}",
+                    small.len(),
+                    html.len()
+                );
+                std::process::exit(1);
+            }
+            emit_untimed(
+                "epub→html five small",
+                small.len() as u64,
+                Some(html.len() as u64),
+                "copied in spine order, not timed",
+            );
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", small.len()))
+            {
+                eprintln!("small five-item spine hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html five small", small.len() as u64, None, &err.message);
+            return;
+        }
+    }
+    let book = epub_five_book();
+    match convert("epub", "html", &book) {
+        Ok(html) => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("First paragraph 0"),
+                text.find("Second paragraph 0"),
+                text.find("Third paragraph 0"),
+                text.find("Fourth paragraph 0"),
+                text.find("Fifth paragraph 0"),
+            ) {
+                (Some(first), Some(second), Some(third), Some(fourth), Some(fifth)) => {
+                    first < second && second < third && third < fourth && fourth < fifth
+                }
+                _ => false,
+            };
+            if !ordered {
+                emit_untimed(
+                    "epub→html five",
+                    book.len() as u64,
+                    Some(html.len() as u64),
+                    "MISS: spine order does not match",
+                );
+                return;
+            }
+            let sample = measure(|| ready_bytes("epub", "html", &book));
+            emit_ready("epub→html five", book.len() as u64, &sample);
+            if !cfg!(debug_assertions) {
+                println!(
+                    "epub→html five p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                    sample.p50_ns / 1_000,
+                    sample.p99_ns / 1_000,
+                    mb_per_s(book.len() as u64, sample.p50_ns),
+                    sample.allocs_p50,
+                    sample.alloc_bytes_p50,
+                    book.len(),
+                    sample.output_bytes,
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", book.len()))
+            {
+                eprintln!("epub five hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html five", book.len() as u64, None, &err.message);
+        }
+    }
+    let six = epub_six_spine();
+    match convert("epub", "html", &six) {
+        Ok(_) => {
+            eprintln!("six-item spine produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", six.len()))
+            {
+                eprintln!("epub six miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html six", six.len() as u64, None, &err.message);
         }
     }
 }
@@ -962,6 +1103,85 @@ fn epub_five_spine() -> Vec<u8> {
         ("OEBPS/more.xhtml", more),
         ("OEBPS/tail.xhtml", tail),
         ("OEBPS/end.xhtml", end),
+    ])
+}
+
+fn epub_five_book() -> Vec<u8> {
+    let first = epub_part("First");
+    let second = epub_part("Second");
+    let third = epub_part("Third");
+    let fourth = epub_part("Fourth");
+    let fifth = epub_part("Fifth");
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Notes</dc:title></metadata>
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+  </spine>
+</package>
+"#;
+    let container = epub_container();
+    pack_stored(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/chapter.xhtml", first.as_bytes()),
+        ("OEBPS/next.xhtml", second.as_bytes()),
+        ("OEBPS/more.xhtml", third.as_bytes()),
+        ("OEBPS/tail.xhtml", fourth.as_bytes()),
+        ("OEBPS/end.xhtml", fifth.as_bytes()),
+    ])
+}
+
+fn epub_six_spine() -> Vec<u8> {
+    let chapter = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
+    let next = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
+    let more = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>";
+    let tail = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Four</p></body></html>";
+    let end = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Five</p></body></html>";
+    let last = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Six</p></body></html>";
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+  </spine>
+</package>
+"#;
+    let container = epub_container();
+    pack_stored(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/chapter.xhtml", chapter),
+        ("OEBPS/next.xhtml", next),
+        ("OEBPS/more.xhtml", more),
+        ("OEBPS/tail.xhtml", tail),
+        ("OEBPS/end.xhtml", end),
+        ("OEBPS/last.xhtml", last),
     ])
 }
 
@@ -1397,6 +1617,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_epub_four();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--epub-five") {
+        println!("export-docs epub five-item byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_epub_five();
         return;
     }
     if std::env::args().any(|arg| arg == "--rtf") {
