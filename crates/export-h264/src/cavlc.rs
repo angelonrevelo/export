@@ -290,6 +290,10 @@ pub(crate) fn intra_cbp_from_code(code: u32) -> Option<usize> {
     (0..48).find(|&cbp| intra_cbp_code(cbp) == code)
 }
 
+pub(crate) fn inter_cbp_from_code(code: u32) -> Option<usize> {
+    (0..48).find(|&cbp| inter_cbp_code(cbp) == code)
+}
+
 fn take_code(
     bits: &mut BitReader<'_>,
     max_len: u32,

@@ -219,3 +219,11 @@ The same 272-byte I-frame, read back into those pixels. The call parses the Anne
 - release p50: 39 µs, p99: 49 µs on the recorded run (38517 ns and 48412 ns). Two later runs on that binary were p50 39 µs and p99 40–41 µs
 
 The pixels match the encoder reconstruction. Mean absolute error versus the source is 2.4974. `scripts/check-decode32.sh` checks those pixels. It does not run ffmpeg. This is not a decoder for an arbitrary bitstream.
+
+## 32×32 pair decode
+
+The 415-byte file: that I-frame plus the zero-motion P-frame. The call reads those Annex B bytes. Non-zero motion is refused. Encode time is outside this timer. 200 calls after 20 warmup.
+
+- release p50: 70 µs, p99: 93 µs on the recorded run (69829 ns and 92501 ns). Two later runs on that binary were p50 70 µs and p99 92–107 µs
+
+Both pictures match the encoder reconstruction. `scripts/check-decodepair32.sh` checks those pixels. It does not run ffmpeg.

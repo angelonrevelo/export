@@ -1,7 +1,7 @@
 //! Read one I-frame this encoder wrote. Other bitstreams are refused.
 
 use crate::bitstream::BitReader;
-use crate::cavlc::{intra_cbp_from_code, read_block};
+use crate::cavlc::{inter_cbp_from_code, intra_cbp_from_code, read_block};
 use crate::encode::{
     clip8, dequant4, dequant_chroma_dc, idct4, nc_at, pred_chroma_dc, pred_luma_dc, BLK_X, BLK_Y,
     ZIGZAG,
@@ -31,6 +31,40 @@ pub fn decode_iframe(annex_b: &[u8]) -> Result<Yuv420, Error> {
     let (width, height, frame_bits) = read_sps(sps)?;
     let qp = read_pps(pps)?;
     read_slice(idr, width, height, frame_bits, qp)
+}
+
+/// Read the 415-byte I-frame plus zero-motion P-frame this encoder writes.
+///
+/// Both pictures are rebuilt from the Annex B bytes. A stored buffer is not
+/// returned. Non-zero motion, a B-frame, and any other bitstream are refused.
+pub fn decode_pair(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
+    let nals = split_nals(annex_b)?;
+    if nals.len() != 6 {
+        return Err(Error::Bytes);
+    }
+    let (aud_h, aud) = &nals[0];
+    let (sps_h, sps) = &nals[1];
+    let (pps_h, pps) = &nals[2];
+    let (idr_h, idr) = &nals[3];
+    if *aud_h != 0x09 || aud.as_slice() != [0x10] {
+        return Err(Error::Bytes);
+    }
+    if *sps_h != 0x67 || *pps_h != 0x68 || *idr_h != 0x65 {
+        return Err(Error::Bytes);
+    }
+    let (width, height, frame_bits) = read_sps(sps)?;
+    let qp = read_pps(pps)?;
+    let intra = read_slice(idr, width, height, frame_bits, qp)?;
+    let (p_aud_h, p_aud) = &nals[4];
+    if *p_aud_h != 0x09 || p_aud.as_slice() != [0x30] {
+        return Err(Error::Bytes);
+    }
+    let (p_h, p_rbsp) = &nals[5];
+    if *p_h != 0x01 {
+        return Err(Error::Bytes);
+    }
+    let predicted = read_zero_p_slice(p_rbsp, &intra, frame_bits, qp)?;
+    Ok((intra, predicted))
 }
 
 fn split_nals(data: &[u8]) -> Result<Vec<(u8, Vec<u8>)>, Error> {
@@ -285,6 +319,141 @@ fn recon_chroma(rec: &mut [u8], stride: usize, mb_x: usize, mb_y: usize, dc: [i3
                 let py = by * 4 + r;
                 let px = bx * 4 + c;
                 rec[(y0 + py) * stride + x0 + px] = clip8(pred[py * 8 + px] as i32 + spatial[r][c]);
+            }
+        }
+    }
+}
+
+fn read_zero_p_slice(
+    rbsp: &[u8],
+    reference: &Yuv420,
+    frame_bits: u32,
+    qp: i32,
+) -> Result<Yuv420, Error> {
+    let mut b = BitReader::new(rbsp);
+    if b.read_ue()? != 0 || b.read_ue()? != 0 || b.read_ue()? != 0 {
+        return Err(Error::Bytes);
+    }
+    if b.read_bits(frame_bits)? != 1 {
+        return Err(Error::Bytes);
+    }
+    if b.read_bit()? != 0 || b.read_bit()? != 0 || b.read_se()? != 0 || b.read_ue()? != 1 {
+        return Err(Error::Bytes);
+    }
+    let width = reference.width;
+    let height = reference.height;
+    let mb_w = (width / 16) as usize;
+    let mb_h = (height / 16) as usize;
+    let y_stride = width as usize;
+    let c_stride = (width / 2) as usize;
+    let mut y = vec![0u8; reference.y.len()];
+    let mut u = vec![0u8; reference.u.len()];
+    let mut v = vec![0u8; reference.v.len()];
+    let mut luma_nnz = vec![0u8; mb_w * 4 * mb_h * 4];
+    for my in 0..mb_h {
+        for mx in 0..mb_w {
+            if b.read_ue()? != 0 || b.read_ue()? != 0 {
+                return Err(Error::Bytes);
+            }
+            if b.read_se()? != 0 || b.read_se()? != 0 {
+                return Err(Error::Bytes);
+            }
+            let cbp = inter_cbp_from_code(b.read_ue()?).ok_or(Error::Bytes)?;
+            let cbpl = cbp & 15;
+            let cbpc = cbp >> 4;
+            if cbpc > 1 {
+                return Err(Error::Bytes);
+            }
+            if cbp != 0 && b.read_se()? != 0 {
+                return Err(Error::Bytes);
+            }
+            for i8 in 0..4 {
+                for k in 0..4 {
+                    let i = i8 * 4 + k;
+                    let bx = mx * 4 + BLK_X[i];
+                    let by = my * 4 + BLK_Y[i];
+                    let x = mx * 16 + BLK_X[i] * 4;
+                    let yy = my * 16 + BLK_Y[i] * 4;
+                    let scan = if cbpl & (1 << i8) == 0 {
+                        [0i32; 16]
+                    } else {
+                        let nc = nc_at(&luma_nnz, mb_w * 4, bx, by);
+                        let scan = read_block(&mut b, nc, 16)?;
+                        luma_nnz[by * mb_w * 4 + bx] =
+                            scan.iter().filter(|c| **c != 0).count() as u8;
+                        scan
+                    };
+                    add_zero_luma(&mut y, &reference.y, y_stride, x, yy, &scan, qp);
+                }
+            }
+            let mut dc_u = [0i32; 4];
+            let mut dc_v = [0i32; 4];
+            if cbpc > 0 {
+                let u_scan = read_block(&mut b, -1, 4)?;
+                let v_scan = read_block(&mut b, -1, 4)?;
+                dc_u.copy_from_slice(&u_scan[..4]);
+                dc_v.copy_from_slice(&v_scan[..4]);
+            }
+            add_zero_chroma(&mut u, &reference.u, c_stride, mx, my, dc_u, qp);
+            add_zero_chroma(&mut v, &reference.v, c_stride, mx, my, dc_v, qp);
+        }
+    }
+    b.finish()?;
+    Ok(Yuv420 {
+        width,
+        height,
+        y,
+        u,
+        v,
+    })
+}
+
+fn add_zero_luma(
+    rec: &mut [u8],
+    reference: &[u8],
+    stride: usize,
+    x: usize,
+    y: usize,
+    scan: &[i32],
+    qp: i32,
+) {
+    let mut z = [[0i32; 4]; 4];
+    for (si, &ri) in ZIGZAG.iter().enumerate() {
+        z[ri / 4][ri % 4] = scan[si];
+    }
+    let spatial = idct4(&dequant4(&z, qp));
+    for r in 0..4 {
+        for c in 0..4 {
+            let at = (y + r) * stride + x + c;
+            rec[at] = clip8(reference[at] as i32 + spatial[r][c]);
+        }
+    }
+}
+
+fn add_zero_chroma(
+    rec: &mut [u8],
+    reference: &[u8],
+    stride: usize,
+    mb_x: usize,
+    mb_y: usize,
+    dc: [i32; 4],
+    qp: i32,
+) {
+    let x0 = mb_x * 8;
+    let y0 = mb_y * 8;
+    let dc_r = dequant_chroma_dc(dc, qp);
+    for (i, coef) in dc_r.iter().enumerate() {
+        let mut z = [[0i32; 4]; 4];
+        z[0][0] = *coef;
+        let spatial = idct4(&z);
+        let bx = i & 1;
+        let by = i >> 1;
+        for r in 0..4 {
+            for c in 0..4 {
+                let px = x0 + bx * 4 + c;
+                let py = y0 + by * 4 + r;
+                let at = py * stride + px;
+                rec[at] = clip8(reference[at] as i32 + spatial[r][c]);
             }
         }
     }

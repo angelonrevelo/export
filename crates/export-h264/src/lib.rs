@@ -191,6 +191,14 @@ pub fn decode_iframe(annex_b: &[u8]) -> Result<Yuv420, Error> {
     decode::decode_iframe(annex_b)
 }
 
+/// Read the 415-byte I-frame plus zero-motion P-frame and return both reconstructions.
+///
+/// The Annex B bytes are parsed. A stored buffer is not returned. Non-zero
+/// motion, a B-frame, and any other bitstream are refused.
+pub fn decode_pair(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
+    decode::decode_pair(annex_b)
+}
+
 fn check_common(opts: &EncodeOptions) -> Result<(), Error> {
     if opts.qp > 51 {
         return Err(Error::Qp);
