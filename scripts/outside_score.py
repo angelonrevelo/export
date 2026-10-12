@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Outside score for real uploads already stored in this git repository.
+"""Outside score for real uploads in this git repository or a local corpus.
+
+Real uploads are private, so they do not have to be committed: files under
+`corpus/` (gitignored; or --corpus / EXPORT_CORPUS) are read from disk and
+counted exactly like committed ones.
 
 The Python app is the reference. This script is a host oracle: it may call
 that app, and it may call a separate rust program named by EXPORT_RUST_ORACLE.
@@ -14,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -169,8 +174,25 @@ def repository_blobs(repo: Path) -> list[tuple[str, str]]:
     return sorted(found.items())
 
 
-def _exif_make_model(repo: Path, sha: str) -> tuple[str, str]:
-    data = subprocess.check_output(["git", "cat-file", "blob", sha], cwd=repo)
+def corpus_files(corpus: Path) -> list[tuple[str, Path]]:
+    """Every file under the local corpus, as (corpus/relative/path, file)."""
+    if not corpus.is_dir():
+        return []
+    found = []
+    for file in corpus.rglob("*"):
+        if file.is_file():
+            rel = file.relative_to(corpus).as_posix()
+            found.append((f"corpus/{rel}", file))
+    return sorted(found)
+
+
+def _read_source(repo: Path, row: dict) -> bytes:
+    if "file" in row:
+        return Path(row["file"]).read_bytes()
+    return subprocess.check_output(["git", "cat-file", "blob", row["sha"]], cwd=repo)
+
+
+def _exif_make_model(data: bytes) -> tuple[str, str]:
     import io
 
     from PIL import Image
@@ -182,20 +204,23 @@ def _exif_make_model(repo: Path, sha: str) -> tuple[str, str]:
     return make, model
 
 
-def collect(repo: Path) -> dict:
+def collect(repo: Path, corpus: Path | None = None) -> dict:
     """Count real uploads. Generated paths are listed and left out of M."""
     counts = {kind: 0 for kind in COUNTED_KINDS}
     counts["jpeg-not-phone"] = 0
     counted: list[dict] = []
     generated: list[str] = []
-    for path, sha in repository_blobs(repo):
+    source = [(path, {"sha": sha}) for path, sha in repository_blobs(repo)]
+    if corpus is not None:
+        source += [(path, {"file": str(file)}) for path, file in corpus_files(corpus)]
+    for path, origin in source:
         rough = suffix_kind(path)
         if rough is None:
             continue
         make = model = ""
         if rough == "jpeg" and not is_generated(path):
             try:
-                make, model = _exif_make_model(repo, sha)
+                make, model = _exif_make_model(_read_source(repo, origin))
             except Exception:
                 make = model = ""
         kind = classify(path, make, model)
@@ -208,7 +233,7 @@ def collect(repo: Path) -> dict:
             counts["jpeg-not-phone"] += 1
             continue
         counts[kind] += 1
-        counted.append({"path": path, "sha": sha, "kind": kind, "make": make, "model": model})
+        counted.append({"path": path, **origin, "kind": kind, "make": make, "model": model})
     counted.sort(key=lambda row: (row["kind"], row["path"]))
     return {
         "counts": counts,
@@ -266,10 +291,13 @@ def _rust_output(src: Path, kind: str, out_dir: Path) -> bytes:
     return dest.read_bytes()
 
 
-def _materialize(repo: Path, sha: str, path: str, directory: Path) -> Path:
-    data = subprocess.check_output(["git", "cat-file", "blob", sha], cwd=repo)
-    dest = directory / Path(path).name
-    dest.write_bytes(data)
+def _materialize(repo: Path, row: dict, directory: Path) -> Path:
+    """Copy the source into the scratch dir; a corpus file is never written to."""
+    dest = directory / Path(row["path"]).name
+    if "file" in row:
+        shutil.copyfile(row["file"], dest)
+    else:
+        dest.write_bytes(_read_source(repo, row))
     return dest
 
 
@@ -277,7 +305,7 @@ def score_file(repo: Path, row: dict) -> dict:
     kind = row["kind"]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        src = _materialize(repo, row["sha"], row["path"], root)
+        src = _materialize(repo, row, root)
         size = src.stat().st_size
         try:
             reference, mode = python_reference(src, kind, root / "py")
@@ -327,8 +355,8 @@ def failure_list(file_rows: list[dict]) -> list[dict]:
     return ordered
 
 
-def score_repository(repo: Path) -> dict:
-    inventory = collect(repo)
+def score_repository(repo: Path, corpus: Path | None = None) -> dict:
+    inventory = collect(repo, corpus)
     rows = [score_file(repo, row) for row in inventory["counted"]]
     matched = sum(1 for row in rows if row["match"])
     missing = [kind for kind in COUNTED_KINDS if inventory["counts"][kind] == 0]
@@ -350,8 +378,15 @@ def score_repository(repo: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Score real uploads against the Python app")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=None,
+        help="local real files (default: EXPORT_CORPUS, else <repo>/corpus)",
+    )
     args = parser.parse_args()
-    report = score_repository(args.repo)
+    corpus = args.corpus or Path(os.environ.get("EXPORT_CORPUS") or args.repo / "corpus")
+    report = score_repository(args.repo, corpus)
     print(json.dumps(report, indent=2))
 
 

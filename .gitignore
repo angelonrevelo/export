@@ -8,3 +8,5 @@ build/
 dist/
 .DS_Store
 /target
+# Local real-upload corpus for scripts/outside_score.py. Private; never committed.
+/corpus/

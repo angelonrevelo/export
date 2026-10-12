@@ -236,7 +236,10 @@ into the others.
 | `export-vp9` | One generated keyframe at 8×8, 16×16, 32×32, 64×64, 128×128, 256×256, 512×512, 1024×1024, or 2048×2048 | Inter frames, extra frames, VP8, a video decoder |
 
 `scripts/outside_score.py` is a host oracle. The Python app is the reference.
-It scores files already stored in the git repo. `EXPORT_RUST_ORACLE` may name
+It scores files already stored in the git repo, plus a local corpus read from
+disk: `corpus/` at the repo root (gitignored), `--corpus DIR`, or
+`EXPORT_CORPUS`. Corpus files are copied to a scratch dir before conversion and
+are never committed. `EXPORT_RUST_ORACLE` may name
 a separate program. The script does not generate substitute files and it is
 not started by `scripts/run.sh`.
 
