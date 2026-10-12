@@ -1,13 +1,13 @@
 //! Fixed-pitch 5×7 printed Latin classifier.
 //!
-//! Thirty-seven glyphs: `A`–`Z`, `0`–`9`, and one lowercase `a`. Each glyph
-//! is five columns, then one blank column. The score is Hamming distance to
-//! one stored prototype. A glyph farther than half the cell from every
-//! template is `?`.
+//! Thirty-eight glyphs: `A`–`Z`, `0`–`9`, and lowercase `a` and `b`. Each
+//! glyph is five columns, then one blank column. The score is Hamming
+//! distance to one stored prototype. A glyph farther than half the cell from
+//! every template is `?`.
 //!
 //! This is not Tesseract. It does not do page layout, any lowercase letter
-//! other than `a`, rotation, noise beyond a one-bit edit, or any size other
-//! than this font.
+//! other than `a` and `b`, rotation, noise beyond a one-bit edit, or any
+//! size other than this font.
 
 /// Rows per glyph.
 pub const GLYPH_H: usize = 7;
@@ -43,7 +43,7 @@ impl std::fmt::Display for OcrError {
 impl std::error::Error for OcrError {}
 
 /// `(char, 7 row masks, low 5 bits, bit 4 = leftmost column)`.
-const GLYPHS: [(char, [u8; GLYPH_H]); 37] = [
+const GLYPHS: [(char, [u8; GLYPH_H]); 38] = [
     (
         'A',
         [
@@ -268,6 +268,13 @@ const GLYPHS: [(char, [u8; GLYPH_H]); 37] = [
             0b00000, 0b00000, 0b01110, 0b00001, 0b01111, 0b10001, 0b01111,
         ],
     ),
+    // Ascender plus a lower bowl. Same Hamming prototype match.
+    (
+        'b',
+        [
+            0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+    ),
 ];
 
 fn popcount_rows(rows: &[u8; GLYPH_H]) -> i32 {
@@ -417,6 +424,19 @@ mod tests {
         assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), mixed);
 
         assert_eq!(render_line("Hi"), Err(OcrError::Glyph('i')));
-        assert_eq!(render_line("b"), Err(OcrError::Glyph('b')));
+        assert_eq!(render_line("c"), Err(OcrError::Glyph('c')));
+    }
+
+    #[test]
+    fn lowercase_b_reads_back() {
+        let alone = "b";
+        let (pixels, w, h) = render_line(alone).unwrap();
+        assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), "b");
+        assert_eq!(alone.chars().count(), 1);
+
+        let line = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab";
+        assert_eq!(line.chars().count(), 38);
+        let (pixels, w, h) = render_line(line).unwrap();
+        assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), line);
     }
 }
