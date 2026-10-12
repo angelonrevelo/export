@@ -7,6 +7,10 @@ name = "export-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "export-pdf"
+version = "0.1.0"
+
+[[package]]
 name = "export-subtitle"
 version = "0.1.0"
 dependencies = [

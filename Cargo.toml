@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/export-kernel", "crates/export-subtitle"]
+members = [
+    "crates/export-kernel",
+    "crates/export-subtitle",
+    "crates/export-pdf",
+]
 
 [workspace.package]
 edition = "2021"
