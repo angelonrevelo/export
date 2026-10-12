@@ -47,6 +47,15 @@ impl Fetcher {
         parse_media_playlist(text)
     }
 
+    /// Fetch one segment named by `playlist` with this cleartext client.
+    ///
+    /// The segment URI is requested with [`Fetcher::get`]. `https` URIs are
+    /// unsupported. This method does not run yt-dlp or any other program.
+    pub fn get_segment(&self, playlist: &MediaPlaylist, index: usize) -> Result<Vec<u8>, Error> {
+        let segment = playlist.segments.get(index).ok_or(Error::BadTag)?;
+        self.get(&segment.uri)
+    }
+
     fn fetch(&self, url: &str, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
         let timeout = self.timeout;
         let max_body = self.max_body_bytes;
@@ -648,5 +657,23 @@ mod tests {
             Err(Error::Unsupported)
         );
         assert_eq!(fetcher.get("http://127.0.0.1/a.m3u8"), Err(Error::Blocked));
+    }
+
+    #[test]
+    fn one_named_segment_stays_on_the_cleartext_client() {
+        assert_eq!(
+            parse_media_playlist("#EXTM3U\n#EXTINF:1,\nhttps://cdn.example/seg.ts\n"),
+            Err(Error::Unsupported)
+        );
+        let playlist = parse_media_playlist("#EXTM3U\n#EXTINF:1,\nseg.ts\n").unwrap();
+        assert_eq!(playlist.segments.len(), 1);
+        assert_eq!(
+            Fetcher::default().get_segment(&playlist, 0),
+            Err(Error::BadTag)
+        );
+        assert_eq!(
+            Fetcher::default().get_segment(&playlist, 1),
+            Err(Error::BadTag)
+        );
     }
 }
