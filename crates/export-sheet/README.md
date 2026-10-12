@@ -63,6 +63,16 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 | p50 | 138 342 ns |
 | p99 | 213 695 ns |
 
+A fourth generated file has A1 = 2, B1 = 3, and C1 = a SUM formula. The reader
+returns the cached number **5** and does not evaluate the expression.
+`xls → csv` prints `2,3,5`.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 575 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
