@@ -594,6 +594,11 @@ pub fn fixture_1280x720_split_eight() -> (Yuv420, Vec<Yuv420>) {
     split_chain(fixture_1280x720(), 7)
 }
 
+/// Sixteen 1280×720 pictures. The eight-picture chain continued for fifteen P-frames.
+pub fn fixture_1280x720_split_sixteen() -> (Yuv420, Vec<Yuv420>) {
+    split_chain(fixture_1280x720(), 15)
+}
+
 fn split_four(intra: Yuv420) -> (Yuv420, Vec<Yuv420>) {
     split_chain(intra, 3)
 }
