@@ -1,0 +1,11 @@
+# One host measurement. Not a comparison and not a speedup claim.
+# Release bench profile (opt-level 3, lto thin, codegen-units 1).
+# `cargo bench --manifest-path crates/export-fmp4/Cargo.toml --bench copy -j 1`
+# Threading off. The copy row is the copy only. Truncated errors are a separate row.
+# mb_s is input bytes / p50 seconds / 1_000_000.
+# A second run of the same binary: copy p50_ns=3968849 p99_ns=4422321 mb_s=264.418;
+# truncated p50_ns=1620844 p99_ns=1815060. p50 agrees. p99 moves with the timer.
+
+threading=off
+row=copy samples=200 input_bytes=1049435 output_bytes=1049435 p50_ns=4039766 p99_ns=6801094 mb_s=259.776
+row=truncated samples=400 input_bytes=524717 p50_ns=1618473 p99_ns=1810456
