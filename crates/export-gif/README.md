@@ -61,4 +61,12 @@ Both sizes divide the byte range evenly, so the means match the small fixture. T
 | p50 | 2519.3 µs |
 | p99 | 2817.2 µs |
 
-Video-to-GIF still returns an error. The library does not call ffmpeg.
+640×480 has about 4.7 times the pixels of 256×256, so the same encode should sit near 11,800 µs. `cargo bench --manifest-path crates/export-gif/Cargo.toml --bench quantize_anim_vga` is one GIF89a, four generated 640×480 frames, same 3-3-2 palette and LZW writer. The 256×256 row and the 640×480 still row were not remeasured.
+
+| | |
+|---|---|
+| output bytes | 209,641 |
+| p50 | 12348.5 µs |
+| p99 | 17947.2 µs |
+
+That p50 is about 1.05 times the linear estimate, so this size stays. Video-to-GIF still returns an error. The library does not call ffmpeg.
