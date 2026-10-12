@@ -3,7 +3,8 @@
 //! This process does not spawn threads.
 
 use export_webm::{
-    large_sample_file, sample_file, stream_copy, vp8_4096_webm, vp8_two_webm, vp8_webm, Error,
+    large_sample_file, sample_file, stream_copy, vp8_4096_webm, vp8_460800_webm, vp8_two_webm,
+    vp8_webm, Error,
 };
 use std::time::Instant;
 
@@ -13,6 +14,7 @@ fn main() {
     let vp8 = vp8_webm();
     let vp8_two = vp8_two_webm();
     let vp8_4096 = vp8_4096_webm();
+    let vp8_460800 = vp8_460800_webm();
     let mut truncated = small.clone();
     truncated.truncate(truncated.len() / 2);
 
@@ -21,6 +23,9 @@ fn main() {
     let vp8_out = stream_copy(vp8).expect("vp8 copies").bytes;
     let vp8_two_out = stream_copy(vp8_two).expect("two vp8 blocks copy").bytes;
     let vp8_4096_out = stream_copy(&vp8_4096).expect("4096-byte vp8 copies").bytes;
+    let vp8_460800_out = stream_copy(&vp8_460800)
+        .expect("460800-byte vp8 copies")
+        .bytes;
     assert_eq!(
         stream_copy(&truncated).expect_err("truncated fails"),
         Error::Truncated
@@ -35,6 +40,7 @@ fn main() {
         let _ = stream_copy(vp8);
         let _ = stream_copy(vp8_two);
         let _ = stream_copy(&vp8_4096);
+        let _ = stream_copy(&vp8_460800);
         let _ = stream_copy(&truncated);
     }
 
@@ -43,6 +49,7 @@ fn main() {
     let vp8_ns = time_copy(vp8, vp8_out.len(), N_SMALL);
     let vp8_two_ns = time_copy(vp8_two, vp8_two_out.len(), N_SMALL);
     let vp8_4096_ns = time_copy(&vp8_4096, vp8_4096_out.len(), N_SMALL);
+    let vp8_460800_ns = time_copy(&vp8_460800, vp8_460800_out.len(), N_LARGE);
     let truncated_ns = time_truncated(&truncated, N_SMALL);
 
     println!("threading=off");
@@ -51,6 +58,7 @@ fn main() {
     print_copy_row("vp8", vp8, &vp8_out, &vp8_ns);
     print_copy_row("vp8_two", vp8_two, &vp8_two_out, &vp8_two_ns);
     print_copy_row("vp8_4096", &vp8_4096, &vp8_4096_out, &vp8_4096_ns);
+    print_copy_row("vp8_460800", &vp8_460800, &vp8_460800_out, &vp8_460800_ns);
     print_truncated_row(&truncated, &truncated_ns);
 }
 

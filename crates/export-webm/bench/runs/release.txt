@@ -20,3 +20,9 @@ row=vp8_two samples=2000 input_bytes=553 output_bytes=209 p50_ns=3419 p99_ns=411
 # The payload is copied and is not decoded.
 # p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
 row=vp8_4096 samples=2000 input_bytes=4253 output_bytes=4253 p50_ns=16531 p99_ns=19256 mb_s=257.274
+
+# One VP8 block whose payload is 460800 bytes, the same payload size as the 320x240 rawvideo row.
+# ffmpeg names the remux `Video: vp8`. The payload is copied and is not decoded.
+# p50, p99, and mb_s are this host, threading off, 400 samples. Not a speedup claim.
+# mb_s is input bytes / p50 seconds / 1_000_000.
+row=vp8_460800 samples=400 input_bytes=460960 output_bytes=460960 p50_ns=2084673 p99_ns=2267524 mb_s=221.119

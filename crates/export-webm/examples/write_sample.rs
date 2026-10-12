@@ -6,7 +6,7 @@ fn main() -> ExitCode {
     let path = match env::args().nth(1) {
         Some(path) => path,
         None => {
-            eprintln!("usage: write_sample OUTPUT.webm [2x2|large|vp8-4096]");
+            eprintln!("usage: write_sample OUTPUT.webm [2x2|large|vp8-4096|vp8-460800]");
             return ExitCode::from(2);
         }
     };
@@ -15,8 +15,9 @@ fn main() -> ExitCode {
         "2x2" | "small" => export_webm::sample_file(),
         "large" => export_webm::large_sample_file(),
         "vp8-4096" => export_webm::vp8_4096_webm(),
+        "vp8-460800" => export_webm::vp8_460800_webm(),
         _ => {
-            eprintln!("usage: write_sample OUTPUT.webm [2x2|large|vp8-4096]");
+            eprintln!("usage: write_sample OUTPUT.webm [2x2|large|vp8-4096|vp8-460800]");
             return ExitCode::from(2);
         }
     };
