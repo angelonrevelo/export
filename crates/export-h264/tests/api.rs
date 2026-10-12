@@ -1,12 +1,12 @@
 use export_h264::{
     encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence, encode_sequence_split,
-    fixture_1280x720, fixture_1280x720_split, fixture_160x160, fixture_160x160_eight,
-    fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_320x240,
-    fixture_320x240_predicted, fixture_320x240_shifted, fixture_320x240_split,
-    fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
-    fixture_32x32_shifted, fixture_640x480, fixture_640x480_split, fixture_640x480_split_four,
-    mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420,
-    SHIFTED_MV, SPLIT_RIGHT_MV,
+    fixture_1280x720, fixture_1280x720_split, fixture_1280x720_split_four, fixture_160x160,
+    fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
+    fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
+    fixture_320x240_split, fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight,
+    fixture_32x32_predicted, fixture_32x32_shifted, fixture_640x480, fixture_640x480_split,
+    fixture_640x480_split_four, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
+    PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -762,6 +762,54 @@ fn hd_split_keeps_the_vga_rows() {
         .unwrap_err(),
         Error::PredictedFrame
     );
+}
+
+#[test]
+fn hd_split_sequence_keeps_the_pair() {
+    let opts = EncodeOptions::default();
+    let frame = fixture_1280x720();
+    let encoded = encode(&frame, &opts).unwrap();
+    let picture = fixture_1280x720_split();
+    let pair = encode_ip_split(&frame, &picture, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(pair.annex_b.len(), 239967);
+    let one = encode_sequence_split(
+        &frame,
+        std::slice::from_ref(&picture),
+        &opts,
+        SHIFTED_MV,
+        SPLIT_RIGHT_MV,
+    )
+    .unwrap();
+    assert_eq!(one.annex_b, pair.annex_b);
+    let (intra, predicted) = fixture_1280x720_split_four();
+    assert_eq!(intra, frame);
+    assert_eq!(predicted.len(), 3);
+    assert_eq!(predicted[0], picture);
+    let sequence =
+        encode_sequence_split(&intra, &predicted, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(sequence.annex_b.len(), 245120);
+    assert_eq!(sequence.reconstructed.len(), 4);
+    assert_eq!(
+        &sequence.annex_b[..encoded.annex_b.len()],
+        &encoded.annex_b[..]
+    );
+    assert_ne!(&sequence.annex_b[..239967], &pair.annex_b[..]);
+    let (vga, vga_p) = fixture_640x480_split_four();
+    assert_eq!(
+        encode_sequence_split(&vga, &vga_p, &opts, SHIFTED_MV, SPLIT_RIGHT_MV)
+            .unwrap()
+            .annex_b
+            .len(),
+        81780
+    );
+    let mut sum = 0.0;
+    for (src, rec) in predicted.iter().zip(sequence.reconstructed.iter().skip(1)) {
+        sum += mean_absolute_error(src, rec);
+    }
+    let mae = sum / 3.0;
+    let i_mae = mean_absolute_error(&frame, &sequence.reconstructed[0]);
+    let all = (i_mae + sum) / 4.0;
+    assert!(all < 3.5, "hd sequence mae {all} p {mae}");
 }
 
 #[test]
