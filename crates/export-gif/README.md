@@ -82,3 +82,15 @@ Four frames at 256×256 are 2519.3 µs, so eight frames should sit near 5,039 µ
 | p99 | 5134.4 µs |
 
 That p50 is about 1.00 times the linear estimate, so this frame count stays. Video-to-GIF still returns an error. The library does not call ffmpeg.
+
+## Sixteen-frame encode
+
+Eight frames at 256×256 are 5055.2 µs, so sixteen frames should sit between 7,583 µs and 11,121 µs. `cargo bench --manifest-path crates/export-gif/Cargo.toml --bench quantize_anim16` is one GIF89a, sixteen generated 256×256 frames, same 3-3-2 palette and LZW writer. The file round-trips. The eight-frame row and the four-frame 256×256 row were not remeasured.
+
+| | |
+|---|---|
+| output bytes | 181,739 |
+| p50 | 10351.6 µs |
+| p99 | 10955.9 µs |
+
+That p50 is inside the window, so this frame count stays. Video-to-GIF still returns an error. The library does not call ffmpeg.

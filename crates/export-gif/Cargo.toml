@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "quantize_anim8"
 harness = false
+
+[[bench]]
+name = "quantize_anim16"
+harness = false

@@ -401,4 +401,35 @@ mod tests {
             ErrorCode::Unsupported
         );
     }
+
+    #[test]
+    fn sixteen_frames_file_round_trip() {
+        let frames: Vec<_> = (0..16)
+            .map(|phase| quantize_frame_phase(256, 256, phase).unwrap())
+            .collect();
+        let delays = [4u16, 8, 15, 30, 4, 8, 15, 30, 4, 8, 15, 30, 4, 8, 15, 30];
+        let bytes = encode_quantized_gif89a(&frames, &delays).unwrap();
+        assert!(bytes.starts_with(b"GIF89a"));
+        let gif = decode_gif(&bytes).unwrap();
+        assert_eq!(gif.frames.len(), 16);
+        assert_eq!((gif.width, gif.height), (256, 256));
+        let pixels = 256 * 256;
+        for ((frame, raster), &delay) in gif.frames.iter().zip(&frames).zip(&delays) {
+            assert_eq!(frame.delay_cs, delay);
+            assert_eq!(frame.width, 256);
+            assert_eq!(frame.height, 256);
+            assert!(frame.local_table.is_none());
+            assert_eq!(frame.indices, indices_of(raster, pixels));
+        }
+        let again = encode_gif(&gif).unwrap();
+        let decoded_again = decode_gif(&again).unwrap();
+        for (left, right) in gif.frames.iter().zip(&decoded_again.frames) {
+            assert_eq!(left.indices, right.indices);
+            assert_eq!(left.delay_cs, right.delay_cs);
+        }
+        assert_eq!(
+            crate::video_to_gif(&bytes).unwrap_err().code,
+            ErrorCode::Unsupported
+        );
+    }
 }
