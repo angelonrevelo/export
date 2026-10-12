@@ -30,3 +30,7 @@ harness = false
 [[bench]]
 name = "quantize_vga"
 harness = false
+
+[[bench]]
+name = "quantize_anim"
+harness = false

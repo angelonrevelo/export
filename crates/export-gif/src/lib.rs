@@ -25,7 +25,8 @@ pub use dedup::{read_gif, write_gif, Cache, ReadGif, WrittenGif};
 pub use error::{Error, ErrorCode};
 pub use gif::{decode_gif, encode_gif, video_to_gif, Frame, Gif, Version};
 pub use quantize::{
-    quantize_fixture, quantize_frame, quantize_gif89a, QuantizeResult, RgbRaster, QUANTIZE_MAX_ABS,
+    encode_quantized_gif89a, quantize_fixture, quantize_frame, quantize_frame_phase,
+    quantize_gif89a, QuantizeResult, RgbRaster, QUANTIZE_MAX_ABS,
 };
 pub use sha256::{sha256, Sha256};
 pub use sniff::{sniff, Format};

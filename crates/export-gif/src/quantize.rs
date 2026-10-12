@@ -81,7 +81,52 @@ fn pixel_len(raster: &RgbRaster) -> Result<usize, Error> {
     Ok(pixels as usize)
 }
 
-fn quantize_image(raster: &RgbRaster, pixels: usize) -> Result<Gif, Error> {
+/// Encode several RGB frames with the same 3-3-2 palette and the existing LZW writer.
+///
+/// This is not a new codec and it does not call ffmpeg. [`crate::video_to_gif`]
+/// stays an error.
+pub fn encode_quantized_gif89a(frames: &[RgbRaster], delay_cs: &[u16]) -> Result<Vec<u8>, Error> {
+    if frames.is_empty() || frames.len() != delay_cs.len() {
+        return Err(INVALID);
+    }
+    let width = frames[0].width;
+    let height = frames[0].height;
+    let mut gif_frames = Vec::with_capacity(frames.len());
+    let mut total = 0u64;
+    for (raster, &delay) in frames.iter().zip(delay_cs.iter()) {
+        if raster.width != width || raster.height != height {
+            return Err(INVALID);
+        }
+        let n = pixel_len(raster)?;
+        total = total.checked_add(n as u64).ok_or(TOO_LARGE)?;
+        if total > MAX_PIXELS {
+            return Err(TOO_LARGE);
+        }
+        gif_frames.push(Frame {
+            left: 0,
+            top: 0,
+            width,
+            height,
+            delay_cs: delay,
+            disposal: 0,
+            transparent: None,
+            local_table: None,
+            indices: indices_of(raster, n),
+        });
+    }
+    encode_gif(&Gif {
+        version: Version::Gif89a,
+        width,
+        height,
+        background: 0,
+        aspect: 0,
+        global_table: Some(palette()),
+        loop_count: None,
+        frames: gif_frames,
+    })
+}
+
+fn indices_of(raster: &RgbRaster, pixels: usize) -> Vec<u8> {
     let mut indices = Vec::with_capacity(pixels);
     let rgb = &raster.rgb;
     for i in 0..pixels {
@@ -91,6 +136,11 @@ fn quantize_image(raster: &RgbRaster, pixels: usize) -> Result<Gif, Error> {
         let bi = B_MAP[rgb[o + 2] as usize];
         indices.push((ri << 5) | (gi << 2) | bi);
     }
+    indices
+}
+
+fn quantize_image(raster: &RgbRaster, pixels: usize) -> Result<Gif, Error> {
+    let indices = indices_of(raster, pixels);
     Ok(Gif {
         version: Version::Gif89a,
         width: raster.width,
@@ -260,6 +310,29 @@ pub fn quantize_frame(width: u16, height: u16) -> Result<RgbRaster, Error> {
     Ok(RgbRaster { width, height, rgb })
 }
 
+/// Same generator as [`quantize_frame`], shifted by `phase` so later frames differ.
+pub fn quantize_frame_phase(width: u16, height: u16, phase: u32) -> Result<RgbRaster, Error> {
+    if width == 0 || height == 0 {
+        return Err(INVALID);
+    }
+    let pixels = u32::from(width)
+        .checked_mul(u32::from(height))
+        .ok_or(TOO_LARGE)?;
+    if u64::from(pixels) > MAX_PIXELS {
+        return Err(TOO_LARGE);
+    }
+    let mut rgb = Vec::with_capacity(pixels as usize * 3);
+    for y in 0..height {
+        for x in 0..width {
+            let i = u32::from(y) * u32::from(width) + u32::from(x);
+            rgb.push(i.wrapping_mul(17).wrapping_add(phase) as u8);
+            rgb.push(i.wrapping_mul(29).wrapping_add(phase) as u8);
+            rgb.push(i.wrapping_mul(53).wrapping_add(phase) as u8);
+        }
+    }
+    Ok(RgbRaster { width, height, rgb })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +377,28 @@ mod tests {
         assert!(result.max_abs[1] <= QUANTIZE_MAX_ABS[1]);
         assert!(result.max_abs[2] <= QUANTIZE_MAX_ABS[2]);
         assert!(result.bytes.starts_with(b"GIF89a"));
+    }
+
+    #[test]
+    fn four_frames_use_the_existing_encoder() {
+        let frames: Vec<_> = (0..4)
+            .map(|phase| quantize_frame_phase(16, 16, phase).unwrap())
+            .collect();
+        let delays = [4u16, 8, 15, 30];
+        let bytes = encode_quantized_gif89a(&frames, &delays).unwrap();
+        assert!(bytes.starts_with(b"GIF89a"));
+        let gif = decode_gif(&bytes).unwrap();
+        assert_eq!(gif.frames.len(), 4);
+        assert_eq!(
+            gif.frames
+                .iter()
+                .map(|frame| frame.delay_cs)
+                .collect::<Vec<_>>(),
+            delays
+        );
+        assert_eq!(
+            crate::video_to_gif(&bytes).unwrap_err().code,
+            ErrorCode::Unsupported
+        );
     }
 }
