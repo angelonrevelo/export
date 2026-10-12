@@ -83,6 +83,16 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 669 ns |
 
+A fifth generated file has A1 = 4, B1 = 5, C1 = 6, and D1 = a SUM of those
+three cells with no cached number. The reader adds them. The value is **15**.
+`xls → csv` prints `4,5,6,15`. Any other uncached expression is still refused.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 767 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
