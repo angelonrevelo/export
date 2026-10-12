@@ -1,6 +1,8 @@
 //! Dispatch for the document pairs export actually runs through
 //! pandoc, WeasyPrint, LibreOffice (docx→pdf), pdfplumber, and pypdf.
-//! Ghostscript shrink, encryption, and the formats with no reader here are misses.
+//! Encryption and the formats with no reader here are misses.
+//! PDF shrink recompresses FlateDecode streams and keeps the file only when
+//! those streams inflate to the same bytes and the file is smaller.
 
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -47,7 +49,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "pdf", target: "merge", ready: true, note: "new trailer, pages concatenated" },
     Pair { source: "pdf", target: "rotate", ready: true, note: "sets /Rotate, does not rasterize" },
     Pair { source: "pdf", target: "watermark", ready: true, note: "appends a text stream when contents are uncompressed" },
-    Pair { source: "pdf", target: "shrink", ready: false, note: "MISS: Ghostscript /screen|/ebook|/printer is not implemented" },
+    Pair { source: "pdf", target: "shrink", ready: true, note: "recompress FlateDecode only when the new stream inflates to the same bytes and the file is smaller; otherwise MISS" },
     Pair { source: "pdf", target: "encrypt", ready: false, note: "MISS: encryption is not implemented" },
     Pair { source: "pdf", target: "decrypt", ready: false, note: "MISS: decryption is not implemented" },
     Pair { source: "pdf", target: "docx", ready: false, note: "MISS: pdf2docx layout rebuild is not implemented" },
@@ -137,6 +139,11 @@ pub fn convert_to<R: Read + Seek, W: Write>(
             let bytes = read_bytes(input)?;
             write_str_known(bytes.len() as u64, output, &pdf::plain_text(&bytes)?)
         }
+        ("pdf", "shrink") => {
+            let bytes = read_bytes(input)?;
+            let shrunk = pdf::shrink(&bytes)?;
+            write_bytes_known(bytes.len() as u64, output, &shrunk)
+        }
         ("pdf", "split") | ("pdf", "merge") | ("pdf", "rotate") | ("pdf", "watermark") => Err(Error::new(
             "pdf split, merge, rotate, and watermark are pdf_split, pdf_merge, pdf_rotate, and pdf_watermark",
         )),
@@ -192,6 +199,15 @@ fn write_str<R: Read + Seek, W: Write>(input: &mut R, output: &mut W, text: &str
     })
 }
 
+fn write_bytes_known<W: Write>(input_bytes: u64, output: &mut W, bytes: &[u8]) -> Result<RunStats> {
+    output.write_all(bytes)?;
+    Ok(RunStats {
+        scratch_peak: bytes.len(),
+        input_bytes,
+        output_bytes: bytes.len() as u64,
+    })
+}
+
 fn write_str_known<W: Write>(input_bytes: u64, output: &mut W, text: &str) -> Result<RunStats> {
     output.write_all(text.as_bytes())?;
     Ok(RunStats {
@@ -233,6 +249,14 @@ pub fn pdf_page_count(input: &[u8]) -> Result<usize> {
 
 pub fn pdf_text(input: &[u8]) -> Result<String> {
     pdf::plain_text(input)
+}
+
+pub fn pdf_shrink(input: &[u8]) -> Result<Vec<u8>> {
+    pdf::shrink(input)
+}
+
+pub fn pdf_flate_fixture(input: &[u8]) -> Result<Vec<u8>> {
+    pdf::flate_fixture(input)
 }
 
 fn kind_code(ext: &str) -> u16 {

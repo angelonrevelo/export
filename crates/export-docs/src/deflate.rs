@@ -496,12 +496,142 @@ impl BitOut {
         }
     }
 
+    fn bits_lsb(&mut self, val: u32, len: u8) {
+        for i in 0..len {
+            self.bit((val >> i) & 1);
+        }
+    }
+
     fn finish(mut self) -> Vec<u8> {
         if self.n > 0 {
             self.out.push(self.acc as u8);
         }
         self.out
     }
+}
+
+fn encode_length(len: usize) -> (u32, u8, u32) {
+    let mut idx = LEN_BASE.len() - 1;
+    while idx > 0 && (len as u16) < LEN_BASE[idx] {
+        idx -= 1;
+    }
+    let extra_n = LEN_EXTRA[idx];
+    let extra = (len as u32) - u32::from(LEN_BASE[idx]);
+    (257 + idx as u32, extra_n, extra)
+}
+
+fn encode_distance(dist: usize) -> (u32, u8, u32) {
+    let mut idx = DIST_BASE.len() - 1;
+    while idx > 0 && (dist as u16) < DIST_BASE[idx] {
+        idx -= 1;
+    }
+    let extra_n = DIST_EXTRA[idx];
+    let extra = (dist as u32) - u32::from(DIST_BASE[idx]);
+    (idx as u32, extra_n, extra)
+}
+
+fn hash3(data: &[u8], i: usize) -> usize {
+    let v = u32::from(data[i])
+        | (u32::from(data[i + 1]) << 8)
+        | (u32::from(data[i + 2]) << 16);
+    (v.wrapping_mul(0x1e35_a7bd) >> 17) as usize
+}
+
+fn find_match(data: &[u8], i: usize, head: &[i32], prev: &[i32]) -> (usize, usize) {
+    let h = hash3(data, i);
+    let mut node = head[h];
+    let mut best_len = 0usize;
+    let mut best_dist = 0usize;
+    let mut tries = 0u32;
+    while node >= 0 && tries < 96 {
+        let j = node as usize;
+        if j >= i {
+            break;
+        }
+        let dist = i - j;
+        if dist == 0 || dist > WIN {
+            break;
+        }
+        let max_len = (data.len() - i).min(258);
+        let mut len = 0usize;
+        while len < max_len && data[j + len] == data[i + len] {
+            len += 1;
+        }
+        if len > best_len && len >= 3 {
+            best_len = len;
+            best_dist = dist;
+            if len >= 258 {
+                break;
+            }
+        }
+        node = prev[j];
+        tries += 1;
+    }
+    (best_len, best_dist)
+}
+
+fn note_hash(data: &[u8], i: usize, head: &mut [i32], prev: &mut [i32]) {
+    if i + 2 >= data.len() {
+        return;
+    }
+    let h = hash3(data, i);
+    prev[i] = head[h];
+    head[h] = i as i32;
+}
+
+/// Fixed Huffman plus LZ77. The caller checks that inflate returns the same bytes.
+pub fn deflate_lz77(data: &[u8]) -> Vec<u8> {
+    let lit = canonical_codes(&fixed_lit_lengths());
+    let dist_codes = canonical_codes(&fixed_dist_lengths());
+    let mut w = BitOut::new();
+    w.bit(1);
+    w.bit(1);
+    w.bit(0);
+    if !data.is_empty() {
+        let mut head = vec![-1i32; 1 << 15];
+        let mut prev = vec![-1i32; data.len()];
+        let mut i = 0usize;
+        while i < data.len() {
+            if i + 2 < data.len() {
+                let (mut len, mut dist) = find_match(data, i, &head, &prev);
+                note_hash(data, i, &mut head, &mut prev);
+                if len >= 3 && i + 3 < data.len() {
+                    let (len2, dist2) = find_match(data, i + 1, &head, &prev);
+                    if len2 > len + 1 {
+                        let (code, bits) = lit[data[i] as usize];
+                        w.bits_msb(code, bits);
+                        i += 1;
+                        note_hash(data, i, &mut head, &mut prev);
+                        len = len2;
+                        dist = dist2;
+                    }
+                }
+                if len >= 3 {
+                    let (sym, extra_n, extra) = encode_length(len);
+                    let (code, bits) = lit[sym as usize];
+                    w.bits_msb(code, bits);
+                    w.bits_lsb(extra, extra_n);
+                    let (dsym, dextra_n, dextra) = encode_distance(dist);
+                    let (dcode, dbits) = dist_codes[dsym as usize];
+                    w.bits_msb(dcode, dbits);
+                    w.bits_lsb(dextra, dextra_n);
+                    let end = i + len;
+                    i += 1;
+                    while i < end {
+                        note_hash(data, i, &mut head, &mut prev);
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+            let (code, bits) = lit[data[i] as usize];
+            w.bits_msb(code, bits);
+            i += 1;
+        }
+    }
+    let (code, bits) = lit[256];
+    w.bits_msb(code, bits);
+    w.finish()
 }
 
 fn canonical_codes(lengths: &[u8]) -> Vec<(u32, u8)> {
@@ -528,6 +658,7 @@ fn canonical_codes(lengths: &[u8]) -> Vec<(u32, u8)> {
 }
 
 /// One fixed-Huffman block, no LZ77. Round-trips through [`inflate_vec`].
+/// Fixture ZIP bytes use this. PDF shrink does not.
 pub fn deflate_fixed(data: &[u8]) -> Vec<u8> {
     let codes = canonical_codes(&fixed_lit_lengths());
     let mut w = BitOut::new();
@@ -609,6 +740,22 @@ mod tests {
             big.extend_from_slice(format!("para {i} word\n").as_bytes());
         }
         assert_eq!(inflate_vec(&deflate_fixed(&big)).unwrap(), big);
+    }
+
+    #[test]
+    fn lz77_roundtrip_and_beats_fixed_on_repeats() {
+        for sample in [b"".as_slice(), b"hello", b"abc", &[0u8, 255, 10, 13]] {
+            assert_eq!(inflate_vec(&deflate_lz77(sample)).unwrap(), sample);
+        }
+        let unit = b"BT /F1 12.00 Tf (alpha beta gamma) Tj\n";
+        let mut big = Vec::new();
+        for _ in 0..400 {
+            big.extend_from_slice(unit);
+        }
+        let packed = deflate_lz77(&big);
+        assert_eq!(inflate_vec(&packed).unwrap(), big);
+        assert!(packed.len() < big.len());
+        assert!(packed.len() < deflate_fixed(&big).len());
     }
 
     #[test]

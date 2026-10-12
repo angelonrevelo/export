@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::deflate::inflate_vec;
+use crate::deflate::{deflate_fixed, deflate_lz77, inflate_vec};
 use crate::error::{Error, Result};
 
 const PAGE_W: i64 = 612;
@@ -494,6 +494,238 @@ pub fn watermark(data: &[u8], text: &str) -> Result<Vec<u8>> {
         graphs.push(g);
     }
     assemble(graphs)
+}
+
+/// Recompress `/FlateDecode` streams. Returns the file only when a recompressed
+/// stream inflates to the same bytes and the whole file is smaller.
+pub fn shrink(data: &[u8]) -> Result<Vec<u8>> {
+    let result = (|| {
+        let before = flate_plains(data)?;
+        let (out, replaced) = rebuild(data, recompress_one)?;
+        if replaced == 0 || out.len() >= data.len() {
+            return Err(Error::new("no smaller FlateDecode stream"));
+        }
+        let after = flate_plains(&out)?;
+        if before != after {
+            return Err(Error::new("recompressed FlateDecode inflated to different bytes"));
+        }
+        Ok(out)
+    })();
+    match result {
+        Ok(out) => Ok(out),
+        Err(e) => Err(Error::new(format!(
+            "MISS: pdf shrink ({}) input_b={}",
+            e.message,
+            data.len()
+        ))),
+    }
+}
+
+/// Wrap uncompressed streams in fixed-Huffman FlateDecode so shrink has something
+/// to recompress. Not a product conversion.
+pub fn flate_fixture(data: &[u8]) -> Result<Vec<u8>> {
+    let (out, _) = rebuild(data, wrap_fixed)?;
+    Ok(out)
+}
+
+fn recompress_one(obj: Obj) -> Result<Option<Obj>> {
+    let Obj::Stream { dict, data } = obj else {
+        return Ok(None);
+    };
+    if !is_flate(&dict) {
+        return Ok(None);
+    }
+    let plain = inflate_vec(&data)?;
+    let packed = deflate_lz77(&plain);
+    if inflate_vec(&packed)? != plain {
+        return Err(Error::new(
+            "recompressed FlateDecode inflated to different bytes",
+        ));
+    }
+    if packed.len() >= data.len() {
+        return Ok(None);
+    }
+    Ok(Some(Obj::Stream { dict, data: packed }))
+}
+
+fn wrap_fixed(obj: Obj) -> Result<Option<Obj>> {
+    let Obj::Stream { mut dict, data } = obj else {
+        return Ok(None);
+    };
+    if is_flate(&dict) || dict.iter().any(|(k, _)| k == "Filter") {
+        return Ok(None);
+    }
+    let packed = deflate_fixed(&data);
+    if let Some((_, slot)) = dict.iter_mut().find(|(k, _)| k == "Length") {
+        *slot = Obj::Int(packed.len() as i64);
+    } else {
+        dict.push(("Length".into(), Obj::Int(packed.len() as i64)));
+    }
+    dict.push(("Filter".into(), Obj::Name("FlateDecode".into())));
+    Ok(Some(Obj::Stream { dict, data: packed }))
+}
+
+fn is_flate(dict: &[(String, Obj)]) -> bool {
+    let Some((_, filter)) = dict.iter().find(|(k, _)| k == "Filter") else {
+        return false;
+    };
+    match filter {
+        Obj::Name(n) => n == "FlateDecode",
+        Obj::Arr(items) => {
+            items.len() == 1 && matches!(&items[0], Obj::Name(n) if n == "FlateDecode")
+        }
+        _ => false,
+    }
+}
+
+fn flate_plains(data: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut src = Src::open(data)?;
+    let mut out = Vec::new();
+    for id in 1..src.xref.len() {
+        if src.xref[id].is_none() {
+            continue;
+        }
+        if let Obj::Stream { dict, data } = src.load(id as u32)? {
+            if is_flate(&dict) {
+                out.push(inflate_vec(&data)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+struct Piece {
+    gen: u16,
+    bytes: Vec<u8>,
+}
+
+fn rebuild<F>(data: &[u8], mut edit: F) -> Result<(Vec<u8>, usize)>
+where
+    F: FnMut(Obj) -> Result<Option<Obj>>,
+{
+    let start = find_startxref(data)?;
+    let trailer = read_trailer_only(data, start)?;
+    if trailer.dict_get("Encrypt").is_some() {
+        return Err(Error::new("encrypted"));
+    }
+    let root = match trailer.dict_get("Root") {
+        Some(Obj::Ref(id)) => *id,
+        _ => return Err(Error::new("trailer has no root")),
+    };
+    let mut src = Src::open(data)?;
+    let n = src.xref.len();
+    let mut pieces = Vec::with_capacity(n);
+    pieces.resize_with(n, || None);
+    let mut replaced = 0usize;
+    let mut earliest = data.len();
+    for (id, slot) in pieces.iter_mut().enumerate().skip(1) {
+        let Some(off) = src.xref[id] else {
+            continue;
+        };
+        earliest = earliest.min(off as usize);
+        let gen = read_gen(data, off as usize)?;
+        let loaded = src.load(id as u32)?;
+        if let Some(new_obj) = edit(loaded.clone())? {
+            replaced += 1;
+            *slot = Some(Piece {
+                gen: 0,
+                bytes: object_bytes(id as u32, &new_obj),
+            });
+        } else {
+            *slot = Some(Piece {
+                gen,
+                bytes: raw_object(data, off, &loaded)?.to_vec(),
+            });
+        }
+    }
+    let preamble = if earliest < data.len() {
+        &data[..earliest]
+    } else {
+        &[]
+    };
+    Ok((stitch(preamble, &pieces, root), replaced))
+}
+
+fn object_bytes(id: u32, obj: &Obj) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+    write_obj(&mut out, obj);
+    out.extend_from_slice(b"\nendobj");
+    out
+}
+
+fn read_gen(data: &[u8], offset: usize) -> Result<u16> {
+    let mut p = Cur::new(data, offset);
+    p.skip();
+    let _id = p.parse_int()?;
+    let gen = p.parse_int()?;
+    u16::try_from(gen).map_err(|_| Error::new("pdf: bad generation"))
+}
+
+fn raw_object<'a>(data: &'a [u8], offset: u64, loaded: &Obj) -> Result<&'a [u8]> {
+    let start = offset as usize;
+    let mut p = Cur::new(data, start);
+    p.skip();
+    let _id = p.parse_int()?;
+    let _gen = p.parse_int()?;
+    if !p.keyword("obj") {
+        return Err(Error::new("pdf: expected obj"));
+    }
+    let _val = p.parse_value()?;
+    p.skip();
+    if p.keyword("stream") {
+        let Obj::Stream { data: stream, .. } = loaded else {
+            return Err(Error::new("pdf: stream object mismatch"));
+        };
+        p.bump(b'\r');
+        p.bump(b'\n');
+        if p.i + stream.len() > data.len() {
+            return Err(Error::new("pdf: stream length past end"));
+        }
+        p.i += stream.len();
+        if !p.keyword("endstream") {
+            return Err(Error::new("pdf: missing endstream"));
+        }
+    }
+    if !p.keyword("endobj") {
+        return Err(Error::new("pdf: missing endobj"));
+    }
+    Ok(&data[start..p.i])
+}
+
+fn stitch(preamble: &[u8], pieces: &[Option<Piece>], root: u32) -> Vec<u8> {
+    let size = pieces.len();
+    let mut out = preamble.to_vec();
+    if !out.is_empty() && !out.ends_with(b"\n") {
+        out.push(b'\n');
+    }
+    let mut offsets = vec![None; size];
+    for (id, piece) in pieces.iter().enumerate().skip(1) {
+        let Some(piece) = piece else {
+            continue;
+        };
+        offsets[id] = Some((out.len() as u64, piece.gen));
+        out.extend_from_slice(&piece.bytes);
+        if !out.ends_with(b"\n") {
+            out.push(b'\n');
+        }
+    }
+    let xref_at = out.len();
+    out.extend_from_slice(format!("xref\n0 {size}\n").as_bytes());
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for slot in offsets.iter().skip(1) {
+        match slot {
+            Some((off, gen)) => {
+                out.extend_from_slice(format!("{off:010} {gen:05} n \n").as_bytes());
+            }
+            None => out.extend_from_slice(b"0000000000 00000 f \n"),
+        }
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {size} /Root {root} 0 R >>\nstartxref\n{xref_at}\n%%EOF\n")
+            .as_bytes(),
+    );
+    out
 }
 
 fn stamp(g: &mut Graph, text: &str) -> Result<()> {
@@ -1371,5 +1603,42 @@ mod tests {
     fn corrupt_is_an_error() {
         assert!(page_count(b"not a pdf").is_err());
         assert!(page_count(b"%PDF-1.4\n").is_err());
+    }
+
+    #[test]
+    fn shrink_flate_roundtrip_is_smaller() {
+        let mut lines = Vec::new();
+        lines.push(Line {
+            spans: vec![Span {
+                text: "PAGEONEWORD".into(),
+                font: 0,
+                size: 12.0,
+            }],
+            leading: 14.0,
+        });
+        for _ in 0..80 {
+            lines.push(Line {
+                spans: vec![Span {
+                    text: "alpha beta gamma delta".into(),
+                    font: 0,
+                    size: 11.0,
+                }],
+                leading: 14.0,
+            });
+        }
+        let raw = from_lines(&lines).unwrap();
+        let missed = shrink(&raw).unwrap_err();
+        assert!(missed.message.starts_with("MISS:"), "{missed}");
+        assert!(
+            missed.message.contains(&format!("input_b={}", raw.len())),
+            "{missed}"
+        );
+        let flate = flate_fixture(&raw).unwrap();
+        assert!(flate.windows(11).any(|w| w == b"FlateDecode"));
+        let shrunk = shrink(&flate).unwrap();
+        assert!(shrunk.len() < flate.len(), "{} -> {}", flate.len(), shrunk.len());
+        assert_eq!(flate_plains(&flate).unwrap(), flate_plains(&shrunk).unwrap());
+        assert_eq!(plain_text(&shrunk).unwrap(), plain_text(&raw).unwrap());
+        assert!(plain_text(&shrunk).unwrap().contains("PAGEONEWORD"));
     }
 }

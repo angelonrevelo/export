@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_docs::{
-    convert, pack_deflated, pack_stored, pairs, pdf_merge, pdf_rotate, pdf_split, pdf_watermark,
+    convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
+    pdf_split, pdf_watermark,
 };
 
 const WARMUP: usize = 4;
@@ -148,11 +149,69 @@ fn emit_ready(label: &str, input_bytes: u64, sample: &Sample) {
     );
 }
 
+fn emit_untimed(label: &str, input_bytes: u64, output_bytes: Option<u64>, status: &str) {
+    let output = match output_bytes {
+        Some(n) => n.to_string(),
+        None => "-".to_string(),
+    };
+    println!(
+        "{label:<32} {input_bytes:>10} {output:>10} {d:>12} {d:>12} {d:>12} {d:>10} {d:>12} {d:>12} {status}",
+        d = "-",
+    );
+}
+
+fn report_shrink(pdf: &[u8]) {
+    match pdf_shrink(pdf) {
+        Ok(_) => {
+            eprintln!("uncompressed pdf shrink produced a file");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            if !e.message.starts_with("MISS:") || !e.message.contains(&format!("input_b={}", pdf.len())) {
+                eprintln!("shrink miss hid the input size: {e}");
+                std::process::exit(1);
+            }
+            emit_untimed("pdf→shrink", pdf.len() as u64, None, &e.message);
+        }
+    }
+    let flate = pdf_flate_fixture(pdf).unwrap_or_else(|e| {
+        eprintln!("flate fixture failed: {e}");
+        std::process::exit(1);
+    });
+    match pdf_shrink(&flate) {
+        Ok(out) => {
+            if out.len() >= flate.len() {
+                eprintln!("shrink returned a file that is not smaller");
+                std::process::exit(1);
+            }
+            emit_untimed(
+                "pdf→shrink flate",
+                flate.len() as u64,
+                Some(out.len() as u64),
+                "recompressed FlateDecode round-trip, file smaller",
+            );
+        }
+        Err(e) => {
+            emit_untimed("pdf→shrink flate", flate.len() as u64, None, &e.message);
+        }
+    }
+}
+
 fn emit_miss(label: &str, note: &str) {
     println!(
         "{label:<32} {d:>10} {d:>10} {d:>12} {d:>12} {d:>12} {d:>10} {d:>12} {d:>12} {note}",
         d = "-",
     );
+}
+
+fn shrink_pdf_fixture() -> Vec<u8> {
+    let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
+    for i in 0..80 {
+        md.push_str(&format!(
+            "Paragraph {i} of the markdown fixture stays in the stream.\n\n"
+        ));
+    }
+    convert("md", "pdf", md.as_bytes()).expect("md pdf fixture")
 }
 
 fn docx_xml(paras: usize) -> String {
@@ -183,6 +242,16 @@ fn ready_bytes(source: &str, target: &str, input: &[u8]) -> u64 {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--shrink") {
+        let pdf = shrink_pdf_fixture();
+        println!("export-docs shrink byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_shrink(&pdf);
+        return;
+    }
     let xml = docx_xml(2500);
     let docx_deflate = pack_deflated(&[("word/document.xml", xml.as_bytes())]);
     let docx_store = pack_stored(&[("word/document.xml", xml.as_bytes())]);
@@ -203,7 +272,7 @@ fn main() {
     };
     let html = convert("md", "html", markdown.as_bytes()).expect("md html fixture");
     let text = b"Plain paragraph one.\n\nPlain paragraph two.\n";
-    let pdf = convert("md", "pdf", markdown.as_bytes()).expect("md pdf fixture");
+    let pdf = shrink_pdf_fixture();
     let page_a = convert("txt", "pdf", b"PAGEONEWORD\n").expect("page a");
     let page_b = convert("txt", "pdf", b"PAGETWOWORD\n").expect("page b");
 
@@ -297,6 +366,8 @@ fn main() {
         n
     });
     emit_ready("pdf→watermark", page_a.len() as u64, &watermark);
+
+    report_shrink(&pdf);
 
     let mut misses = 0usize;
     for pair in pairs().iter().filter(|p| !p.ready) {

@@ -136,10 +136,15 @@ fn segment_roundtrip_and_misses_are_listed() {
     let _ = std::fs::remove_dir_all(&dir);
 
     let misses: Vec<_> = pairs().iter().filter(|p| !p.ready).collect();
-    assert!(misses.iter().any(|p| p.target == "shrink" && p.note.contains("MISS")));
     assert!(misses.iter().any(|p| p.target == "encrypt"));
-    assert!(convert("pdf", "shrink", b"%PDF-").is_err());
     assert!(convert("rtf", "html", b"{\\rtf}").is_err());
+    let plain = convert("txt", "pdf", b"alpha beta gamma\n").unwrap();
+    let missed = convert("pdf", "shrink", &plain).unwrap_err();
+    assert!(missed.to_string().starts_with("MISS:"), "{missed}");
+    assert!(
+        missed.to_string().contains(&format!("input_b={}", plain.len())),
+        "{missed}"
+    );
 }
 
 #[test]

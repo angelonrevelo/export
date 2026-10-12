@@ -30,8 +30,8 @@ pub use container::{
     Meta, Segment, HEAD, MAGIC, SPANS, TABLE_BYTE,
 };
 pub use convert::{
-    convert, convert_to, pair_ready, pairs, pdf_merge, pdf_page_count, pdf_rotate, pdf_split,
-    pdf_text, pdf_watermark, save_conversion, Pair,
+    convert, convert_to, pair_ready, pairs, pdf_flate_fixture, pdf_merge, pdf_page_count, pdf_rotate,
+    pdf_shrink, pdf_split, pdf_text, pdf_watermark, save_conversion, Pair,
 };
 pub use error::{Error, Result};
 pub use stats::RunStats;
