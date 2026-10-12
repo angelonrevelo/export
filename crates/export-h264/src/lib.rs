@@ -103,7 +103,8 @@ impl Yuv420 {
         if self.width == 0 || self.height == 0 || self.width % 16 != 0 || self.height % 16 != 0 {
             return Err(Error::Size);
         }
-        if self.width > 160 || self.height > 160 {
+        // 320×240 is 300 macroblocks, inside level 1.1. 32×32 and 160×160 stay inside the same check.
+        if self.width > 320 || self.height > 240 {
             return Err(Error::TooLarge);
         }
         let y = (self.width as usize) * (self.height as usize);
@@ -328,6 +329,11 @@ pub fn fixture_32x32() -> Yuv420 {
 /// Deterministic 160×160 4:2:0 pattern. Same formula as [`fixture_32x32`].
 pub fn fixture_160x160() -> Yuv420 {
     fixture_pattern(160, 160)
+}
+
+/// Deterministic 320×240 4:2:0 pattern. Same formula as [`fixture_32x32`].
+pub fn fixture_320x240() -> Yuv420 {
+    fixture_pattern(320, 240)
 }
 
 fn fixture_pattern(width: u32, height: u32) -> Yuv420 {

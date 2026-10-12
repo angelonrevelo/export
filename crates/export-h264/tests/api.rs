@@ -1,8 +1,9 @@
 use export_h264::{
     encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_160x160_eight,
-    fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_32x32,
-    fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error,
-    EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
+    fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_320x240,
+    fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted,
+    mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420,
+    SHIFTED_MV,
 };
 
 #[test]
@@ -262,11 +263,11 @@ fn larger_iframe_is_constrained_baseline() {
         Error::PredictedFrame
     );
     assert!(Yuv420::new(
-        176,
-        176,
-        vec![0; 176 * 176],
-        vec![0; 88 * 88],
-        vec![0; 88 * 88]
+        320,
+        256,
+        vec![0; 320 * 256],
+        vec![0; 160 * 128],
+        vec![0; 160 * 128]
     )
     .is_err());
     let predicted = fixture_160x160_predicted();
@@ -413,6 +414,35 @@ fn sixteen_pictures_keep_the_iframe() {
     assert_eq!(
         encode_sequence(&intra, &too_many, &opts).unwrap_err(),
         Error::Count
+    );
+}
+
+#[test]
+fn qvga_iframe_keeps_the_sixteen_picture_file() {
+    let opts = EncodeOptions::default();
+    let (intra, predicted) = fixture_160x160_sixteen();
+    let sixteen = encode_sequence(&intra, &predicted, &opts).unwrap();
+    assert_eq!(sixteen.annex_b.len(), 7814);
+    let frame = fixture_320x240();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.annex_b.len(), 19337);
+    assert_eq!(encoded.qp, 26);
+    assert_eq!(encoded.reconstructed.width, 320);
+    assert_eq!(encoded.reconstructed.height, 240);
+    assert!(encoded
+        .annex_b
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x0b]));
+    assert_eq!(
+        encode(
+            &frame,
+            &EncodeOptions {
+                picture: Picture::Predicted,
+                ..opts
+            }
+        )
+        .unwrap_err(),
+        Error::PredictedFrame
     );
 }
 
