@@ -1,5 +1,5 @@
 //! Legacy PowerPoint 97 to HTML for one generated compound file.
-//! The `PowerPoint Document` stream holds one, two, three, four, five, six, seven, eight, nine, ten, eleven, or twelve text-bytes shapes.
+//! The `PowerPoint Document` stream holds one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, or thirteen text-bytes shapes.
 //! Any other file stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -965,6 +965,56 @@ pub fn ppt_twelve_text_document(
     ]))
 }
 
+/// Compound file whose `PowerPoint Document` stream is thirteen text-bytes shapes.
+#[allow(clippy::too_many_arguments)]
+pub fn ppt_thirteen_text_document(
+    first: &str,
+    second: &str,
+    third: &str,
+    fourth: &str,
+    fifth: &str,
+    sixth: &str,
+    seventh: &str,
+    eighth: &str,
+    ninth: &str,
+    tenth: &str,
+    eleventh: &str,
+    twelfth: &str,
+    thirteenth: &str,
+) -> Result<Vec<u8>> {
+    if !plain_shape(first)
+        || !plain_shape(second)
+        || !plain_shape(third)
+        || !plain_shape(fourth)
+        || !plain_shape(fifth)
+        || !plain_shape(sixth)
+        || !plain_shape(seventh)
+        || !plain_shape(eighth)
+        || !plain_shape(ninth)
+        || !plain_shape(tenth)
+        || !plain_shape(eleventh)
+        || !plain_shape(twelfth)
+        || !plain_shape(thirteenth)
+    {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    pack_cfb(&document_stream(&[
+        first.as_bytes(),
+        second.as_bytes(),
+        third.as_bytes(),
+        fourth.as_bytes(),
+        fifth.as_bytes(),
+        sixth.as_bytes(),
+        seventh.as_bytes(),
+        eighth.as_bytes(),
+        ninth.as_bytes(),
+        tenth.as_bytes(),
+        eleventh.as_bytes(),
+        twelfth.as_bytes(),
+        thirteenth.as_bytes(),
+    ]))
+}
+
 /// Compound file with one text shape and one 24-bit DIB picture.
 pub fn ppt_text_picture_document(text: &str) -> Result<Vec<u8>> {
     if !plain_shape(text) {
@@ -1229,7 +1279,7 @@ fn list_text(body: &[u8]) -> Result<Vec<String>> {
         at += n;
         match rec.ty {
             RT_TEXT_HEADER => {
-                if pending_header || texts.len() >= 12 || rec.ver != 0 || rec.data.len() != 4 {
+                if pending_header || texts.len() >= 13 || rec.ver != 0 || rec.data.len() != 4 {
                     return Err(shape());
                 }
                 pending_header = true;
@@ -3086,7 +3136,136 @@ mod tests {
     }
 
     #[test]
-    fn thirteen_text_shapes_stay_a_miss() {
+    fn thirteen_text_shapes_become_html() {
+        let first = "First generated legacy PowerPoint text shape.";
+        let second = "Second generated legacy PowerPoint text shape.";
+        let third = "Third generated legacy PowerPoint text shape.";
+        let fourth = "Fourth generated legacy PowerPoint text shape.";
+        let fifth = "Fifth generated legacy PowerPoint text shape.";
+        let sixth = "Sixth generated legacy PowerPoint text shape.";
+        let seventh = "Seventh generated legacy PowerPoint text shape.";
+        let eighth = "Eighth generated legacy PowerPoint text shape.";
+        let ninth = "Ninth generated legacy PowerPoint text shape.";
+        let tenth = "Tenth generated legacy PowerPoint text shape.";
+        let eleventh = "Eleventh generated legacy PowerPoint text shape.";
+        let twelfth = "Twelfth generated legacy PowerPoint text shape.";
+        let thirteenth = "Thirteenth generated legacy PowerPoint text shape.";
+        let file = ppt_thirteen_text_document(
+            first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh,
+            twelfth, thirteenth,
+        )
+        .unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!(
+            "<p>{first}</p><p>{second}</p><p>{third}</p><p>{fourth}</p><p>{fifth}</p><p>{sixth}</p><p>{seventh}</p><p>{eighth}</p><p>{ninth}</p><p>{tenth}</p><p>{eleventh}</p><p>{twelfth}</p><p>{thirteenth}</p>"
+        );
+        assert!(got.contains(&marked), "{got}");
+        let a = got.find(first).unwrap();
+        let b = got.find(second).unwrap();
+        let c = got.find(third).unwrap();
+        let d = got.find(fourth).unwrap();
+        let e = got.find(fifth).unwrap();
+        let f = got.find(sixth).unwrap();
+        let g = got.find(seventh).unwrap();
+        let h = got.find(eighth).unwrap();
+        let ni = got.find(ninth).unwrap();
+        let te = got.find(tenth).unwrap();
+        let el = got.find(eleventh).unwrap();
+        let tw = got.find(twelfth).unwrap();
+        let th = got.find(thirteenth).unwrap();
+        assert!(
+            a < b && b < c && c < d && d < e && e < f && f < g && g < h && h < ni && ni < te
+                && te < el
+                && el < tw
+                && tw < th
+        );
+    }
+
+    #[test]
+    fn thirteen_shape_strings_are_in_the_html() {
+        let (north, east, south, west, center, inner, outer, rim, band, arc, cove, dale, glen) =
+            thirteen_shape_fixture();
+        let file = ppt_thirteen_text_document(
+            &north, &east, &south, &west, &center, &inner, &outer, &rim, &band, &arc, &cove, &dale,
+            &glen,
+        )
+        .unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!(
+            "<p>{north}</p><p>{east}</p><p>{south}</p><p>{west}</p><p>{center}</p><p>{inner}</p><p>{outer}</p><p>{rim}</p><p>{band}</p><p>{arc}</p><p>{cove}</p><p>{dale}</p><p>{glen}</p>"
+        );
+        assert!(got.contains(&marked), "{got}");
+        let n = got.find(&north).unwrap();
+        let e = got.find(&east).unwrap();
+        let s = got.find(&south).unwrap();
+        let w = got.find(&west).unwrap();
+        let c = got.find(&center).unwrap();
+        let inn = got.find(&inner).unwrap();
+        let o = got.find(&outer).unwrap();
+        let r = got.find(&rim).unwrap();
+        let band_at = got.find(&band).unwrap();
+        let arc_at = got.find(&arc).unwrap();
+        let cove_at = got.find(&cove).unwrap();
+        let dale_at = got.find(&dale).unwrap();
+        let glen_at = got.find(&glen).unwrap();
+        assert!(
+            n < e && e < s && s < w && w < c && c < inn && inn < o && o < r && r < band_at
+                && band_at < arc_at
+                && arc_at < cove_at
+                && cove_at < dale_at
+                && dale_at < glen_at
+        );
+    }
+
+    #[test]
+    fn thirteen_text_shapes_stay_a_pdf_miss() {
+        let (north, east, south, west, center, inner, outer, rim, band, arc, cove, dale, glen) =
+            thirteen_shape_fixture();
+        let file = ppt_thirteen_text_document(
+            &north, &east, &south, &west, &center, &inner, &outer, &rim, &band, &arc, &cove, &dale,
+            &glen,
+        )
+        .unwrap();
+        let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(err.message.contains("not four text shapes"), "{err}");
+        assert!(
+            err.message.contains(&format!("input_b={}", file.len())),
+            "{err}"
+        );
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn thirteen_shape_fixture() -> (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) {
+        let (north, east, south, west, center, inner, outer, rim, band, arc, cove, dale) =
+            twelve_shape_fixture();
+        let mut glen = String::new();
+        for i in 0..25 {
+            glen.push_str(&format!(
+                "Glen shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        (
+            north, east, south, west, center, inner, outer, rim, band, arc, cove, dale, glen,
+        )
+    }
+
+    #[test]
+    fn fourteen_text_shapes_stay_a_miss() {
         let stream = document_stream(&[
             b"One shape.",
             b"Two shape.",
@@ -3101,6 +3280,7 @@ mod tests {
             b"Eleven shape.",
             b"Twelve shape.",
             b"Thirteen shape.",
+            b"Fourteen shape.",
         ]);
         let file = pack_cfb(&stream).unwrap();
         let err = html(&file).unwrap_err();

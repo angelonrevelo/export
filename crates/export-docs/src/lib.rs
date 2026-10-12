@@ -44,7 +44,7 @@ pub use doc::word97_document;
 pub use ppt::{
     ppt_eight_text_document, ppt_five_text_document, ppt_four_text_document,
     ppt_nine_text_document, ppt_ten_text_document, ppt_eleven_text_document,
-    ppt_twelve_text_document,
+    ppt_twelve_text_document, ppt_thirteen_text_document,
     ppt_seven_text_document,
     ppt_six_text_document, ppt_text_document,
     ppt_text_indexed_document, ppt_text_nibble_document,
