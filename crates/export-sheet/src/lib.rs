@@ -31,8 +31,7 @@
 //! adds a `NUMBER` in C1 (7). A third file is 1 000 rows of one numeric
 //! column, values 0 through 999, with no formulas. The same sheet at the next
 //! count is 2 000 rows, values 0 through 1999. The same sheet at the next
-//! count after that is 4 000 rows, values 0 through 3999. The same sheet at the next
-//! count after 4 000 is 8 000 rows, values 0 through 7999. A formula cell is returned
+//! count after that is 4 000 rows, values 0 through 3999. A formula cell is returned
 //! only as its cached IEEE number. The expression is not evaluated. A SUM of
 //! two numeric cells with no cached number is those two cells added. A SUM of
 //! three numeric cells with no cached number is those three cells added. A SUM of
@@ -59,7 +58,6 @@ pub use error::{Error, Result};
 pub use json::JsonReader;
 pub use xls::generated_biff_xls;
 pub use xls::generated_biff_xls_numeric_column;
-pub use xls::generated_biff_xls_numeric_column_eight_thousand;
 pub use xls::generated_biff_xls_numeric_column_four_thousand;
 pub use xls::generated_biff_xls_numeric_column_two_thousand;
 pub use xls::generated_biff_xls_sum_cache;
