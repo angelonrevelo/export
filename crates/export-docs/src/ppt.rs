@@ -1204,12 +1204,9 @@ mod tests {
     fn one_text_and_four_bit_picture_become_pdf() {
         let text = nibble_slide_text();
         let file = ppt_text_nibble_document(&text).unwrap();
-        assert_ne!(file.len(), 2560);
-        assert_ne!(file.len(), 5632);
-        assert_ne!(file.len(), 7680);
-        assert_ne!(file.len(), 8704);
-        assert_ne!(file.len(), 14336);
+        assert_eq!(file.len(), 9216);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        assert_eq!(pdf.len(), 2359);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&text), "{got}");
         let (width, height, rgb) = expected_nibble_rgb();
