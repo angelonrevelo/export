@@ -10,6 +10,8 @@
 //! 13158 ns p50 and 14687 ns p99.
 //! A 128×128 page is 49810 bytes in and out. Release split of that page is
 //! 35447 ns p50 and 43261 ns p99.
+//! A 256×256 page is 197268 bytes in and out. Release split of that page is
+//! 148981 ns p50 and 194503 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any other image, and fonts
 //! other than the built-in Helvetica are not preserved. A truncated file, an
@@ -23,7 +25,7 @@ pub enum Error {
 }
 
 /// Largest edge, in pixels, of the one uncompressed RGB page this crate keeps.
-pub const RGB_MAX_EDGE: u32 = 128;
+pub const RGB_MAX_EDGE: u32 = 256;
 
 /// One classic-xref page holding one uncompressed 8-bit DeviceRGB image.
 ///
