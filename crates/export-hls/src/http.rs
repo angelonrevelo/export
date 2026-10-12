@@ -88,6 +88,24 @@ impl Fetcher {
         self.get_range(&span.uri, range)
     }
 
+    /// Fetch every span with its own cleartext `Range` GET.
+    ///
+    /// A gap larger than 4096 bytes does not coalesce, so two ranges of the
+    /// same URI stay two spans and this method issues two GETs. The hole
+    /// between them is not requested. `https` URIs are unsupported. This
+    /// method does not run yt-dlp or any other program. An empty span list
+    /// returns [`Error::BadTag`].
+    pub fn get_spans(&self, playlist: &MediaPlaylist) -> Result<Vec<Vec<u8>>, Error> {
+        if playlist.spans.is_empty() {
+            return Err(Error::BadTag);
+        }
+        let mut bodies = Vec::with_capacity(playlist.spans.len());
+        for index in 0..playlist.spans.len() {
+            bodies.push(self.get_span(playlist, index)?);
+        }
+        Ok(bodies)
+    }
+
     fn fetch(&self, url: &str, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
         let timeout = self.timeout;
         let max_body = self.max_body_bytes;
@@ -779,5 +797,47 @@ mod tests {
         let message = read_http_message(&mut Cursor::new(&partial[..]), 1024).unwrap();
         assert_eq!(message.status, 206);
         assert_eq!(message.body, b"body");
+    }
+
+    #[test]
+    fn gap_of_4097_stays_two_range_gets() {
+        assert_eq!(
+            parse_media_playlist(
+                "#EXTM3U\n#EXTINF:1,\n#EXT-X-BYTERANGE:32768@0\nhttp://cdn.example/a.ts\n#EXTINF:1,\n#EXT-X-BYTERANGE:32768@36865\nhttps://cdn.example/a.ts\n"
+            ),
+            Err(Error::Unsupported)
+        );
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n\
+             #EXTINF:1,\n\
+             #EXT-X-BYTERANGE:32768@0\n\
+             a.ts\n\
+             #EXTINF:1,\n\
+             #EXT-X-BYTERANGE:32768@36865\n\
+             a.ts\n",
+        )
+        .unwrap();
+        assert_eq!(playlist.segments.len(), 2);
+        assert_eq!(playlist.spans.len(), 2);
+        assert_eq!(
+            playlist.spans[0].byte_range,
+            Some(ByteRange {
+                offset: 0,
+                length: 32_768,
+            })
+        );
+        assert_eq!(
+            playlist.spans[1].byte_range,
+            Some(ByteRange {
+                offset: 36_865,
+                length: 32_768,
+            })
+        );
+        assert_eq!(playlist.spans[0].segments, vec![0]);
+        assert_eq!(playlist.spans[1].segments, vec![1]);
+        assert_eq!(Fetcher::default().get_spans(&playlist), Err(Error::BadTag));
+        let empty = parse_media_playlist("#EXTM3U\n#EXT-X-ENDLIST\n").unwrap();
+        assert!(empty.spans.is_empty());
+        assert_eq!(Fetcher::default().get_spans(&empty), Err(Error::BadTag));
     }
 }

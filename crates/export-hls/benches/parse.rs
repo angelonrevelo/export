@@ -1,9 +1,9 @@
 //! Release bench.
 //!
 //! Parse timings and the bulk local-stack GETs run on one thread. The
-//! one-segment, two-segment, and coalesced-range fetches call the library
-//! client and use one local accept thread beside the client. Loopback GETs
-//! run only here, on 127.0.0.1. They are not CDN downloads.
+//! one-segment, two-segment, coalesced-range, and split-range fetches call
+//! the library client and use one local accept thread beside the client.
+//! Loopback GETs run only here, on 127.0.0.1. They are not CDN downloads.
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -95,6 +95,14 @@ fn main() {
         Ok(report) => println!("{report}"),
         Err(err) => {
             eprintln!("local stack coalesced range GET failed: {err}");
+            std::process::exit(1);
+        }
+    }
+
+    match local_stack_split_range_row() {
+        Ok(report) => println!("{report}"),
+        Err(err) => {
+            eprintln!("local stack split range GET failed: {err}");
             std::process::exit(1);
         }
     }
@@ -573,6 +581,157 @@ fn local_stack_coalesced_range_row() -> Result<String, Box<dyn std::error::Error
     Ok(format!(
         "local stack coalesced range GET bytes={MERGED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
+}
+
+/// One segment is named as two ranges of the same URI with a 4097-byte gap.
+/// That gap is past the coalesce limit, so [`Fetcher::get_spans`] issues two
+/// cleartext `Range` GETs. The hole is not fetched. The reported byte count
+/// is the sum of the two responses.
+///
+/// Loopback is allowed only here. `check_hop` still runs inside the client
+/// before each connect. The bodies are raw text, not a transcode.
+fn local_stack_split_range_row() -> Result<String, Box<dyn std::error::Error>> {
+    const RANGE_BYTES: usize = 32 * 1024;
+    const GAP_BYTES: usize = 4097;
+    const COMBINED_BYTES: usize = RANGE_BYTES + RANGE_BYTES;
+    let second_offset = RANGE_BYTES + GAP_BYTES;
+    let mut resource = Vec::with_capacity(second_offset + RANGE_BYTES);
+    resource.extend(std::iter::repeat(b'a').take(RANGE_BYTES));
+    resource.extend(std::iter::repeat(b'h').take(GAP_BYTES));
+    resource.extend(std::iter::repeat(b'b').take(RANGE_BYTES));
+    let first = resource[..RANGE_BYTES].to_vec();
+    let second = resource[second_offset..second_offset + RANGE_BYTES].to_vec();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let segment_url = format!("http://127.0.0.1:{port}/seg.ts");
+    if check_hop(&segment_url, ConnectPolicy::default()) != Err(Error::Blocked) {
+        return Err("loopback segment was accepted without the bench opt-in".into());
+    }
+    let playlist_text = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXTINF:5.0,\n#EXT-X-BYTERANGE:{RANGE_BYTES}@0\n{segment_url}\n#EXTINF:5.0,\n#EXT-X-BYTERANGE:{RANGE_BYTES}@{second_offset}\n{segment_url}\n#EXT-X-ENDLIST\n"
+    );
+    let playlist = parse_media_playlist(&playlist_text)?;
+    if playlist.segments.len() != 2 || playlist.spans.len() != 2 {
+        return Err("a 4097-byte gap coalesced".into());
+    }
+    if playlist.segments[0].uri != segment_url || playlist.segments[1].uri != segment_url {
+        return Err("both ranges must name the same cleartext segment".into());
+    }
+    let first_range = ByteRange {
+        offset: 0,
+        length: RANGE_BYTES as u64,
+    };
+    let second_range = ByteRange {
+        offset: second_offset as u64,
+        length: RANGE_BYTES as u64,
+    };
+    if playlist.spans[0].byte_range != Some(first_range)
+        || playlist.spans[1].byte_range != Some(second_range)
+        || playlist.spans[0].segments != [0]
+        || playlist.spans[1].segments != [1]
+    {
+        return Err("split ranges were rewritten before the fetch".into());
+    }
+    let fetcher = Fetcher {
+        policy: ConnectPolicy::new(true),
+        timeout: Duration::from_secs(2),
+        max_redirects: 5,
+        max_body_bytes: 8 * 1024 * 1024,
+    };
+    let warmup = 5;
+    let iters = 100;
+    let samples = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            serve_split_ranges(
+                listener,
+                &first,
+                &second,
+                first_range,
+                second_range,
+                resource.len(),
+                2 * (warmup + iters),
+            );
+        });
+        let mut samples = Vec::with_capacity(iters);
+        for index in 0..(warmup + iters) {
+            let started = Instant::now();
+            let got = fetcher.get_spans(&playlist).expect("two cleartext ranges");
+            let elapsed = started.elapsed().as_nanos() as f64;
+            let combined: usize = got.iter().map(Vec::len).sum();
+            assert_eq!(got.len(), 2);
+            assert_eq!(got[0], first);
+            assert_eq!(got[1], second);
+            assert_eq!(combined, COMBINED_BYTES);
+            if index >= warmup {
+                samples.push(elapsed);
+            }
+            std::hint::black_box(combined);
+        }
+        samples
+    });
+    let mut sorted = samples;
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let p50 = percentile(&sorted, 0.50);
+    let p99 = percentile(&sorted, 0.99);
+    Ok(format!(
+        "local stack split range GET gets=2 bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+    ))
+}
+
+fn serve_split_ranges(
+    listener: TcpListener,
+    first: &[u8],
+    second: &[u8],
+    first_range: ByteRange,
+    second_range: ByteRange,
+    resource_len: usize,
+    accepts: usize,
+) {
+    listener.set_nonblocking(true).expect("nonblocking accept");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut served = 0;
+    let first_header = range_header(first_range);
+    let second_header = range_header(second_range);
+    while served < accepts && Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut sock, _)) => {
+                sock.set_nonblocking(false).expect("blocking socket");
+                sock.set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read timeout");
+                sock.set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("write timeout");
+                let request = read_http_request(&mut sock).expect("range request");
+                assert!(
+                    request.starts_with("GET /seg.ts "),
+                    "split fetch used an unexpected path"
+                );
+                let (body, range) = if request.contains(&first_header) {
+                    (first, first_range)
+                } else if request.contains(&second_header) {
+                    (second, second_range)
+                } else {
+                    panic!("4097-byte gap was fetched as one range");
+                };
+                let inclusive_end = range.end().expect("range end") - 1;
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{inclusive_end}/{}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n",
+                    body.len(),
+                    range.offset,
+                    resource_len
+                );
+                sock.write_all(header.as_bytes()).expect("range header");
+                sock.write_all(body).expect("range body");
+                served += 1;
+            }
+            Err(err) if waited(&err) => std::hint::spin_loop(),
+            Err(err) => panic!("split range accept failed: {err}"),
+        }
+    }
+}
+
+fn range_header(range: ByteRange) -> String {
+    let inclusive_end = range.end().expect("range end") - 1;
+    format!("Range: bytes={}-{inclusive_end}\r\n", range.offset)
 }
 
 fn serve_coalesced_range(listener: TcpListener, body: &[u8], accepts: usize) {
