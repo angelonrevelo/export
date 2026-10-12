@@ -289,4 +289,63 @@ fn main() {
         "webp_decode_miss bad_signature samples=80 p50_ns={} p99_ns={} error={miss_err} allocs={allocs}",
         p50, p99,
     );
+
+    // Appended encode measurement. Decode rows above are unchanged.
+    for _ in 0..2 {
+        let _ = encode_webp_lossless(&image).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_lossless(black_box(&image)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let encoded = encode_webp_lossless(&image).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    assert_eq!(encoded.len(), lossless.len());
+    println!(
+        "webp_vp8l_encode {w}x{h} out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        encoded.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(pixel_bytes, p50),
+        mb_s(pixel_bytes, p99),
+        mb_s(encoded.len() as f64, p50),
+        allocs as f64 / (pixels / 1_000_000.0),
+    );
+
+    for _ in 0..2 {
+        let _ = encode_webp_lossy(&image).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_lossy(black_box(&image)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let encoded = encode_webp_lossy(&image).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    assert_eq!(encoded.len(), lossy.len());
+    println!(
+        "webp_vp8_encode {w}x{h} qindex=8 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        encoded.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(pixel_bytes, p50),
+        mb_s(pixel_bytes, p99),
+        mb_s(encoded.len() as f64, p50),
+        allocs as f64 / (pixels / 1_000_000.0),
+    );
+
+    // 8×8 is not a multiple of 16, so the lossy encoder rejects it before the DCT.
+    let odd = Raster::new(8, 8, 3, vec![0u8; 8 * 8 * 3]).unwrap();
+    for _ in 0..4 {
+        assert!(black_box(encode_webp_lossy(black_box(&odd))).is_err());
+    }
+    let (p50, p99) = time_n(80, || {
+        assert!(black_box(encode_webp_lossy(black_box(&odd))).is_err());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let miss_err = encode_webp_lossy(&odd).unwrap_err();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    println!(
+        "webp_encode_miss odd_size=8x8 samples=80 p50_ns={} p99_ns={} error={miss_err} allocs={allocs}",
+        p50, p99,
+    );
 }
