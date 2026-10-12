@@ -386,7 +386,7 @@ fn main() {
     let aligned_st = aligned_stereo();
     let aligned_st_flac = encode(&aligned_st).expect("encode aligned stereo");
     let aligned_st_back = decode(&aligned_st_flac).expect("decode aligned stereo");
-    assert!(aligned_st_flac.len() < 7_601);
+    assert_eq!(aligned_st_flac.len(), 5_594);
     assert_eq!(aligned_st_back.samples, aligned_st.samples);
     assert_eq!(aligned_st_back.channels, 2);
     let mut channels_differ = false;

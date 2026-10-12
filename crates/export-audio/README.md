@@ -111,7 +111,12 @@ encoder writes the channels independently. The encoded file is 7,601 bytes.
 Encode p50 is 0.513 ms and p99 is 0.612 ms (31.92 MB/s on the 16,384 PCM
 bytes), release, 31 iterations after 3 warmup passes. Decode of that file
 back to the samples is p50 0.150 ms and p99 0.186 ms (50.72 MB/s on the
-7,601 FLAC bytes), same iteration count.
+7,601 FLAC bytes), same iteration count. The same channel formulas with
+the low two bits cleared on both channels, so every sample is a multiple
+of 4, write a wasted-bits shift of two on each channel. That file is
+5,594 bytes and encode p50 is 0.528 ms, beside the 7,601 bytes and
+0.513 ms above. 5,594 is shorter than 7,601, and 0.528 ms is at most
+0.564 ms, so the shift stayed. Both channels round-trip and are not copies.
 
 ### 24-bit mono block
 

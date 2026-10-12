@@ -1795,11 +1795,7 @@ mod tests {
         assert!(right.iter().any(|s| s % 8 != 0));
         assert_ne!(left, right);
         let bytes = encode(&pcm).unwrap();
-        assert!(
-            bytes.len() < 7_601,
-            "aligned stereo was not shorter than 7601: {}",
-            bytes.len()
-        );
+        assert_eq!(bytes.len(), 5_594);
         let (left_wasted, right_wasted) = both_subframe_wasted(&bytes);
         assert_eq!(left_wasted, 2);
         assert_eq!(right_wasted, 2);
