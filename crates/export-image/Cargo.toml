@@ -1,0 +1,29 @@
+[package]
+name = "export-image"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.74"
+publish = false
+description = "PNG decode and measured JPEG shrink-to-bytes. No dependencies."
+
+# Deliberately dependency-free, same rule as index-core: the hot crate does not
+# pull a decoder, a C toolchain, or an image crate. Bitstream parsing, inflate,
+# the JPEG Huffman/DCT path, and the resampler live here.
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# `cargo bench` inherits release unless this profile overrides it.
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bench]]
+name = "throughput"
+harness = false
