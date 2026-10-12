@@ -1,4 +1,4 @@
-//! Release latency for a split of the existing two-page text file.
+//! Release latency for a split of a four-page text file.
 //!
 //! ```text
 //! cargo run --release -p export-pdf --bin pdf-bench
@@ -8,7 +8,7 @@ use export_pdf::{page_count, split, text_pdf};
 use std::time::Instant;
 
 fn main() {
-    let texts = ["Hello", "Second (line)"];
+    let texts = ["Hello", "Second (line)", "Hello", "Second (line)"];
     let pdf = text_pdf(&texts);
     let expected: Vec<Vec<u8>> = texts.iter().map(|text| text_pdf(&[text])).collect();
     let pages = split(&pdf).expect("split");

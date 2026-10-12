@@ -24,6 +24,8 @@
 //! page is 15295 ns p50 and 16842 ns p99.
 //! The existing two-page text file is 2 pages, 846 bytes in, and 1168 bytes
 //! out. Release split of that file is 11604 ns p50 and 12062 ns p99.
+//! A four-page text file built the same way is 4 pages, 1377 bytes in, and
+//! 2336 bytes out. Release split of that file is 20325 ns p50 and 29161 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
 //! page, the gray page, or the CMYK page, and fonts other than the
