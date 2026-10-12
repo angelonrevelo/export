@@ -4,6 +4,7 @@ members = [
     "crates/export-kernel",
     "crates/export-subtitle",
     "crates/export-web",
+    "crates/export-pdf",
 ]
 
 [workspace.package]
