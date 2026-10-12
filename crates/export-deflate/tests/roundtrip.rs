@@ -127,6 +127,31 @@ fn truncated_block_and_flipped_bit_error() {
     assert_eq!(inflate(&framed), Err(Error::BadInput));
 }
 
+fn incompressible(len: usize) -> Vec<u8> {
+    let mut state = 0xA5A5_1234u32;
+    let mut out = Vec::with_capacity(len);
+    for _ in 0..len {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        out.push((state >> 24) as u8);
+    }
+    out
+}
+
+#[test]
+fn huffman_that_grows_is_stored() {
+    let data = incompressible(8192);
+    for method in [Method::Auto, Method::Fixed, Method::Dynamic] {
+        let encoded = compress_with(&data, method);
+        assert_eq!(encoded[0] & 0b110, 0, "{method:?} stayed Huffman");
+        assert_eq!(inflate(&encoded).unwrap(), data);
+        let mut truncated = encoded.clone();
+        truncated.truncate(encoded.len() / 2);
+        assert_eq!(inflate(&truncated), Err(Error::Truncated));
+    }
+    let stored = compress_with(&data, Method::Stored);
+    assert!(compress(&data).len() <= stored.len());
+}
+
 #[test]
 fn output_limit_is_enforced() {
     let data = vec![0u8; 1000];

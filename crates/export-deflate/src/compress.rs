@@ -5,7 +5,11 @@ use crate::huff::{
 };
 use crate::lz::{lz77, Tok};
 
-/// How a block is coded. `Auto` picks the smallest of the three for each chunk.
+/// How a block is coded.
+///
+/// `Auto` picks the smallest encoding of each chunk. `Fixed` and `Dynamic`
+/// ask for those Huffman blocks, and fall back to stored when the Huffman
+/// block is not smaller than the stored encoding of the same bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Auto,
@@ -41,11 +45,11 @@ fn emit_block(writer: &mut BitWriter, data: &[u8], method: Method, last: bool) {
         Method::Stored => emit_stored(writer, data, last),
         Method::Fixed => {
             let toks = lz77(data);
-            emit_fixed(writer, &toks, last);
+            emit_huffman_or_stored(writer, data, last, |w| emit_fixed(w, &toks, last));
         }
         Method::Dynamic => {
             let toks = lz77(data);
-            emit_dynamic(writer, &toks, last);
+            emit_huffman_or_stored(writer, data, last, |w| emit_dynamic(w, &toks, last));
         }
         Method::Auto => {
             let offset = writer.pending() % 8;
@@ -61,6 +65,23 @@ fn emit_block(writer: &mut BitWriter, data: &[u8], method: Method, last: bool) {
                 emit_dynamic(writer, &toks, last);
             }
         }
+    }
+}
+
+/// Write the Huffman block only when it is strictly smaller than stored.
+fn emit_huffman_or_stored(
+    writer: &mut BitWriter,
+    data: &[u8],
+    last: bool,
+    huffman: impl Fn(&mut BitWriter),
+) {
+    let offset = writer.pending() % 8;
+    let stored_cost = cost(offset, |w| emit_stored(w, data, last));
+    let huff_cost = cost(offset, &huffman);
+    if huff_cost < stored_cost {
+        huffman(writer);
+    } else {
+        emit_stored(writer, data, last);
     }
 }
 

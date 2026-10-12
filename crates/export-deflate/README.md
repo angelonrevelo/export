@@ -2,7 +2,7 @@
 
 Raw DEFLATE, RFC 1951. Stored blocks, fixed Huffman blocks, and dynamic Huffman blocks. The same crate inflates them back. There is no zlib header, no Adler-32, and no link to zlib.
 
-`compress` / `inflate` are the whole API that matters. `Method::Stored`, `Method::Fixed`, and `Method::Dynamic` force one block type. `Method::Auto` (the default) writes whichever of the three is smaller for each 256 KiB chunk.
+`compress` / `inflate` are the whole API that matters. `Method::Auto` (the default) writes the smallest of stored, fixed Huffman, and dynamic Huffman for each 256 KiB chunk. `Method::Fixed` and `Method::Dynamic` ask for those Huffman blocks, and write a stored block instead when the Huffman block is not smaller.
 
 A host can check the bytes with Python. `scripts/zlib_oracle.py` uses the stdlib zlib wrapper at `wbits=-15`. That process is not linked into this crate.
 
@@ -33,10 +33,24 @@ A second run on the same binary was compress 834.2 / 752.4 and inflate 1669.4 / 
 
 Hashing every byte of a match, measured the same way, was compress p50 522.7 then 547.7 MB/s and **3291** bytes. Inflate stayed in the same band (p50 1704.9 then 1766.2). The every-4th-byte insert is what the table uses: the compress gap is larger than that run-to-run spread, and the extra 515 bytes are real.
 
+## Incompressible bytes
+
+1,048,576 bytes from a fixed generator: `state = 0xA5A51234`, then `state = state * 1664525 + 1013904223` (mod 2^32), and the byte is `state >> 24`. Same bench profile, 3 warmups, 80 samples. p99 is the slow end of those samples.
+
+| | MB/s |
+|---|---|
+| compress p50 | 45.0 |
+| compress p99 | 36.6 |
+| inflate p50 | 16435.6 |
+| inflate p99 | 9804.4 |
+| compressed size | 1048676 bytes |
+
+A second run was compress 47.3 / 40.0 and inflate 16687.2 / 12878.3, still 1,048,676 bytes. That is the input plus 100 bytes of stored-block headers (20 blocks). The fixed and dynamic candidates were larger, so they were not written. Compress time is mostly building those rejected candidates. Inflate copies the stored bytes; the p99 gap between the two runs is the timer on a cached buffer.
+
 ## Limits
 
 Raw DEFLATE has no checksum. A truncated block is an error. A flipped bit is an error when it breaks the block type, the stored `LEN`/`NLEN` complement, an over-subscribed or invalid Huffman code, or a length/distance that cannot be applied. A flipped bit in a stored payload, or a flip that is still some other valid symbol, inflates to different bytes and does not error. Trailing bytes after the final block are ignored, which is what Python's raw decompress does too.
 
 The window is 32 KiB. Matches are greedy, with a 15-bit hash and a chain of 16, and only every fourth byte inside a match is hashed. There is no lazy match. The bitstream will not equal `zlib.compress`.
 
-`inflate` buffers the whole output and stops at 64 MiB (`TooLarge`). It is not a streaming decoder and it is not a SIMD decoder. Huffman symbols are read one bit at a time, so a large incompressible block is slower than the repeated-text number above.
+`inflate` buffers the whole output and stops at 64 MiB (`TooLarge`). It is not a streaming decoder and it is not a SIMD decoder. Huffman symbols are read one bit at a time. On incompressible input the stored fallback still builds those Huffman candidates before discarding them.

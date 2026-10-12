@@ -22,3 +22,7 @@ codegen-units = 1
 [[bench]]
 name = "speed"
 harness = false
+
+[[bench]]
+name = "incompressible"
+harness = false
