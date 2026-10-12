@@ -1,3 +1,8 @@
+/// The 232,774-byte 1280×720 Annex B I-frame. Level 3.1.
+///
+/// Copied as bytes. This crate does not link an H.264 encoder.
+pub static IFRAME_1280X720: &[u8] = include_bytes!("iframe_1280x720.annexb");
+
 /// The 30,363-byte 320×240 Annex B file: the I-frame, then seven zero-motion P-frames.
 ///
 /// Copied as bytes. This crate does not link an H.264 encoder.

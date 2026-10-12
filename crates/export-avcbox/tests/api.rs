@@ -1,6 +1,6 @@
 use export_avcbox::{
-    box_iframe, Error, Options, EIGHT_320X240, FOUR_320X240, IFRAME_160X160, IFRAME_320X240,
-    IFRAME_32X32, PAIR_320X240, SEQUENCE_160X160,
+    box_iframe, Error, Options, EIGHT_320X240, FOUR_320X240, IFRAME_1280X720, IFRAME_160X160,
+    IFRAME_320X240, IFRAME_32X32, PAIR_320X240, SEQUENCE_160X160,
 };
 
 fn opts() -> Options {
@@ -174,6 +174,33 @@ fn eight_pictures_stay_on_the_320_level() {
     assert_eq!(box_iframe(FOUR_320X240, &opts()).unwrap().mp4.len(), 30189);
     assert_eq!(box_iframe(PAIR_320X240, &opts()).unwrap().mp4.len(), 29724);
     let again = box_iframe(EIGHT_320X240, &opts()).unwrap();
+    assert_eq!(again.mp4, boxed.mp4);
+}
+
+#[test]
+fn hd_iframe_is_level_31() {
+    assert_eq!(IFRAME_1280X720.len(), 232774);
+    assert!(IFRAME_1280X720
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x1f]));
+    let boxed = box_iframe(IFRAME_1280X720, &opts()).unwrap();
+    assert_eq!(boxed.width, 1280);
+    assert_eq!(boxed.height, 720);
+    assert_eq!(boxed.samples, 1);
+    assert_eq!(boxed.mp4.len(), 233390);
+    assert!(boxed.mp4.starts_with(b"\x00\x00\x00\x20ftyp"));
+    assert_eq!(top_level(&boxed.mp4), vec!["ftyp", "moov", "mdat"]);
+    let stsz = find(&boxed.mp4, b"stsz");
+    let sample_count = u32::from_be_bytes(boxed.mp4[stsz + 12..stsz + 16].try_into().unwrap());
+    let sample_size = u32::from_be_bytes(boxed.mp4[stsz + 16..stsz + 20].try_into().unwrap());
+    assert_eq!(sample_count, 1);
+    assert_eq!(sample_size, 232747);
+    assert_eq!(
+        box_iframe(&IFRAME_1280X720[..IFRAME_1280X720.len() - 1], &opts()).unwrap_err(),
+        Error::Truncated
+    );
+    assert_eq!(box_iframe(EIGHT_320X240, &opts()).unwrap().mp4.len(), 30985);
+    let again = box_iframe(IFRAME_1280X720, &opts()).unwrap();
     assert_eq!(again.mp4, boxed.mp4);
 }
 
