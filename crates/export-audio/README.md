@@ -113,7 +113,9 @@ Separate from the 16-bit rows above. One mono block of 4,096 samples at
 plus the low byte `i & 255`, so the value does not fit in 16 bits. The
 samples round-trip. The encoded file is 7,293 bytes. Encode p50 is 0.323 ms
 and p99 is 0.391 ms (37.99 MB/s on the 12,288 PCM bytes), release, 31
-iterations after 3 warmup passes.
+iterations after 3 warmup passes. Decode of that file back to the samples
+is p50 0.103 ms and p99 0.116 ms (70.93 MB/s on the 7,293 FLAC bytes), same
+iteration count.
 
 ### Reader experiment
 

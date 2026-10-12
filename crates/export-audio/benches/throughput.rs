@@ -208,6 +208,7 @@ fn main() {
     let wide = mono_wide();
     let wide_flac = encode(&wide).expect("encode 24-bit");
     let wide_back = decode(&wide_flac).expect("decode 24-bit");
+    assert_eq!(wide_flac.len(), 7_293);
     assert_eq!(wide_back.bits, 24);
     assert_eq!(wide_back.channels, 1);
     assert_eq!(wide_back.samples, wide.samples, "24-bit block is not exact");
@@ -216,5 +217,8 @@ fn main() {
         std::hint::black_box(encode(&wide).expect("encode 24-bit"));
     });
     report("wide_encode", "miss", wide_pcm_len, &wide_encode);
-    println!("wide_flac_bytes {}", wide_flac.len());
+    let wide_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&wide_flac).expect("decode 24-bit"));
+    });
+    report("wide_decode", "miss", wide_flac.len() as u64, &wide_decode);
 }
