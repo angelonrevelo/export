@@ -1,0 +1,16 @@
+[package]
+name = "export-vp9"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "Decode one generated VP9 keyframe"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
