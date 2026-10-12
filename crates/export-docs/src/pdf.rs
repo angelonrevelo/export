@@ -869,6 +869,55 @@ pub fn image_xobject(width: u32, height: u32, rgb: &[u8], flate: bool) -> Result
     Ok(serialize(&objs))
 }
 
+/// One-page text PDF that also paints `rgb` as a FlateDecode image XObject.
+pub fn from_lines_with_image(
+    lines: &[Line],
+    width: u32,
+    height: u32,
+    rgb: &[u8],
+) -> Result<Vec<u8>> {
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| Error::new("image size"))?;
+    if width == 0 || height == 0 || width > 4096 || height > 4096 || rgb.len() != pixels {
+        return Err(Error::new("image size"));
+    }
+    let packed = deflate_lz77(rgb);
+    if inflate_vec(&packed)? != rgb {
+        return Err(Error::new("image flate did not round-trip"));
+    }
+    assemble(vec![page_with_image(lines, width, height, &packed)?])
+}
+
+pub(crate) fn contains_image(data: &[u8], width: u32, height: u32, rgb: &[u8]) -> Result<bool> {
+    let mut src = Src::open(data)?;
+    let count = src.xref.len();
+    for id in 1..count as u32 {
+        let present = src.xref.get(id as usize).copied().flatten().is_some();
+        if !present {
+            continue;
+        }
+        let obj = match src.load(id) {
+            Ok(obj) => obj,
+            Err(_) => continue,
+        };
+        let is_image = obj.name_val("Subtype") == Some("Image");
+        let w = obj.int_val("Width");
+        let h = obj.int_val("Height");
+        if !is_image || w != Some(i64::from(width)) || h != Some(i64::from(height)) {
+            continue;
+        }
+        let Obj::Stream { dict, data: raw } = obj else {
+            continue;
+        };
+        if decode_stream(&dict, &raw)? == rgb {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn from_lines(lines: &[Line]) -> Result<Vec<u8>> {
     let mut pages: Vec<Vec<&Line>> = Vec::new();
     let mut current: Vec<&Line> = Vec::new();
@@ -893,6 +942,81 @@ pub fn from_lines(lines: &[Line]) -> Result<Vec<u8>> {
         graphs.push(page_graph(&page_lines)?);
     }
     assemble(graphs)
+}
+
+fn page_with_image(lines: &[Line], width: u32, height: u32, flate: &[u8]) -> Result<Graph> {
+    let mut content = format!("q {width} 0 0 {height} {MARGIN:.2} {MARGIN:.2} cm /Im1 Do Q\nBT\n");
+    let mut y = PAGE_H as f32 - MARGIN;
+    for line in lines {
+        let lead = if line.leading > 0.0 { line.leading } else { 14.0 };
+        let size = line.spans.first().map(|s| s.size).unwrap_or(11.0);
+        y -= lead;
+        let baseline = y + (lead - size).max(0.0) * 0.2;
+        content.push_str(&format!("1 0 0 1 {MARGIN:.2} {baseline:.2} Tm\n"));
+        for span in &line.spans {
+            let font = match span.font {
+                1 => "F2",
+                2 => "F3",
+                3 => "F4",
+                _ => "F1",
+            };
+            content.push_str(&format!("/{font} {size:.2} Tf\n", size = span.size));
+            content.push_str(&pdf_string(&span.text));
+            content.push_str(" Tj\n");
+        }
+    }
+    content.push_str("ET\n");
+    let data = content.into_bytes();
+    let stream = Obj::Stream {
+        dict: vec![("Length".into(), Obj::Int(data.len() as i64))],
+        data,
+    };
+    let image = Obj::Stream {
+        dict: vec![
+            ("Type".into(), Obj::Name("XObject".into())),
+            ("Subtype".into(), Obj::Name("Image".into())),
+            ("Width".into(), Obj::Int(i64::from(width))),
+            ("Height".into(), Obj::Int(i64::from(height))),
+            ("ColorSpace".into(), Obj::Name("DeviceRGB".into())),
+            ("BitsPerComponent".into(), Obj::Int(8)),
+            ("Length".into(), Obj::Int(flate.len() as i64)),
+            ("Filter".into(), Obj::Name("FlateDecode".into())),
+        ],
+        data: flate.to_vec(),
+    };
+    let fonts = Obj::Dict(vec![
+        ("F1".into(), helvetica("Helvetica")),
+        ("F2".into(), helvetica("Helvetica-Bold")),
+        ("F3".into(), helvetica("Helvetica-Oblique")),
+        ("F4".into(), helvetica("Helvetica-BoldOblique")),
+    ]);
+    let page = Obj::Dict(vec![
+        ("Type".into(), Obj::Name("Page".into())),
+        (
+            "MediaBox".into(),
+            Obj::Arr(vec![
+                Obj::Int(0),
+                Obj::Int(0),
+                Obj::Int(PAGE_W),
+                Obj::Int(PAGE_H),
+            ]),
+        ),
+        ("Contents".into(), Obj::Ref(0)),
+        (
+            "Resources".into(),
+            Obj::Dict(vec![
+                ("Font".into(), fonts),
+                (
+                    "XObject".into(),
+                    Obj::Dict(vec![("Im1".into(), Obj::Ref(2))]),
+                ),
+            ]),
+        ),
+    ]);
+    Ok(Graph {
+        objs: vec![stream, page, image],
+        page: 1,
+    })
 }
 
 fn page_graph(lines: &[&Line]) -> Result<Graph> {

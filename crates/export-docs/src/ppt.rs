@@ -25,6 +25,8 @@ const RT_DOCUMENT_ATOM: u16 = 0x03E9;
 const RT_SLIDE_LIST: u16 = 0x0FF0;
 const RT_TEXT_HEADER: u16 = 0x0F9F;
 const RT_TEXT_BYTES: u16 = 0x0FA8;
+const RT_PICTURE: u16 = 0xF01F;
+const PICTURE_INSTANCE: u16 = 0x07A8;
 
 pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let (input_bytes, bytes, texts) = load_texts(src)?;
@@ -46,10 +48,24 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
 }
 
 /// A generated one-shape file, and four text shapes, become a text PDF when the
-/// extracted text contains those strings. The published 2,560-byte one-shape
-/// file stays a miss. Every other file stays a miss.
+/// extracted text contains those strings. One text shape plus one DIB picture
+/// becomes a text PDF with that picture as an image. The published 2,560-byte
+/// one-shape file stays a miss. Every other file stays a miss.
 pub fn ppt_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
-    let (input_bytes, bytes, texts) = load_texts(src)?;
+    let (input_bytes, bytes) = load_file(src)?;
+    let texts = match parse_ppt(&bytes) {
+        Ok(texts) => texts,
+        Err(err) => {
+            if let Some(stats) = write_picture_pdf(input_bytes, &bytes, out)? {
+                return Ok(stats);
+            }
+            return Err(if err.message.starts_with("MISS:") {
+                err
+            } else {
+                miss(input_bytes, &err.message)
+            });
+        }
+    };
     if !pdf_shape_ready(input_bytes, texts.len()) {
         return Err(miss(input_bytes, "file is not four text shapes"));
     }
@@ -75,6 +91,18 @@ pub fn ppt_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<
 }
 
 fn load_texts<R: Read + Seek>(src: &mut R) -> Result<(u64, Vec<u8>, Vec<String>)> {
+    let (input_bytes, bytes) = load_file(src)?;
+    let texts = parse_ppt(&bytes).map_err(|err| {
+        if err.message.starts_with("MISS:") {
+            err
+        } else {
+            miss(input_bytes, &err.message)
+        }
+    })?;
+    Ok((input_bytes, bytes, texts))
+}
+
+fn load_file<R: Read + Seek>(src: &mut R) -> Result<(u64, Vec<u8>)> {
     let input_bytes = match src.seek(SeekFrom::End(0)) {
         Ok(n) => n,
         Err(err) => return Err(miss(0, &err.to_string())),
@@ -89,14 +117,7 @@ fn load_texts<R: Read + Seek>(src: &mut R) -> Result<(u64, Vec<u8>, Vec<String>)
     if let Err(err) = src.read_to_end(&mut bytes) {
         return Err(miss(input_bytes, &err.to_string()));
     }
-    let texts = parse_ppt(&bytes).map_err(|err| {
-        if err.message.starts_with("MISS:") {
-            err
-        } else {
-            miss(input_bytes, &err.message)
-        }
-    })?;
-    Ok((input_bytes, bytes, texts))
+    Ok((input_bytes, bytes))
 }
 
 /// The smallest one-shape compound file is the published 2,560-byte miss.
@@ -107,7 +128,11 @@ fn pdf_shape_ready(input_bytes: u64, count: usize) -> bool {
 }
 
 fn shapes_pdf(texts: &[String]) -> Result<Vec<u8>> {
-    let lines: Vec<crate::pdf::Line> = texts
+    crate::pdf::from_lines(&text_lines(texts))
+}
+
+fn text_lines(texts: &[String]) -> Vec<crate::pdf::Line> {
+    texts
         .iter()
         .map(|text| crate::pdf::Line {
             spans: vec![crate::pdf::Span {
@@ -117,8 +142,242 @@ fn shapes_pdf(texts: &[String]) -> Result<Vec<u8>> {
             }],
             leading: 14.0,
         })
-        .collect();
-    crate::pdf::from_lines(&lines)
+        .collect()
+}
+
+fn write_picture_pdf<W: Write>(
+    input_bytes: u64,
+    bytes: &[u8],
+    out: &mut W,
+) -> Result<Option<RunStats>> {
+    let Ok(stream) = read_stream(bytes) else {
+        return Ok(None);
+    };
+    let Some((text, width, height, rgb)) = one_text_and_picture(&stream) else {
+        return Ok(None);
+    };
+    let lines = text_lines(std::slice::from_ref(&text));
+    let pdf = crate::pdf::from_lines_with_image(&lines, width, height, &rgb)
+        .map_err(|err| miss(input_bytes, &err.message))?;
+    let extracted = crate::pdf::plain_text(&pdf).map_err(|err| miss(input_bytes, &err.message))?;
+    if !extracted.contains(&text) {
+        return Err(miss(input_bytes, "pdf text does not contain the text"));
+    }
+    if !crate::pdf::contains_image(&pdf, width, height, &rgb)
+        .map_err(|err| miss(input_bytes, &err.message))?
+    {
+        return Err(miss(input_bytes, "pdf has no picture"));
+    }
+    let mut counted = CountWrite::new(out);
+    counted
+        .write_all(&pdf)
+        .map_err(|err| miss(input_bytes, &err.to_string()))?;
+    let scratch = bytes.len().max(pdf.len()).max(rgb.len());
+    Ok(Some(RunStats {
+        scratch_peak: scratch,
+        input_bytes,
+        output_bytes: counted.n,
+    }))
+}
+
+fn one_text_and_picture(stream: &[u8]) -> Option<(String, u32, u32, Vec<u8>)> {
+    let (doc, used) = next_record(stream).ok()?;
+    if used != stream.len() || doc.ty != RT_DOCUMENT || doc.ver != 0xF || doc.instance != 0 {
+        return None;
+    }
+    let mut at = 0usize;
+    let mut saw_atom = false;
+    let mut found = None;
+    while at < doc.data.len() {
+        let (rec, n) = next_record(&doc.data[at..]).ok()?;
+        at += n;
+        match rec.ty {
+            RT_DOCUMENT_ATOM => {
+                if saw_atom || rec.ver != 1 || rec.data.len() != 40 {
+                    return None;
+                }
+                saw_atom = true;
+            }
+            RT_SLIDE_LIST => {
+                if found.is_some() || rec.ver != 0xF {
+                    return None;
+                }
+                found = Some(list_text_picture(rec.data)?);
+            }
+            _ => return None,
+        }
+    }
+    if at != doc.data.len() || !saw_atom {
+        return None;
+    }
+    found
+}
+
+fn list_text_picture(body: &[u8]) -> Option<(String, u32, u32, Vec<u8>)> {
+    let mut at = 0usize;
+    let mut text = None;
+    let mut picture = None;
+    let mut pending = false;
+    while at < body.len() {
+        let (rec, n) = next_record(&body[at..]).ok()?;
+        at += n;
+        match rec.ty {
+            RT_TEXT_HEADER => {
+                if pending || text.is_some() || rec.ver != 0 || rec.data.len() != 4 {
+                    return None;
+                }
+                pending = true;
+            }
+            RT_TEXT_BYTES => {
+                if !pending || picture.is_some() || rec.ver != 0 {
+                    return None;
+                }
+                if rec.data.is_empty() || !rec.data.iter().copied().all(allowed_text) {
+                    return None;
+                }
+                let mut owned = String::with_capacity(rec.data.len());
+                for &b in rec.data {
+                    owned.push(char::from(b));
+                }
+                text = Some(owned);
+                pending = false;
+            }
+            RT_PICTURE => {
+                if pending
+                    || text.is_none()
+                    || picture.is_some()
+                    || rec.ver != 0
+                    || rec.instance != PICTURE_INSTANCE
+                {
+                    return None;
+                }
+                picture = Some(extract_blip(rec.data)?);
+            }
+            _ => return None,
+        }
+    }
+    if at != body.len() || pending {
+        return None;
+    }
+    let (width, height, rgb) = picture?;
+    Some((text?, width, height, rgb))
+}
+
+fn extract_blip(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    if data.len() < 17 || data[16] != 0xFF {
+        return None;
+    }
+    dib_rgb(&data[17..])
+}
+
+fn dib_rgb(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    if dib.len() < 40 {
+        return None;
+    }
+    let size = u32::from_le_bytes(dib[0..4].try_into().ok()?);
+    if size != 40 {
+        return None;
+    }
+    let width = i32::from_le_bytes(dib[4..8].try_into().ok()?);
+    let height = i32::from_le_bytes(dib[8..12].try_into().ok()?);
+    if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
+        return None;
+    }
+    let planes = u16::from_le_bytes(dib[12..14].try_into().ok()?);
+    let bits = u16::from_le_bytes(dib[14..16].try_into().ok()?);
+    let compression = u32::from_le_bytes(dib[16..20].try_into().ok()?);
+    if planes != 1 || bits != 24 || compression != 0 {
+        return None;
+    }
+    let width = width as usize;
+    let height = height as usize;
+    let stride = (width * 3).div_ceil(4) * 4;
+    if dib.len() != 40 + stride * height {
+        return None;
+    }
+    let mut rgb = vec![0u8; width * height * 3];
+    for y in 0..height {
+        let src_y = height - 1 - y;
+        let row = &dib[40 + src_y * stride..40 + src_y * stride + width * 3];
+        for x in 0..width {
+            let s = x * 3;
+            let d = (y * width + x) * 3;
+            rgb[d] = row[s + 2];
+            rgb[d + 1] = row[s + 1];
+            rgb[d + 2] = row[s];
+        }
+    }
+    Some((width as u32, height as u32, rgb))
+}
+
+fn picture_rgb() -> (u32, u32, Vec<u8>) {
+    let width = 80u32;
+    let height = 48u32;
+    let mut rgb = vec![0u8; (width * height * 3) as usize];
+    for y in 0..height {
+        let pixel = [32u8, 40 + (y as u8) * 3, 180];
+        for x in 0..width {
+            let at = ((y * width + x) * 3) as usize;
+            rgb[at] = pixel[0];
+            rgb[at + 1] = pixel[1];
+            rgb[at + 2] = pixel[2];
+        }
+    }
+    (width, height, rgb)
+}
+
+fn blip_dib(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
+    let dib = encode_dib(width, height, rgb)?;
+    let mut out = vec![0u8; 17];
+    out[0] = 0xA1;
+    out[16] = 0xFF;
+    out.extend(dib);
+    Some(out)
+}
+
+fn encode_dib(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        return None;
+    }
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(3))?;
+    if rgb.len() != pixels {
+        return None;
+    }
+    let stride = (width as usize * 3).div_ceil(4) * 4;
+    let mut dib = vec![0u8; 40 + stride * height as usize];
+    dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+    dib[4..8].copy_from_slice(&width.to_le_bytes());
+    dib[8..12].copy_from_slice(&height.to_le_bytes());
+    dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&24u16.to_le_bytes());
+    for y in 0..height as usize {
+        let src_y = height as usize - 1 - y;
+        for x in 0..width as usize {
+            let s = (src_y * width as usize + x) * 3;
+            let d = 40 + y * stride + x * 3;
+            dib[d] = rgb[s + 2];
+            dib[d + 1] = rgb[s + 1];
+            dib[d + 2] = rgb[s];
+        }
+    }
+    Some(dib)
+}
+
+fn document_with_picture(text: &[u8], blip: &[u8]) -> Vec<u8> {
+    let mut atom = vec![0u8; 40];
+    put_u32(&mut atom, 0, 5760);
+    put_u32(&mut atom, 4, 4320);
+    let mut list_body = Vec::new();
+    list_body.extend(record(0, 0, RT_TEXT_HEADER, &4u32.to_le_bytes()));
+    list_body.extend(record(0, 0, RT_TEXT_BYTES, text));
+    list_body.extend(record(0, PICTURE_INSTANCE, RT_PICTURE, blip));
+    let list = record(0xF, 0, RT_SLIDE_LIST, &list_body);
+    let atom_rec = record(1, 0, RT_DOCUMENT_ATOM, &atom);
+    let mut body = atom_rec;
+    body.extend(list);
+    record(0xF, 0, RT_DOCUMENT, &body)
 }
 
 /// Compound file whose `PowerPoint Document` stream is one text-bytes shape.
@@ -165,6 +424,16 @@ pub fn ppt_four_text_document(
         third.as_bytes(),
         fourth.as_bytes(),
     ]))
+}
+
+/// Compound file with one text shape and one 24-bit DIB picture.
+pub fn ppt_text_picture_document(text: &str) -> Result<Vec<u8>> {
+    if !plain_shape(text) {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    let (width, height, rgb) = picture_rgb();
+    let blip = blip_dib(width, height, &rgb).ok_or_else(|| Error::new("picture is not a dib"))?;
+    pack_cfb(&document_with_picture(text.as_bytes(), &blip))
 }
 
 fn plain_shape(text: &str) -> bool {
@@ -732,6 +1001,43 @@ mod tests {
         assert_eq!(pdf.len(), 3981);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&text), "{got}");
+    }
+
+    #[test]
+    fn one_text_and_picture_become_pdf() {
+        let text = picture_slide_text();
+        let file = ppt_text_picture_document(&text).unwrap();
+        assert_ne!(file.len(), 5632);
+        assert_ne!(file.len(), 7680);
+        assert_ne!(file.len() as u64, ONE_SHAPE_PDF_MISS);
+        let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        let got = crate::pdf::plain_text(&pdf).unwrap();
+        assert!(got.contains(&text), "{got}");
+        let (width, height, rgb) = picture_rgb();
+        assert!(crate::pdf::contains_image(&pdf, width, height, &rgb).unwrap());
+        assert!(pdf.windows(15).any(|w| w == b"/Subtype /Image"));
+    }
+
+    #[test]
+    fn broken_picture_stays_the_old_miss() {
+        let stream = document_with_picture(b"Generated legacy PowerPoint picture.", &[0u8; 8]);
+        let file = pack_cfb(&stream).unwrap();
+        let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(
+            err.message.contains("not one, two, three, or four text shapes"),
+            "{err}"
+        );
+    }
+
+    fn picture_slide_text() -> String {
+        let mut text = String::new();
+        for i in 0..12 {
+            text.push_str(&format!(
+                "Picture shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        text
     }
 
     #[test]
