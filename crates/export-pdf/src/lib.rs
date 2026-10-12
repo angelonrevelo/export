@@ -14,9 +14,11 @@
 //! 148981 ns p50 and 194503 ns p99.
 //! A 16×16 DeviceGray page is 905 bytes in and out. Release split of that
 //! page is 9438 ns p50 and 10426 ns p99.
+//! A 32×32 DeviceGray page is 1675 bytes in and out. Release split of that
+//! page is 9206 ns p50 and 12724 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
-//! page or the 16×16 gray page, and fonts other than the built-in Helvetica
+//! page or the gray page, and fonts other than the built-in Helvetica
 //! are not preserved. A truncated file, an
 //! xref offset that does not land on an object, an xref stream, or an
 //! unsupported image is an error.
@@ -39,13 +41,13 @@ pub fn rgb_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Error
     Ok(image_file(width, height, "/DeviceRGB", samples))
 }
 
-/// Edge, in pixels, of the one uncompressed gray page this crate keeps.
-pub const GRAY_EDGE: u32 = 16;
+/// Largest edge, in pixels, of the one uncompressed gray page this crate keeps.
+pub const GRAY_EDGE: u32 = 32;
 
 /// One classic-xref page holding one uncompressed 8-bit DeviceGray image.
 ///
-/// `samples` is row-major gray, length `width * height`. Width and height
-/// are both [`GRAY_EDGE`].
+/// `samples` is row-major gray, length `width * height`. Each edge is from
+/// 1 through [`GRAY_EDGE`].
 pub fn gray_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Error> {
     checked_gray_len(width, height, samples.len())?;
     Ok(image_file(width, height, "/DeviceGray", samples))
@@ -403,7 +405,7 @@ fn wrap_stream(body: &[u8]) -> Vec<u8> {
 }
 
 fn checked_gray_len(width: u32, height: u32, len: usize) -> Result<(), Error> {
-    if width != GRAY_EDGE || height != GRAY_EDGE {
+    if width == 0 || height == 0 || width > GRAY_EDGE || height > GRAY_EDGE {
         return Err(Error::BadPdf);
     }
     let need = (width as usize)
@@ -1082,12 +1084,15 @@ mod tests {
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0], pdf);
         assert_eq!(gray_samples(&pages[0]).unwrap().2, samples);
+        let small = [1u8, 2, 3, 4];
+        let small_pdf = gray_pdf(2, 2, &small).unwrap();
         assert_eq!(
-            gray_pdf(GRAY_EDGE, GRAY_EDGE - 1, &samples[..240]).unwrap_err(),
-            Error::BadPdf
+            gray_samples(&split(&small_pdf).unwrap()[0]).unwrap().2,
+            small
         );
+        let past = ((GRAY_EDGE + 1) * GRAY_EDGE) as usize;
         assert_eq!(
-            gray_pdf(GRAY_EDGE + 1, GRAY_EDGE, &samples).unwrap_err(),
+            gray_pdf(GRAY_EDGE + 1, GRAY_EDGE, &vec![0; past]).unwrap_err(),
             Error::BadPdf
         );
 
@@ -1107,10 +1112,6 @@ mod tests {
 
     #[test]
     fn other_images_and_xref_streams_error() {
-        let gray = image_file_with("/DeviceGray", 8, "", 2, 2, &[1, 2, 3, 4], "/Im0 5 0 R");
-        assert_eq!(page_count(&gray).unwrap(), 1);
-        assert_eq!(split(&gray), Err(Error::BadPdf));
-
         let cmyk = image_file_with("/DeviceCMYK", 8, "", 1, 1, &[1, 2, 3, 4], "/Im0 5 0 R");
         assert_eq!(page_count(&cmyk).unwrap(), 1);
         assert_eq!(split(&cmyk), Err(Error::BadPdf));
