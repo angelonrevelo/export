@@ -168,7 +168,10 @@ the file is 3,196 bytes and encode p50 is 0.262 ms. With a wasted-bits
 shift of two the file is 2,215 bytes and encode p50 is 0.273 ms, beside
 3,196 bytes and 0.262 ms. The file is shorter, and 0.273 ms is within 10%
 of 0.262 ms, so wasted bits stayed. The samples round-trip. Release, 31
-iterations after 3 warmup passes.
+iterations after 3 warmup passes. Decode of that 2,215-byte file is p50
+0.081 ms and p99 0.085 ms (27.28 MB/s on the 2,215 FLAC bytes), same
+iteration count. The existing decoder restores the samples, so the decoder
+was not changed.
 
 ### Reader experiment
 
