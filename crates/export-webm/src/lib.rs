@@ -24,6 +24,11 @@ pub fn vp8_webm() -> &'static [u8] {
     include_bytes!("../fixtures/vp8.webm")
 }
 
+/// WebM file with two VP8 blocks. Both payloads are copied and neither is decoded.
+pub fn vp8_two_webm() -> &'static [u8] {
+    include_bytes!("../fixtures/vp8-two.webm")
+}
+
 use std::collections::BTreeMap;
 
 /// Remuxed bytes plus the single SHA-256 of the input that produced them.
@@ -172,6 +177,23 @@ mod tests {
         let again = demux(&copied.bytes).unwrap();
         assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_VP8);
         assert_eq!(again.blocks.len(), parsed.blocks.len());
+        for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
+        }
+    }
+
+    #[test]
+    fn vp8_two_blocks_are_copied() {
+        let original = vp8_two_webm();
+        let parsed = demux(original).unwrap();
+        assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_VP8);
+        assert_eq!(parsed.blocks.len(), 2);
+        assert_ne!(parsed.blocks[0].payload, parsed.blocks[1].payload);
+        let copied = stream_copy(original).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_VP8);
+        assert_eq!(again.blocks.len(), 2);
         for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
             assert_eq!(left.payload, right.payload);
             assert_eq!(left.timestamp(), right.timestamp());
