@@ -890,6 +890,44 @@ pub fn from_lines_with_image(
     assemble(vec![page_with_image(lines, width, height, &packed)?])
 }
 
+/// One-page text PDF that paints two FlateDecode image XObjects, then the text.
+pub(crate) fn from_lines_with_two_images(
+    lines: &[Line],
+    first_width: u32,
+    first_height: u32,
+    first_rgb: &[u8],
+    second_width: u32,
+    second_height: u32,
+    second_rgb: &[u8],
+) -> Result<Vec<u8>> {
+    let first = flate_image(first_width, first_height, first_rgb)?;
+    let second = flate_image(second_width, second_height, second_rgb)?;
+    assemble(vec![page_with_two_images(
+        lines,
+        first_width,
+        first_height,
+        &first,
+        second_width,
+        second_height,
+        &second,
+    )?])
+}
+
+fn flate_image(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| Error::new("image size"))?;
+    if width == 0 || height == 0 || width > 4096 || height > 4096 || rgb.len() != pixels {
+        return Err(Error::new("image size"));
+    }
+    let packed = deflate_lz77(rgb);
+    if inflate_vec(&packed)? != rgb {
+        return Err(Error::new("image flate did not round-trip"));
+    }
+    Ok(packed)
+}
+
 pub(crate) fn contains_image(data: &[u8], width: u32, height: u32, rgb: &[u8]) -> Result<bool> {
     let mut src = Src::open(data)?;
     let count = src.xref.len();
@@ -1017,6 +1055,100 @@ fn page_with_image(lines: &[Line], width: u32, height: u32, flate: &[u8]) -> Res
         objs: vec![stream, page, image],
         page: 1,
     })
+}
+
+fn page_with_two_images(
+    lines: &[Line],
+    first_width: u32,
+    first_height: u32,
+    first_flate: &[u8],
+    second_width: u32,
+    second_height: u32,
+    second_flate: &[u8],
+) -> Result<Graph> {
+    let second_y = MARGIN + first_height as f32;
+    let mut content = format!(
+        "q {first_width} 0 0 {first_height} {MARGIN:.2} {MARGIN:.2} cm /Im1 Do Q\nq {second_width} 0 0 {second_height} {MARGIN:.2} {second_y:.2} cm /Im2 Do Q\nBT\n"
+    );
+    let mut y = PAGE_H as f32 - MARGIN;
+    for line in lines {
+        let lead = if line.leading > 0.0 { line.leading } else { 14.0 };
+        let size = line.spans.first().map(|s| s.size).unwrap_or(11.0);
+        y -= lead;
+        let baseline = y + (lead - size).max(0.0) * 0.2;
+        content.push_str(&format!("1 0 0 1 {MARGIN:.2} {baseline:.2} Tm\n"));
+        for span in &line.spans {
+            let font = match span.font {
+                1 => "F2",
+                2 => "F3",
+                3 => "F4",
+                _ => "F1",
+            };
+            content.push_str(&format!("/{font} {size:.2} Tf\n", size = span.size));
+            content.push_str(&pdf_string(&span.text));
+            content.push_str(" Tj\n");
+        }
+    }
+    content.push_str("ET\n");
+    let data = content.into_bytes();
+    let stream = Obj::Stream {
+        dict: vec![("Length".into(), Obj::Int(data.len() as i64))],
+        data,
+    };
+    let first = flate_image_obj(first_width, first_height, first_flate);
+    let second = flate_image_obj(second_width, second_height, second_flate);
+    let fonts = Obj::Dict(vec![
+        ("F1".into(), helvetica("Helvetica")),
+        ("F2".into(), helvetica("Helvetica-Bold")),
+        ("F3".into(), helvetica("Helvetica-Oblique")),
+        ("F4".into(), helvetica("Helvetica-BoldOblique")),
+    ]);
+    let page = Obj::Dict(vec![
+        ("Type".into(), Obj::Name("Page".into())),
+        (
+            "MediaBox".into(),
+            Obj::Arr(vec![
+                Obj::Int(0),
+                Obj::Int(0),
+                Obj::Int(PAGE_W),
+                Obj::Int(PAGE_H),
+            ]),
+        ),
+        ("Contents".into(), Obj::Ref(0)),
+        (
+            "Resources".into(),
+            Obj::Dict(vec![
+                ("Font".into(), fonts),
+                (
+                    "XObject".into(),
+                    Obj::Dict(vec![
+                        ("Im1".into(), Obj::Ref(2)),
+                        ("Im2".into(), Obj::Ref(3)),
+                    ]),
+                ),
+            ]),
+        ),
+    ]);
+    Ok(Graph {
+        objs: vec![stream, page, first, second],
+        page: 1,
+    })
+}
+
+fn flate_image_obj(width: u32, height: u32, flate: &[u8]) -> Obj {
+    Obj::Stream {
+        dict: vec![
+            ("Type".into(), Obj::Name("XObject".into())),
+            ("Subtype".into(), Obj::Name("Image".into())),
+            ("Width".into(), Obj::Int(i64::from(width))),
+            ("Height".into(), Obj::Int(i64::from(height))),
+            ("ColorSpace".into(), Obj::Name("DeviceRGB".into())),
+            ("BitsPerComponent".into(), Obj::Int(8)),
+            ("Length".into(), Obj::Int(flate.len() as i64)),
+            ("Filter".into(), Obj::Name("FlateDecode".into())),
+        ],
+        data: flate.to_vec(),
+    }
 }
 
 fn page_graph(lines: &[&Line]) -> Result<Graph> {
