@@ -32,7 +32,12 @@ pub fn decode(data: &[u8]) -> Result<Pcm> {
             if format != 1 {
                 return Err(Error::Unsupported("wav compression"));
             }
-            fmt = Some((channels, bits, rate, u16::from_le_bytes([body[12], body[13]])));
+            fmt = Some((
+                channels,
+                bits,
+                rate,
+                u16::from_le_bytes([body[12], body[13]]),
+            ));
         } else if id == b"data" {
             pcm = Some(body.to_vec());
         }
@@ -80,6 +85,12 @@ pub fn decode(data: &[u8]) -> Result<Pcm> {
 }
 
 pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
+    encode_with_info(pcm, &[])
+}
+
+/// 16-bit PCM WAV. `fields` are INFO ids in the order FFmpeg writes them.
+/// `ISFT` is always `Lavf60.16.100` and is not taken from `fields`.
+pub fn encode_with_info(pcm: &Pcm, fields: &[([u8; 4], &[u8])]) -> Result<Vec<u8>> {
     let width = match pcm.bits {
         8 => 1usize,
         16 => 2,
@@ -92,9 +103,14 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     }
     let frames = pcm.samples.len() / channels;
     let data_len = frames * channels * width;
-    let mut out = Vec::with_capacity(44 + data_len);
+    let list = if pcm.bits == 16 {
+        info_list(fields)
+    } else {
+        Vec::new()
+    };
+    let mut out = Vec::with_capacity(44 + list.len() + data_len);
     out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+    out.extend_from_slice(&((36 + list.len() + data_len) as u32).to_le_bytes());
     out.extend_from_slice(b"WAVE");
     out.extend_from_slice(b"fmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
@@ -105,6 +121,7 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&((channels * width) as u16).to_le_bytes());
     out.extend_from_slice(&u16::from(pcm.bits).to_le_bytes());
+    out.extend_from_slice(&list);
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data_len as u32).to_le_bytes());
     for frame in 0..frames {
@@ -130,4 +147,34 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+/// `LIST`/`INFO` placed before `data`. Each value is NUL-terminated.
+/// An odd field is padded inside the LIST body. `ISFT` is `Lavf60.16.100`.
+fn info_list(fields: &[([u8; 4], &[u8])]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(b"INFO");
+    for (id, value) in fields {
+        if value.is_empty() || *id == *b"ISFT" {
+            continue;
+        }
+        let mut text = value.to_vec();
+        text.push(0);
+        push_info(&mut body, id, &text);
+    }
+    push_info(&mut body, b"ISFT", b"Lavf60.16.100\x00");
+    let mut out = Vec::with_capacity(8 + body.len());
+    out.extend_from_slice(b"LIST");
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+fn push_info(body: &mut Vec<u8>, id: &[u8; 4], data: &[u8]) {
+    body.extend_from_slice(id);
+    body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    body.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        body.push(0);
+    }
 }

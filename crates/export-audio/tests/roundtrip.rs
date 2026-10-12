@@ -1,4 +1,4 @@
-use export_audio::{export, hash, sniff, Dedup, Error, Job, Kind, Output, DEFAULT_MAX_BYTES};
+use export_audio::{export, hash, hex, sniff, Dedup, Error, Job, Kind, Output, DEFAULT_MAX_BYTES};
 use std::io::Cursor;
 
 fn tone(n: usize, channels: u16) -> export_audio::Pcm {
@@ -72,13 +72,19 @@ fn mp3_aac_and_opus_are_unsupported() {
 
     let aac = [0xff, 0xf1, 0x50, 0x80, 0x00, 0x1f, 0xfc];
     let err = export(&aac, Job::ToWav, &mut dedup).unwrap_err();
-    assert!(matches!(err, Error::Unsupported(msg) if msg.contains("AAC")), "{err}");
+    assert!(
+        matches!(err, Error::Unsupported(msg) if msg.contains("AAC")),
+        "{err}"
+    );
 
     let mut opus = b"OggS".to_vec();
     opus.extend_from_slice(&[0u8; 28]);
     opus.extend_from_slice(b"OpusHead");
     let err = export(&opus, Job::ToFlac, &mut dedup).unwrap_err();
-    assert!(matches!(err, Error::Unsupported(msg) if msg.contains("Opus")), "{err}");
+    assert!(
+        matches!(err, Error::Unsupported(msg) if msg.contains("Opus")),
+        "{err}"
+    );
     assert!(dedup.is_empty());
 }
 
@@ -112,6 +118,137 @@ fn hash_once_then_dedup_then_codec() {
     };
     assert!(export(&broken, Job::ToFlac, &mut dedup).is_err());
     assert_eq!(dedup.len(), 1);
+}
+
+#[test]
+fn four_thousand_sample_wav_matches_the_plain_pcm_s16le_file() {
+    let mut samples = Vec::with_capacity(4096);
+    for i in 0..4096i32 {
+        let s = ((i % 200) - 100) * 40 + (i * i) % 30;
+        samples.push(s.clamp(-32_768, 32_767));
+    }
+    let pcm = export_audio::Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    };
+    let flac = export_audio::encode(&pcm).unwrap();
+    let Output::Fresh { data, .. } = export(&flac, Job::ToWav, &mut Dedup::new()).unwrap() else {
+        panic!("expected a fresh wav");
+    };
+    assert_eq!(data.len(), 8270);
+    assert_eq!(
+        &data[36..70],
+        b"LIST\x1a\x00\x00\x00INFOISFT\x0e\x00\x00\x00Lavf60.16.100\x00"
+    );
+    assert_eq!(
+        hex(&hash(&data)),
+        "d114e84a93552a2325cf2495318614f6d79cd9c8d7a1d5994ebf79c349e7da55"
+    );
+}
+
+#[test]
+fn four_thousand_sample_wav_matches_title_hello() {
+    let mut samples = Vec::with_capacity(4096);
+    for i in 0..4096i32 {
+        let s = ((i % 200) - 100) * 40 + (i * i) % 30;
+        samples.push(s.clamp(-32_768, 32_767));
+    }
+    let pcm = export_audio::Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    };
+    let flac = with_title(&export_audio::encode(&pcm).unwrap(), "Hello");
+    assert_eq!(export_audio::title(&flac).as_deref(), Some("Hello"));
+    let Output::Fresh { data, .. } = export(&flac, Job::ToWav, &mut Dedup::new()).unwrap() else {
+        panic!("expected a fresh wav");
+    };
+    assert_eq!(data.len(), 8284);
+    assert_eq!(
+        &data[36..84],
+        b"LIST(\x00\x00\x00INFOINAM\x06\x00\x00\x00Hello\x00ISFT\x0e\x00\x00\x00Lavf60.16.100\x00"
+    );
+    assert_eq!(
+        hex(&hash(&data)),
+        "3092475ff3a2161a1c04feabcceba55dc18186680049c83722c18d63c8b8637d"
+    );
+}
+
+fn with_title(flac: &[u8], title: &str) -> Vec<u8> {
+    with_comments(flac, &[("TITLE", title)])
+}
+
+#[test]
+fn four_thousand_sample_wav_matches_every_list_key() {
+    let pcm = fixture_pcm();
+    let flac = with_comments(
+        &export_audio::encode(&pcm).unwrap(),
+        &[
+            ("TITLE", "TitleV"),
+            ("ARTIST", "ArtistV"),
+            ("ALBUM", "AlbumV"),
+            ("COMMENT", "CommentV"),
+            ("GENRE", "GenreV"),
+            ("DATE", "DateV"),
+            ("TRACKNUMBER", "TrackV"),
+            ("COPYRIGHT", "CopyV"),
+            ("DESCRIPTION", "DescV"),
+            ("LANGUAGE", "LangV"),
+        ],
+    );
+    let Output::Fresh { data, .. } = export(&flac, Job::ToWav, &mut Dedup::new()).unwrap() else {
+        panic!("expected a fresh wav");
+    };
+    assert_eq!(data.len(), 8406);
+    assert_eq!(
+        &data[36..206],
+        b"LIST\xa2\x00\x00\x00INFOIART\x08\x00\x00\x00ArtistV\x00ICMT\x06\x00\x00\x00DescV\x00ICOP\x06\x00\x00\x00CopyV\x00ICRD\x06\x00\x00\x00DateV\x00IGNR\x07\x00\x00\x00GenreV\x00\x00ILNG\x06\x00\x00\x00LangV\x00INAM\x07\x00\x00\x00TitleV\x00\x00IPRD\x07\x00\x00\x00AlbumV\x00\x00IPRT\x07\x00\x00\x00TrackV\x00\x00ISFT\x0e\x00\x00\x00Lavf60.16.100\x00"
+    );
+    assert_eq!(
+        hex(&hash(&data)),
+        "d06c6bed0e66a2536738daac10d79827bd4ca4884095292f4bb914cd783d04dc"
+    );
+}
+
+fn fixture_pcm() -> export_audio::Pcm {
+    let mut samples = Vec::with_capacity(4096);
+    for i in 0..4096i32 {
+        let s = ((i % 200) - 100) * 40 + (i * i) % 30;
+        samples.push(s.clamp(-32_768, 32_767));
+    }
+    export_audio::Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    }
+}
+
+fn with_comments(flac: &[u8], pairs: &[(&str, &str)]) -> Vec<u8> {
+    assert_eq!(&flac[..5], b"fLaC\x80");
+    let mut body = Vec::new();
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+    for (key, value) in pairs {
+        let text = format!("{key}={value}");
+        let text = text.as_bytes();
+        body.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        body.extend_from_slice(text);
+    }
+    let mut out = Vec::with_capacity(flac.len() + 4 + body.len());
+    out.extend_from_slice(b"fLaC\x00");
+    out.extend_from_slice(&flac[5..42]);
+    let len = body.len();
+    out.push(0x84);
+    out.push((len >> 16) as u8);
+    out.push((len >> 8) as u8);
+    out.push(len as u8);
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&flac[42..]);
+    out
 }
 
 #[test]

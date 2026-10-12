@@ -2484,11 +2484,44 @@ def _audio_separate_stems(input_path: Path, out_dir: Path) -> Path:
 def _convert_audio(input_path: Path, target_fmt: str, out_dir: Path) -> Path:
     stem = input_path.stem.removeprefix("input_")
     out_path = out_dir / f"{stem}.{target_fmt}"
+    if target_fmt == "wav" and _flac_magic(input_path):
+        _export_audio_wav(input_path, out_path)
+        return out_path
     cmd = ["ffmpeg", "-y", "-i", str(input_path), "-vn"] + AUDIO_FFMPEG_OPTS[target_fmt] + [str(out_path)]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg audio failed: {r.stderr.strip()[-500:]}")
     return out_path
+
+
+def _flac_magic(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) == b"fLaC"
+    except OSError:
+        return False
+
+
+def _export_audio_wav_bin() -> Path:
+    override = os.environ.get("EXPORT_AUDIO_WAV")
+    if override:
+        return Path(override)
+    root = Path(__file__).resolve().parents[1]
+    release = root / "target" / "release" / "export_audio_wav"
+    if release.exists():
+        return release
+    return root / "target" / "debug" / "export_audio_wav"
+
+
+def _export_audio_wav(input_path: Path, out_path: Path) -> None:
+    bin_path = _export_audio_wav_bin()
+    r = subprocess.run(
+        [str(bin_path), str(input_path), str(out_path)],
+        capture_output=True, text=True, timeout=600,
+    )
+    if r.returncode != 0 or not out_path.is_file():
+        detail = (r.stderr or r.stdout or f"missing {bin_path}").strip()
+        raise RuntimeError(f"export-audio wav failed: {detail[-500:]}")
 
 
 def _office_to_text(input_path: Path, out_dir: Path) -> Path:

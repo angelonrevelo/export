@@ -10,7 +10,7 @@
 //! one seekpoint per block. The decoder also accepts stereo decorrelation,
 //! wasted bits, and Rice partitions.
 
-use crate::crc::{crc8, crc16};
+use crate::crc::{crc16, crc8};
 use crate::error::{Error, Result};
 use crate::md5::Md5;
 
@@ -85,11 +85,7 @@ impl<'a> BitReader<'a> {
         let loaded = (end_byte - start_byte) * 8;
         let skip = self.pos % 8;
         let shift = loaded - skip - n as usize;
-        let mask = if n == 32 {
-            u32::MAX
-        } else {
-            (1u32 << n) - 1
-        };
+        let mask = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
         let v = ((acc >> shift) as u32) & mask;
         self.pos = end;
         Ok(v)
@@ -179,11 +175,7 @@ impl BitWriter {
         if n == 0 || n > 32 {
             return;
         }
-        let mask = if n == 32 {
-            u32::MAX
-        } else {
-            (1u32 << n) - 1
-        };
+        let mask = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
         self.write_bits(v as u32 & mask, n);
     }
 
@@ -203,6 +195,199 @@ impl BitWriter {
     fn bit_len(&self) -> usize {
         self.buf.len() * 8 + self.nbit as usize
     }
+}
+
+/// Vorbis `TITLE` after the same comment folding FFmpeg uses for `INAM`.
+pub fn title(bytes: &[u8]) -> Option<String> {
+    let fields = info_fields(bytes);
+    let (_, value) = fields.iter().find(|(id, _)| *id == *b"INAM")?;
+    String::from_utf8(value.clone()).ok()
+}
+
+/// INFO ids copied into a 16-bit WAV, in the order FFmpeg writes them.
+/// `ISFT` is omitted; the WAV writer supplies `Lavf60.16.100`.
+pub fn info_fields(bytes: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+    let mut entries = Vec::new();
+    if bytes.len() < 4 || &bytes[0..4] != b"fLaC" {
+        return Vec::new();
+    }
+    let mut pos = 4usize;
+    loop {
+        if pos + 4 > bytes.len() {
+            break;
+        }
+        let last = bytes[pos] & 0x80 != 0;
+        let kind = bytes[pos] & 0x7f;
+        let len = ((u32::from(bytes[pos + 1]) << 16)
+            | (u32::from(bytes[pos + 2]) << 8)
+            | u32::from(bytes[pos + 3])) as usize;
+        pos += 4;
+        if pos + len > bytes.len() {
+            break;
+        }
+        if kind == 4 {
+            ingest_comment_block(&mut entries, &bytes[pos..pos + len]);
+        }
+        pos += len;
+        if last {
+            break;
+        }
+    }
+    riff_fields(&entries)
+}
+
+struct Entry {
+    key: String,
+    value: Vec<u8>,
+}
+
+fn ingest_comment_block(entries: &mut Vec<Entry>, body: &[u8]) {
+    if body.len() < 8 {
+        return;
+    }
+    let vendor = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
+    let Some(after_vendor) = 4usize.checked_add(vendor) else {
+        return;
+    };
+    if after_vendor
+        .checked_add(4)
+        .map(|end| end > body.len())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let mut pos = after_vendor;
+    let mut n = u32::from_le_bytes(body[pos..pos + 4].try_into().unwrap());
+    pos += 4;
+    while pos + 4 <= body.len() && n > 0 {
+        let len = u32::from_le_bytes(body[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        if pos + len > body.len() {
+            break;
+        }
+        push_comment(entries, &body[pos..pos + len]);
+        pos += len;
+        n -= 1;
+    }
+    apply_vorbis_conv(entries);
+}
+
+fn push_comment(entries: &mut Vec<Entry>, comment: &[u8]) {
+    let Some(eq) = comment.iter().position(|byte| *byte == b'=') else {
+        return;
+    };
+    if eq == 0 || eq + 1 >= comment.len() {
+        return;
+    }
+    let Ok(key) = std::str::from_utf8(&comment[..eq]) else {
+        return;
+    };
+    let raw = &comment[eq + 1..];
+    let value = match raw.iter().position(|byte| *byte == 0) {
+        Some(at) => &raw[..at],
+        None => raw,
+    };
+    if entries
+        .iter()
+        .any(|entry| entry.key.eq_ignore_ascii_case(key))
+    {
+        dict_append(entries, key, b";");
+    }
+    dict_append(entries, key, value);
+}
+
+fn dict_append(entries: &mut Vec<Entry>, key: &str, extra: &[u8]) {
+    if let Some(index) = entries
+        .iter()
+        .position(|entry| entry.key.eq_ignore_ascii_case(key))
+    {
+        let mut entry = entries.remove(index);
+        entry.key = key.to_string();
+        entry.value.extend_from_slice(extra);
+        entries.push(entry);
+    } else {
+        entries.push(Entry {
+            key: key.to_string(),
+            value: extra.to_vec(),
+        });
+    }
+}
+
+fn apply_vorbis_conv(entries: &mut Vec<Entry>) {
+    let src = std::mem::take(entries);
+    for entry in src {
+        let key = vorbis_renamed(&entry.key)
+            .map(str::to_string)
+            .unwrap_or(entry.key);
+        dict_replace_owned(entries, key, entry.value);
+    }
+}
+
+fn vorbis_renamed(key: &str) -> Option<&'static str> {
+    if key.eq_ignore_ascii_case("ALBUMARTIST") {
+        Some("album_artist")
+    } else if key.eq_ignore_ascii_case("TRACKNUMBER") {
+        Some("track")
+    } else if key.eq_ignore_ascii_case("DISCNUMBER") {
+        Some("disc")
+    } else if key.eq_ignore_ascii_case("DESCRIPTION") {
+        Some("comment")
+    } else {
+        None
+    }
+}
+
+fn dict_replace_owned(entries: &mut Vec<Entry>, key: String, value: Vec<u8>) {
+    if let Some(index) = entries
+        .iter()
+        .position(|entry| entry.key.eq_ignore_ascii_case(&key))
+    {
+        entries.remove(index);
+    }
+    entries.push(Entry { key, value });
+}
+
+fn riff_fields(entries: &[Entry]) -> Vec<([u8; 4], Vec<u8>)> {
+    let mut mapped = Vec::new();
+    for entry in entries {
+        let key = riff_native(&entry.key).to_string();
+        dict_replace_owned(&mut mapped, key, entry.value.clone());
+    }
+    const ORDER: [&[u8; 4]; 9] = [
+        b"IART", b"ICMT", b"ICOP", b"ICRD", b"IGNR", b"ILNG", b"INAM", b"IPRD", b"IPRT",
+    ];
+    let mut out = Vec::new();
+    for id in ORDER {
+        if let Some(entry) = mapped.iter().find(|entry| entry.key.as_bytes() == &id[..]) {
+            if !entry.value.is_empty() {
+                out.push((*id, entry.value.clone()));
+            }
+        }
+    }
+    out
+}
+
+fn riff_native(key: &str) -> &str {
+    const MAP: &[(&str, &str)] = &[
+        ("artist", "IART"),
+        ("comment", "ICMT"),
+        ("copyright", "ICOP"),
+        ("date", "ICRD"),
+        ("genre", "IGNR"),
+        ("language", "ILNG"),
+        ("title", "INAM"),
+        ("album", "IPRD"),
+        ("track", "IPRT"),
+        ("encoder", "ISFT"),
+        ("timecode", "ISMP"),
+        ("encoded_by", "ITCH"),
+    ];
+    for (generic, native) in MAP {
+        if key.eq_ignore_ascii_case(generic) {
+            return native;
+        }
+    }
+    key
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Pcm> {
@@ -720,11 +905,7 @@ fn read_residual(br: &mut BitReader<'_>, block: usize, order: usize) -> Result<V
 
 fn read_rice(br: &mut BitReader<'_>, param: u32) -> Result<i32> {
     let q = br.read_unary()?;
-    let r = if param == 0 {
-        0
-    } else {
-        br.read_bits(param)?
-    };
+    let r = if param == 0 { 0 } else { br.read_bits(param)? };
     let u = (u64::from(q))
         .checked_shl(param)
         .ok_or(Error::Corrupt("rice"))?
@@ -745,9 +926,7 @@ fn restore_fixed(mut data: Vec<i32>, residual: &[i32], order: usize) -> Result<V
             0 => 0i64,
             1 => i64::from(data[i - 1]),
             2 => 2 * i64::from(data[i - 1]) - i64::from(data[i - 2]),
-            3 => {
-                3 * i64::from(data[i - 1]) - 3 * i64::from(data[i - 2]) + i64::from(data[i - 3])
-            }
+            3 => 3 * i64::from(data[i - 1]) - 3 * i64::from(data[i - 2]) + i64::from(data[i - 3]),
             4 => {
                 4 * i64::from(data[i - 1]) - 6 * i64::from(data[i - 2]) + 4 * i64::from(data[i - 3])
                     - i64::from(data[i - 4])
@@ -759,7 +938,12 @@ fn restore_fixed(mut data: Vec<i32>, residual: &[i32], order: usize) -> Result<V
     Ok(data)
 }
 
-fn restore_lpc(mut data: Vec<i32>, residual: &[i32], coeff: &[i32], shift: i32) -> Result<Vec<i32>> {
+fn restore_lpc(
+    mut data: Vec<i32>,
+    residual: &[i32],
+    coeff: &[i32],
+    shift: i32,
+) -> Result<Vec<i32>> {
     let order = coeff.len();
     if data.len() != order {
         return Err(Error::Corrupt("order"));
@@ -896,7 +1080,11 @@ fn encode_with(pcm: &Pcm, nominal: usize, seek_table: bool) -> Result<Vec<u8>> {
     if !pcm.samples.iter().all(|s| sample_fits(*s, pcm.bits)) {
         return Err(Error::Corrupt("sample"));
     }
-    let cap = if pcm.sample_rate <= 48_000 { 4608 } else { 16384 };
+    let cap = if pcm.sample_rate <= 48_000 {
+        4608
+    } else {
+        16384
+    };
     let nominal = nominal.clamp(16, cap).min(per);
     let blocks = plan_blocks(per, nominal);
     let mut frames = Vec::new();
@@ -1183,7 +1371,11 @@ fn push_utf8(out: &mut Vec<u8>, n: u64) {
 enum Coded {
     Constant(i32),
     Verbatim,
-    Fixed { order: usize, escape: Option<u32>, param: u32 },
+    Fixed {
+        order: usize,
+        escape: Option<u32>,
+        param: u32,
+    },
     Lpc {
         precision: u32,
         shift: i32,
@@ -1362,7 +1554,13 @@ fn lpc_order_cap(rate: u32, len: usize) -> usize {
 /// strictly shorter. A wider search on this fixture encoded in about 474 ms,
 /// past the time budget, so orders and precisions that are not this one are
 /// not tried. Constant and verbatim are left alone.
-fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed_bits: u64, wasted: u32) -> Option<Coded> {
+fn smaller_lpc(
+    samples: &[i32],
+    bps: u32,
+    rate: u32,
+    fixed_bits: u64,
+    wasted: u32,
+) -> Option<Coded> {
     let max_order = lpc_order_cap(rate, samples.len());
     let order = 11.min(max_order);
     if order == 0 || samples.len() <= order {
@@ -1730,7 +1928,11 @@ mod tests {
             samples,
         };
         let bytes = encode(&pcm).unwrap();
-        assert!(bytes.len() > 4000, "expected a wide residual, got {}", bytes.len());
+        assert!(
+            bytes.len() > 4000,
+            "expected a wide residual, got {}",
+            bytes.len()
+        );
         round_trip(&pcm);
     }
 
@@ -2189,7 +2391,9 @@ mod tests {
 
     #[test]
     fn escape_residual_round_trip() {
-        let samples: Vec<i32> = (0..32).map(|i| if i % 2 == 0 { 30_000 } else { -30_000 }).collect();
+        let samples: Vec<i32> = (0..32)
+            .map(|i| if i % 2 == 0 { 30_000 } else { -30_000 })
+            .collect();
         round_trip(&Pcm {
             sample_rate: 44_100,
             channels: 1,
@@ -2295,7 +2499,17 @@ mod tests {
         frame.extend_from_slice(&w.finish());
         let sum = crc16(&frame);
         frame.extend_from_slice(&sum.to_be_bytes());
-        let info = write_streaminfo(block, block, frame.len() as u32, frame.len() as u32, 44_100, 1, 16, samples.len() as u64, md5);
+        let info = write_streaminfo(
+            block,
+            block,
+            frame.len() as u32,
+            frame.len() as u32,
+            44_100,
+            1,
+            16,
+            samples.len() as u64,
+            md5,
+        );
         let mut out = Vec::new();
         out.extend_from_slice(b"fLaC");
         out.push(0x80);
