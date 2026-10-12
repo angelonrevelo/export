@@ -1,6 +1,6 @@
 use export_sheet::{
     convert_bytes, generated_biff_xls, generated_biff_xls_numeric_column,
-    generated_biff_xls_two_numbers, Format, Options,
+    generated_biff_xls_sum_cache, generated_biff_xls_two_numbers, Format, Options,
 };
 
 #[test]
@@ -40,6 +40,14 @@ fn one_thousand_numeric_rows() {
     assert!(csv.starts_with(b"0\n"));
     assert!(csv.ends_with(b"999\n"));
     assert_eq!(csv.iter().filter(|b| **b == b'\n').count(), 1000);
+}
+
+#[test]
+fn sum_formula_cached_value_is_five() {
+    let file = generated_biff_xls_sum_cache();
+    let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
+    assert_eq!(stats.rows, 1);
+    assert_eq!(csv, b"2,3,5\n");
 }
 
 #[test]

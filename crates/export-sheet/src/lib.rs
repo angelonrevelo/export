@@ -29,7 +29,8 @@
 //! that layout: OLE version 3, BIFF version `0x0600`, a `NUMBER` record, and
 //! a plain shared string. A second generated file keeps that text cell and
 //! adds a `NUMBER` in C1 (7). A third file is 1 000 rows of one numeric
-//! column, values 0 through 999, with no formulas. A file that is not BIFF
+//! column, values 0 through 999, with no formulas. A formula cell is returned
+//! only as its cached IEEE number. The expression is not evaluated. A file that is not BIFF
 //! is refused. `CONTINUE`,
 //! rich shared strings, and encryption are refused rather than guessed.
 
@@ -47,6 +48,7 @@ pub use error::{Error, Result};
 pub use json::JsonReader;
 pub use xls::generated_biff_xls;
 pub use xls::generated_biff_xls_numeric_column;
+pub use xls::generated_biff_xls_sum_cache;
 pub use xls::generated_biff_xls_two_numbers;
 
 /// One record larger than this is refused.

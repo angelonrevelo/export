@@ -156,6 +156,7 @@ fn main() {
     xls_percentiles();
     xls_two_number_percentiles();
     xls_column_percentiles();
+    xls_sum_cache_percentiles();
 }
 
 fn nearest_rank(sorted: &[u128], pct: usize) -> u128 {
@@ -242,4 +243,29 @@ fn xls_column_percentiles() {
     let p99 = nearest_rank(&samples, 99);
     println!("xls_numeric_column rows=1000 file_bytes={}", file.len());
     println!("xls_numeric_column samples={samples_n} p50_ns={p50} p99_ns={p99}");
+}
+
+fn xls_sum_cache_percentiles() {
+    let file = export_sheet::generated_biff_xls_sum_cache();
+    let (out, stats) =
+        export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("sum cache xls is BIFF");
+    assert_eq!(stats.rows, 1);
+    assert_eq!(out, b"2,3,5\n");
+    let samples_n = 10_000;
+    for _ in 0..200 {
+        let _ = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default());
+    }
+    let mut samples = Vec::with_capacity(samples_n);
+    for _ in 0..samples_n {
+        let started = Instant::now();
+        let got = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("sum cache xls is BIFF");
+        let ns = started.elapsed().as_nanos();
+        assert_eq!(got.0, b"2,3,5\n");
+        samples.push(ns);
+    }
+    samples.sort_unstable();
+    let p50 = nearest_rank(&samples, 50);
+    println!("xls_sum_cache value=5 samples={samples_n} p50_ns={p50}");
 }
