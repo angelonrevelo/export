@@ -70,12 +70,12 @@ fn batch_matches_single() {
 #[test]
 fn unsupported_pairs_fail_clearly() {
     let cases = [
-        ("en", "tl"),
         ("en", "fr"),
         ("es", "ja"),
-        ("tl", "en"),
+        ("es", "tl"),
         ("fil", "en"),
         ("zh", "es"),
+        ("tl", "fr"),
     ];
     let mut i = 0;
     while i < cases.len() {
@@ -88,8 +88,12 @@ fn unsupported_pairs_fail_clearly() {
         assert!(matches!(err, Error::Unsupported { .. }));
         i += 1;
     }
-    let err = translate("Kumusta ka", "tl", "tl").unwrap_err();
-    assert!(err.to_string().contains("unsupported"));
+    assert_eq!(translate("Kumusta ka", "tl", "tl").unwrap(), "Kumusta ka");
+    let err = translate("The house is new.", "fil", "en").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "unsupported language pair 'fil' → 'en'; this crate translates en ↔ es only"
+    );
 }
 
 #[test]

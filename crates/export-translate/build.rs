@@ -7,6 +7,11 @@ mod esconj;
 #[allow(dead_code)]
 #[path = "src/kind.rs"]
 mod kind;
+#[path = "src/tl_emit.rs"]
+mod tl_emit;
+#[allow(dead_code)]
+#[path = "src/tlconj.rs"]
+mod tlconj;
 
 use std::env;
 use std::fs;
@@ -48,6 +53,10 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let dest = out_dir.join("frequent.rs");
     fs::write(&dest, emit(&lemmas, &surfs)).unwrap();
+    println!("cargo:rerun-if-changed=data/tl.tsv");
+    println!("cargo:rerun-if-changed=src/tlconj.rs");
+    println!("cargo:rerun-if-changed=src/tl_emit.rs");
+    tl_emit::compile();
 }
 
 struct Surf {

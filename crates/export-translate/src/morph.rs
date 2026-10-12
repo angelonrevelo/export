@@ -252,6 +252,29 @@ fn noun_hit(stem: &str) -> Option<Hit> {
     Some(Hit::F(ftok(lem, TEN_NONE, NUM_PL, false, false)))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct IrrHit {
+    pub lem: &'static str,
+    pub ten: u8,
+    #[allow(dead_code)]
+    pub s3: bool,
+    pub neg: bool,
+    #[allow(dead_code)]
+    pub were: bool,
+}
+
+/// Irregular English stem, without the Spanish lexicon check in [`lookup`].
+pub(crate) fn irregular(key: &str) -> Option<IrrHit> {
+    let row = find_irr(key)?;
+    Some(IrrHit {
+        lem: row.lem,
+        ten: row.ten,
+        s3: row.s3,
+        neg: row.neg,
+        were: row.were,
+    })
+}
+
 fn find_irr(key: &str) -> Option<&'static Irr> {
     let mut lo = 0usize;
     let mut hi = IRR.len();

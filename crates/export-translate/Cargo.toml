@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
 publish = false
-description = "Zero-dependency en↔es transfer translator. Not NLLB."
+description = "Zero-dependency en↔es and en↔tl transfer translator. Not NLLB."
 
 [[bin]]
 name = "export-translate-bench"
@@ -14,6 +14,10 @@ path = "src/bin/bench.rs"
 [[bin]]
 name = "export-translate-paragraph"
 path = "src/bin/paragraph-bench.rs"
+
+[[bin]]
+name = "export-translate-tl"
+path = "src/bin/tl-bench.rs"
 
 [dependencies]
 

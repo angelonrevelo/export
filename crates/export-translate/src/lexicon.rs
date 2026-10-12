@@ -979,6 +979,7 @@ pub fn lexicon_static_bytes() -> usize {
     }
     n += parad_str(&OPEN) + parad_str(&SAVE) + parad_str(&PLAY) + parad_str(&WANT);
     n += crate::frequent::static_bytes();
+    n += crate::tlfreq::static_bytes();
     n
 }
 

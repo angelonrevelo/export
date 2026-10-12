@@ -1,10 +1,10 @@
-//! Compact English ↔ Spanish transfer.
+//! Compact English ↔ Spanish and English ↔ Filipino transfer.
 //!
 //! This is not NLLB. There is no downloaded model and no 1.2 GB resident set.
 //! The hot path is a byte scanner, a binary search over a frequent lexicon, and
 //! morphology — all in this crate, with zero dependencies.
 //!
-//! [`PAIR_LIMIT`] is the language coverage. Anything outside en ↔ es fails.
+//! [`PAIR_LIMIT`] is the language coverage. Anything outside en ↔ es and en ↔ tl fails.
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +17,8 @@ mod lexicon;
 mod lexwalk;
 mod morph;
 mod scan;
+mod tlfreq;
+mod tlwalk;
 mod tok;
 mod transfer;
 
@@ -24,17 +26,19 @@ use std::fmt;
 
 /// What this build will and will not translate.
 pub const PAIR_LIMIT: &str = "\
-Only en → es and es → en are translated. en → en and es → es return the input \
-unchanged (same language, not a translation). Every other code — including tl, \
-fil, zh, ja, fr, pt, and de — returns an error. Coverage is an open frequent-word \
-lexicon plus regular and irregular morphology, on top of a small closed grammar. \
-An unknown token is copied and counted when some content word translates. If no \
-content word translates, the call errors and does not echo the source. It is not \
-NLLB-200 and it does not echo an unsupported pair as if it had been translated.";
+Only en → es, es → en, en → tl, and tl → en are translated. en → en, es → es, \
+and tl → tl return the input unchanged (same language, not a translation). \
+Every other code — including fil, zh, ja, fr, pt, and de — returns an error. \
+Coverage is an open frequent-word lexicon plus regular and irregular morphology, \
+on top of a small closed grammar. Filipino adds voice, aspect, and linkers on \
+the same rule: an unknown token is copied and counted when some content word \
+translates. If no content word translates, the call errors and does not echo \
+the source. It is not NLLB-200 and it does not echo an unsupported pair as if \
+it had been translated.";
 
 /// Pairs this crate actually translates. Same-language passthrough is not listed.
 pub fn supported_pairs() -> &'static [(&'static str, &'static str)] {
-    &[("en", "es"), ("es", "en")]
+    &[("en", "es"), ("es", "en"), ("en", "tl"), ("tl", "en")]
 }
 
 pub use lexicon::lexicon_static_bytes;
@@ -42,6 +46,11 @@ pub use lexicon::lexicon_static_bytes;
 /// English lemmas in the frequent table. Closed fixture entries are not included.
 pub fn frequent_lemma_count() -> usize {
     frequent::lemma_count()
+}
+
+/// English lemmas in the Filipino frequent table.
+pub fn tl_lemma_count() -> usize {
+    tlfreq::lemma_count()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,12 +82,13 @@ impl std::error::Error for Error {}
 enum Lang {
     En,
     Es,
+    Tl,
 }
 
 /// Translate `text` from `source` into `target`.
 ///
-/// Language codes: `en` / `eng` / `en-us`, and `es` / `spa` / `es-mx`. Same language
-/// returns the input unchanged. Any other pair is [`Error::Unsupported`].
+/// Language codes: `en` / `eng` / `en-us`, `es` / `spa` / `es-mx`, and `tl` / `tl-ph`.
+/// Same language returns the input unchanged. Any other pair is [`Error::Unsupported`].
 pub fn translate(text: &str, source: &str, target: &str) -> Result<String, Error> {
     let src = canon(source);
     let tgt = canon(target);
@@ -86,6 +96,8 @@ pub fn translate(text: &str, source: &str, target: &str) -> Result<String, Error
         (Some(a), Some(b)) if a == b => Ok(text.to_string()),
         (Some(Lang::En), Some(Lang::Es)) => convert(text, source, target, transfer::en_to_es),
         (Some(Lang::Es), Some(Lang::En)) => convert(text, source, target, transfer::es_to_en),
+        (Some(Lang::En), Some(Lang::Tl)) => convert(text, source, target, tlwalk::en_to_tl),
+        (Some(Lang::Tl), Some(Lang::En)) => convert(text, source, target, tlwalk::tl_to_en),
         _ => Err(Error::Unsupported {
             source: norm_code(source),
             target: norm_code(target),
@@ -120,6 +132,12 @@ pub fn translate_counts(text: &str, source: &str, target: &str) -> Result<(Strin
         }
         (Some(Lang::Es), Some(Lang::En)) => {
             convert_counts(text, source, target, transfer::es_to_en_meta)
+        }
+        (Some(Lang::En), Some(Lang::Tl)) => {
+            convert_counts(text, source, target, tlwalk::en_to_tl_meta)
+        }
+        (Some(Lang::Tl), Some(Lang::En)) => {
+            convert_counts(text, source, target, tlwalk::tl_to_en_meta)
         }
         _ => Err(Error::Unsupported {
             source: norm_code(source),
@@ -339,6 +357,7 @@ fn canon(code: &str) -> Option<Lang> {
     match norm_code(code).as_str() {
         "en" | "eng" | "en-us" | "en-gb" => Some(Lang::En),
         "es" | "spa" | "es-es" | "es-mx" | "es-419" => Some(Lang::Es),
+        "tl" | "tl-ph" => Some(Lang::Tl),
         _ => None,
     }
 }
