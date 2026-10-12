@@ -1,4 +1,4 @@
-use export_audio::{export, hash, sniff, Dedup, Error, Job, Kind, Output, DEFAULT_MAX_BYTES};
+use export_audio::{export, hash, hex, sniff, Dedup, Error, Job, Kind, Output, DEFAULT_MAX_BYTES};
 use std::io::Cursor;
 
 fn tone(n: usize, channels: u16) -> export_audio::Pcm {
@@ -72,13 +72,19 @@ fn mp3_aac_and_opus_are_unsupported() {
 
     let aac = [0xff, 0xf1, 0x50, 0x80, 0x00, 0x1f, 0xfc];
     let err = export(&aac, Job::ToWav, &mut dedup).unwrap_err();
-    assert!(matches!(err, Error::Unsupported(msg) if msg.contains("AAC")), "{err}");
+    assert!(
+        matches!(err, Error::Unsupported(msg) if msg.contains("AAC")),
+        "{err}"
+    );
 
     let mut opus = b"OggS".to_vec();
     opus.extend_from_slice(&[0u8; 28]);
     opus.extend_from_slice(b"OpusHead");
     let err = export(&opus, Job::ToFlac, &mut dedup).unwrap_err();
-    assert!(matches!(err, Error::Unsupported(msg) if msg.contains("Opus")), "{err}");
+    assert!(
+        matches!(err, Error::Unsupported(msg) if msg.contains("Opus")),
+        "{err}"
+    );
     assert!(dedup.is_empty());
 }
 
@@ -112,6 +118,34 @@ fn hash_once_then_dedup_then_codec() {
     };
     assert!(export(&broken, Job::ToFlac, &mut dedup).is_err());
     assert_eq!(dedup.len(), 1);
+}
+
+#[test]
+fn four_thousand_sample_wav_matches_the_plain_pcm_s16le_file() {
+    let mut samples = Vec::with_capacity(4096);
+    for i in 0..4096i32 {
+        let s = ((i % 200) - 100) * 40 + (i * i) % 30;
+        samples.push(s.clamp(-32_768, 32_767));
+    }
+    let pcm = export_audio::Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    };
+    let flac = export_audio::encode(&pcm).unwrap();
+    let Output::Fresh { data, .. } = export(&flac, Job::ToWav, &mut Dedup::new()).unwrap() else {
+        panic!("expected a fresh wav");
+    };
+    assert_eq!(data.len(), 8270);
+    assert_eq!(
+        &data[36..70],
+        b"LIST\x1a\x00\x00\x00INFOISFT\x0e\x00\x00\x00Lavf60.16.100\x00"
+    );
+    assert_eq!(
+        hex(&hash(&data)),
+        "d114e84a93552a2325cf2495318614f6d79cd9c8d7a1d5994ebf79c349e7da55"
+    );
 }
 
 #[test]

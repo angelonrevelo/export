@@ -32,7 +32,12 @@ pub fn decode(data: &[u8]) -> Result<Pcm> {
             if format != 1 {
                 return Err(Error::Unsupported("wav compression"));
             }
-            fmt = Some((channels, bits, rate, u16::from_le_bytes([body[12], body[13]])));
+            fmt = Some((
+                channels,
+                bits,
+                rate,
+                u16::from_le_bytes([body[12], body[13]]),
+            ));
         } else if id == b"data" {
             pcm = Some(body.to_vec());
         }
@@ -79,6 +84,14 @@ pub fn decode(data: &[u8]) -> Result<Pcm> {
     })
 }
 
+/// 34-byte `LIST`/`INFO`/`ISFT` chunk placed before `data` on 16-bit PCM.
+/// The 26-byte body is `ISFT` = `Lavf60.16.100`. Source tags are not copied.
+const PCM_S16LE_LIST: &[u8] = &[
+    b'L', b'I', b'S', b'T', 0x1a, 0x00, 0x00, 0x00, b'I', b'N', b'F', b'O', b'I', b'S', b'F', b'T',
+    0x0e, 0x00, 0x00, 0x00, b'L', b'a', b'v', b'f', b'6', b'0', b'.', b'1', b'6', b'.', b'1', b'0',
+    b'0', 0x00,
+];
+
 pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     let width = match pcm.bits {
         8 => 1usize,
@@ -92,9 +105,10 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     }
     let frames = pcm.samples.len() / channels;
     let data_len = frames * channels * width;
-    let mut out = Vec::with_capacity(44 + data_len);
+    let list = if pcm.bits == 16 { PCM_S16LE_LIST } else { &[] };
+    let mut out = Vec::with_capacity(44 + list.len() + data_len);
     out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+    out.extend_from_slice(&((36 + list.len() + data_len) as u32).to_le_bytes());
     out.extend_from_slice(b"WAVE");
     out.extend_from_slice(b"fmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
@@ -105,6 +119,7 @@ pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
     out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&((channels * width) as u16).to_le_bytes());
     out.extend_from_slice(&u16::from(pcm.bits).to_le_bytes());
+    out.extend_from_slice(list);
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data_len as u32).to_le_bytes());
     for frame in 0..frames {
