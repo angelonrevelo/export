@@ -1342,32 +1342,4 @@ fn main() {
         mb_s(vast_pixels * 3.0, p50),
         allocs as f64 / (vast_pixels / 1_000_000.0),
     );
-
-    // Same gradient, next edge 6144×4608. Same cap. The 3072×2304 loop above is unchanged.
-    let giant = gradient(6144, 4608);
-    let giant_png = encode_png(&giant).unwrap();
-    for _ in 0..2 {
-        let mut c = ShrinkCache::new();
-        let _ = shrink_png(&giant_png, target, &mut c).unwrap();
-    }
-    let (p50, p99) = time_n(12, || {
-        let mut c = ShrinkCache::new();
-        let _ = shrink_png(&giant_png, target, &mut c).unwrap();
-    });
-    ALLOCS.store(0, Ordering::Relaxed);
-    let mut c = ShrinkCache::new();
-    let giant_out = shrink_png(&giant_png, target, &mut c).unwrap();
-    let allocs = ALLOCS.load(Ordering::Relaxed);
-    let smaller = giant_out.bytes.len() < giant_png.len();
-    let giant_pixels = 6144.0 * 4608.0;
-    println!(
-        "shrink_png6144 file_bytes={} out_bytes={} samples=12 p50_us={:.1} p99_us={:.1} smaller={smaller} copied={} pixel_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
-        giant_png.len(),
-        giant_out.bytes.len(),
-        p50 as f64 / 1_000.0,
-        p99 as f64 / 1_000.0,
-        giant_out.copied,
-        mb_s(giant_pixels * 3.0, p50),
-        allocs as f64 / (giant_pixels / 1_000_000.0),
-    );
 }
