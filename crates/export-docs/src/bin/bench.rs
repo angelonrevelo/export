@@ -1549,6 +1549,97 @@ fn report_ppt_html_four() {
     }
 }
 
+fn report_ppt_pdf_four() {
+    let (north, east, south, west) = ppt_html_four_texts();
+    let file = ppt_four_text_document(&north, &east, &south, &west).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let html = convert("ppt", "html", &file).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if file.len() != 7680 || html.len() != 5814 {
+        eprintln!(
+            "ppt four-shape html size changed: input_b={} output_b={}",
+            file.len(),
+            html.len()
+        );
+        std::process::exit(1);
+    }
+    match convert("ppt", "pdf", &file) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("ppt→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            let n = extracted.find(&north);
+            let e = extracted.find(&east);
+            let s = extracted.find(&south);
+            let w = extracted.find(&west);
+            let ordered = match (n, e, s, w) {
+                (Some(n), Some(e), Some(s), Some(w)) => n < e && e < s && s < w,
+                _ => false,
+            };
+            if ordered {
+                let sample = measure(|| ready_bytes("ppt", "pdf", &file));
+                emit_ready("ppt→pdf four", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→pdf four p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                emit_untimed(
+                    "ppt→pdf four",
+                    file.len() as u64,
+                    Some(pdf.len() as u64),
+                    &format!(
+                        "MISS: pdf text does not contain the text (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains(&format!("input_b={}", file.len()))
+            {
+                eprintln!("ppt pdf miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→pdf four", file.len() as u64, None, &err.message);
+        }
+    }
+    let one = ppt_text_document("Only one generated text shape.").unwrap_or_else(|err| {
+        eprintln!("ppt one-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("ppt", "pdf", &one) {
+        Ok(_) => {
+            eprintln!("one-shape ppt produced pdf");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains("not four text shapes")
+                || !err.message.contains(&format!("input_b={}", one.len()))
+            {
+                eprintln!("ppt pdf one miss hid the reason: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→pdf one", one.len() as u64, None, &err.message);
+        }
+    }
+}
+
 fn ppt_html_four_texts() -> (String, String, String, String) {
     let mut north = String::new();
     let mut east = String::new();
@@ -2045,6 +2136,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_html_four();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-pdf-four") {
+        println!("export-docs ppt four-shape pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_pdf_four();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {

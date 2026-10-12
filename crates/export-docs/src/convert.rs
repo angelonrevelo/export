@@ -60,7 +60,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "pptx", target: "pdf", ready: false, note: "MISS: text-shape decks convert, and one generated PNG slide converts only when the image XObject PDF is smaller than the stored pixels; other decks stay a miss" },
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one, two, or three paragraphs converts; other files stay a miss" },
-    Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
+    Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: only a generated legacy ppt with four text shapes converts when the PDF text contains all four strings; other files stay a miss" },
     Pair { source: "ppt", target: "html", ready: false, note: "MISS: only a generated legacy ppt with one, two, three, or four text shapes converts; other files stay a miss" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
 ];
@@ -108,6 +108,9 @@ pub fn convert_to<R: Read + Seek, W: Write>(
     }
     if source == "ppt" && target == "html" {
         return crate::ppt::ppt_to_html(input, output);
+    }
+    if source == "ppt" && target == "pdf" {
+        return crate::ppt::ppt_to_pdf(input, output);
     }
     if !pair_ready(&source, &target) {
         let note = PAIRS

@@ -27,6 +27,53 @@ const RT_TEXT_HEADER: u16 = 0x0F9F;
 const RT_TEXT_BYTES: u16 = 0x0FA8;
 
 pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
+    let (input_bytes, bytes, texts) = load_texts(src)?;
+    let html = html_of(&texts);
+    for text in &texts {
+        if !html.contains(text) {
+            return Err(miss(input_bytes, "html does not contain the text"));
+        }
+    }
+    let mut counted = CountWrite::new(out);
+    counted
+        .write_all(html.as_bytes())
+        .map_err(|err| miss(input_bytes, &err.to_string()))?;
+    Ok(RunStats {
+        scratch_peak: bytes.len(),
+        input_bytes,
+        output_bytes: counted.n,
+    })
+}
+
+/// Four text shapes become a text PDF. The PDF is kept only when its extracted
+/// text contains each shape. Every other file stays a miss.
+pub fn ppt_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
+    let (input_bytes, bytes, texts) = load_texts(src)?;
+    if texts.len() != 4 {
+        return Err(miss(input_bytes, "file is not four text shapes"));
+    }
+    let pdf = shapes_pdf(&texts).map_err(|err| miss(input_bytes, &err.message))?;
+    let extracted = crate::pdf::plain_text(&pdf).map_err(|err| miss(input_bytes, &err.message))?;
+    if !texts.iter().all(|text| extracted.contains(text)) {
+        return Err(miss(input_bytes, "pdf text does not contain the text"));
+    }
+    let mut counted = CountWrite::new(out);
+    counted
+        .write_all(&pdf)
+        .map_err(|err| miss(input_bytes, &err.to_string()))?;
+    let scratch = if bytes.len() > pdf.len() {
+        bytes.len()
+    } else {
+        pdf.len()
+    };
+    Ok(RunStats {
+        scratch_peak: scratch,
+        input_bytes,
+        output_bytes: counted.n,
+    })
+}
+
+fn load_texts<R: Read + Seek>(src: &mut R) -> Result<(u64, Vec<u8>, Vec<String>)> {
     let input_bytes = match src.seek(SeekFrom::End(0)) {
         Ok(n) => n,
         Err(err) => return Err(miss(0, &err.to_string())),
@@ -48,21 +95,22 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
             miss(input_bytes, &err.message)
         }
     })?;
-    let html = html_of(&texts);
-    for text in &texts {
-        if !html.contains(text) {
-            return Err(miss(input_bytes, "html does not contain the text"));
-        }
-    }
-    let mut counted = CountWrite::new(out);
-    counted
-        .write_all(html.as_bytes())
-        .map_err(|err| miss(input_bytes, &err.to_string()))?;
-    Ok(RunStats {
-        scratch_peak: bytes.len(),
-        input_bytes,
-        output_bytes: counted.n,
-    })
+    Ok((input_bytes, bytes, texts))
+}
+
+fn shapes_pdf(texts: &[String]) -> Result<Vec<u8>> {
+    let lines: Vec<crate::pdf::Line> = texts
+        .iter()
+        .map(|text| crate::pdf::Line {
+            spans: vec![crate::pdf::Span {
+                text: text.clone(),
+                font: 0,
+                size: 11.0,
+            }],
+            leading: 14.0,
+        })
+        .collect();
+    crate::pdf::from_lines(&lines)
 }
 
 /// Compound file whose `PowerPoint Document` stream is one text-bytes shape.
@@ -744,6 +792,70 @@ mod tests {
         let c = got.find(third).unwrap();
         let d = got.find(fourth).unwrap();
         assert!(a < b && b < c && c < d);
+    }
+
+    #[test]
+    fn four_shape_stays_the_published_html_size() {
+        let (north, east, south, west) = four_shape_fixture();
+        let file = ppt_four_text_document(&north, &east, &south, &west).unwrap();
+        assert_eq!(file.len(), 7680);
+        let got = html(&file).unwrap();
+        assert_eq!(got.len(), 5814);
+        assert!(
+            got.contains(&north) && got.contains(&east) && got.contains(&south) && got.contains(&west),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn four_text_shapes_become_pdf_with_the_text() {
+        let (north, east, south, west) = four_shape_fixture();
+        let file = ppt_four_text_document(&north, &east, &south, &west).unwrap();
+        let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        let text = crate::pdf::plain_text(&pdf).unwrap();
+        assert!(text.contains(&north), "{text}");
+        assert!(text.contains(&east), "{text}");
+        assert!(text.contains(&south), "{text}");
+        assert!(text.contains(&west), "{text}");
+        let n = text.find(&north).unwrap();
+        let e = text.find(&east).unwrap();
+        let s = text.find(&south).unwrap();
+        let w = text.find(&west).unwrap();
+        assert!(n < e && e < s && s < w);
+    }
+
+    #[test]
+    fn fewer_shapes_stay_a_pdf_miss() {
+        let file = ppt_text_document("Only one generated text shape.").unwrap();
+        let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(err.message.contains("not four text shapes"), "{err}");
+        assert!(
+            err.message.contains(&format!("input_b={}", file.len())),
+            "{err}"
+        );
+    }
+
+    fn four_shape_fixture() -> (String, String, String, String) {
+        let mut north = String::new();
+        let mut east = String::new();
+        let mut south = String::new();
+        let mut west = String::new();
+        for i in 0..25 {
+            north.push_str(&format!(
+                "North shape sentence {i} of the generated PowerPoint file. "
+            ));
+            east.push_str(&format!(
+                "East shape sentence {i} of the generated PowerPoint file. "
+            ));
+            south.push_str(&format!(
+                "South shape sentence {i} of the generated PowerPoint file. "
+            ));
+            west.push_str(&format!(
+                "West shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        (north, east, south, west)
     }
 
     #[test]

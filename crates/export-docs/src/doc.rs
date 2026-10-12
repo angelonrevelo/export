@@ -662,7 +662,12 @@ mod tests {
         assert!(run(&doc).unwrap_err().message.starts_with("MISS:"));
         let doc = word97_document(&["Hi"]).unwrap();
         let err = crate::convert::convert("ppt", "pdf", &doc).unwrap_err();
-        assert!(err.message.contains("no reader"), "{err}");
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(err.message.contains("has no PowerPoint Document stream"), "{err}");
+        assert!(
+            err.message.contains(&format!("input_b={}", doc.len())),
+            "{err}"
+        );
     }
 
     #[test]
