@@ -3,7 +3,7 @@
 pub enum Format {
     Png,
     Jpeg,
-    /// RIFF/WEBP. Stills decode with `decode_webp`. A two-frame animation decodes with `decode_webp_animation`.
+    /// RIFF/WEBP. Stills decode with `decode_webp`. A two-frame or four-frame animation decodes with `decode_webp_animation`.
     Webp,
     Unknown,
 }

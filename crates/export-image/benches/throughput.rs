@@ -393,4 +393,46 @@ fn main() {
         decoded.len(),
         decode_webp(&anim).is_err(),
     );
+
+    // Appended four-frame animation. The two-frame row above is unchanged.
+    let colors = [[220u8, 40, 60], [20, 180, 90], [10, 10, 200], [240, 240, 240]];
+    let mut quad = Vec::with_capacity(4);
+    for rgb in colors {
+        let mut pixels = vec![0u8; 16 * 16 * 3];
+        for px in pixels.chunks_exact_mut(3) {
+            px.copy_from_slice(&rgb);
+        }
+        quad.push(Raster::new(16, 16, 3, pixels).unwrap());
+    }
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&quad).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&quad)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim4 = encode_webp_animation(&quad).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim4_pixels = 16.0 * 16.0 * 4.0;
+    println!(
+        "webp_anim4_encode 16x16 frames=4 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim4.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim4_pixels * 3.0, p50),
+        mb_s(anim4_pixels * 3.0, p99),
+        mb_s(anim4.len() as f64, p50),
+        allocs as f64 / (anim4_pixels / 1_000_000.0),
+    );
+    let decoded4 = decode_webp_animation(&anim4).unwrap();
+    let mut all_four = decoded4.len() == 4;
+    for (got, src) in decoded4.iter().zip(&quad) {
+        let still = decode_webp(&encode_webp_lossy(src).unwrap()).unwrap();
+        all_four &= got.pixels == still.pixels;
+    }
+    println!(
+        "webp_anim4_decode frames={} all_four={all_four} single_raster_errors={}",
+        decoded4.len(),
+        decode_webp(&anim4).is_err(),
+    );
 }

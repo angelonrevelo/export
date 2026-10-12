@@ -1,8 +1,8 @@
 //! RIFF/WEBP container.
 //!
 //! A still is `VP8L` or `VP8 `. `decode_webp` rejects `VP8X`, `ALPH`, `ANIM`,
-//! and `ANMF`. A two-frame animation is a `VP8X`/`ANIM`/`ANMF` wrapper around
-//! two `VP8 ` keyframes from the existing encoder. That wrapper is not an
+//! and `ANMF`. A two-frame or four-frame animation is a `VP8X`/`ANIM`/`ANMF`
+//! wrapper around `VP8 ` keyframes from the existing encoder. That wrapper is not an
 //! entropy coder. Alpha, ICC, EXIF, XMP, and a frame that does not cover the
 //! canvas stay errors.
 
@@ -62,20 +62,23 @@ const ANIMATION: u8 = 0x02;
 const NO_BLEND: u8 = 0x02;
 const FRAME_MS: u32 = 100;
 
-/// Two-frame lossy animation. Both frames must be the same size, and each one
-/// must be a frame the lossy encoder already accepts: RGB, sides a multiple of
-/// 16. Each `ANMF` payload is that keyframe. There is no second entropy coder.
+/// Two-frame or four-frame lossy animation. Every frame must be the same
+/// size, and each one must be a frame the lossy encoder already accepts: RGB,
+/// sides a multiple of 16. Each `ANMF` payload is that keyframe. There is no
+/// second entropy coder.
 pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
-    if frames.len() != 2 {
+    if frames.len() != 2 && frames.len() != 4 {
         return Err(UNSUPPORTED);
     }
     let width = frames[0].width;
     let height = frames[0].height;
-    if frames[1].width != width || frames[1].height != height {
+    if frames.iter().any(|frame| frame.width != width || frame.height != height) {
         return Err(UNSUPPORTED);
     }
-    let first = encode_vp8(&frames[0])?;
-    let second = encode_vp8(&frames[1])?;
+    let mut bitstreams = Vec::with_capacity(frames.len());
+    for frame in frames {
+        bitstreams.push(encode_vp8(frame)?);
+    }
     let mut vp8x = [0u8; 10];
     vp8x[0] = ANIMATION;
     write_u24(&mut vp8x[4..7], width - 1);
@@ -83,8 +86,9 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     let mut body = Vec::new();
     push_chunk(&mut body, b"VP8X", &vp8x);
     push_chunk(&mut body, b"ANIM", &[0; 6]);
-    push_chunk(&mut body, b"ANMF", &anmf(width, height, &first));
-    push_chunk(&mut body, b"ANMF", &anmf(width, height, &second));
+    for bitstream in &bitstreams {
+        push_chunk(&mut body, b"ANMF", &anmf(width, height, bitstream));
+    }
     let mut out = Vec::with_capacity(12 + body.len());
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&((4 + body.len()) as u32).to_le_bytes());
@@ -141,7 +145,7 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
         frames.push(raster);
         at = anmf.next;
     }
-    if frames.len() != 2 {
+    if frames.len() != 2 && frames.len() != 4 {
         return Err(UNSUPPORTED);
     }
     Ok(frames)
@@ -370,5 +374,30 @@ mod tests {
         let mut short = file.clone();
         short.truncate(file.len() / 2);
         assert_eq!(decode_webp_animation(&short).unwrap_err(), TRUNCATED);
+    }
+
+    #[test]
+    fn four_frame_animation_returns_all_frames() {
+        let frames = [
+            solid([220, 40, 60]),
+            solid([20, 180, 90]),
+            solid([10, 10, 200]),
+            solid([240, 240, 240]),
+        ];
+        assert_eq!(
+            encode_webp_animation(&frames[..3]).unwrap_err(),
+            UNSUPPORTED
+        );
+        let file = encode_webp_animation(&frames).unwrap();
+        assert_eq!(&file[12..16], b"VP8X");
+        assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
+        let back = decode_webp_animation(&file).unwrap();
+        assert_eq!(back.len(), 4);
+        for (got, src) in back.iter().zip(&frames) {
+            let still = decode_webp(&encode_webp_lossy(src).unwrap()).unwrap();
+            assert_eq!(got.pixels, still.pixels);
+        }
+        assert_ne!(back[0].pixels, back[1].pixels);
+        assert_ne!(back[2].pixels, back[3].pixels);
     }
 }

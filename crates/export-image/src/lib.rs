@@ -4,8 +4,8 @@
 //! Inflate, PNG filters, the baseline JPEG Huffman/DCT path, VP8L, the VP8
 //! keyframe subset, and the resampler are local. There is no dependency.
 //!
-//! WebP is a still frame, or a two-frame animation whose frames are the same
-//! lossy VP8 keyframes: profile 0, DC prediction, loop filter off.
+//! WebP is a still frame, or a two-frame or four-frame animation whose frames
+//! are the same lossy VP8 keyframes: profile 0, DC prediction, loop filter off.
 //! [`decode_webp`] still returns one raster and rejects `VP8X`. Alpha-only
 //! (`ALPH`) and other extended features stay errors.
 //! Thumbnail and shrink do not take WebP. Not in this crate: HEIC, AVIF, TIFF,
