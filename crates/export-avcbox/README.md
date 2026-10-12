@@ -65,3 +65,13 @@ Same release profile and one thread. The input is the 29,559-byte Annex B file: 
 - release p50: 3,983 µs, p99: 4,329 µs on the run taken immediately after linking. Four later runs on that binary were p50 3,959–3,979 µs and p99 4,206–4,882 µs
 
 `scripts/check-identify-320four.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 320×240, and decoded 4 frames.
+
+## Eight 320×240 pictures
+
+Same release profile and one thread. The input is the 30,363-byte Annex B file: the 320×240 I-frame, then seven zero-motion P-frames of the same kind as the four-picture file. Same level 1.1 path. The first six P-frames are references. The leading bytes are the 19,337-byte I-frame. Eight `avc1` samples. 200 calls after 20 warmup.
+
+- input: 30,363 bytes
+- output: 30,985 bytes
+- release p50: 3,984 µs, p99: 4,162 µs on the run taken immediately after linking. Four later runs on that binary were p50 3,974–4,062 µs and p99 4,139–6,588 µs
+
+`scripts/check-identify-320eight.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 320×240, and decoded 8 frames.
