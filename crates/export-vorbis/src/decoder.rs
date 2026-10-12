@@ -1,6 +1,7 @@
 //! Decode the one short mono Vorbis packet this crate writes.
 
-use crate::{ogg_crc, Error, SAMPLE_RATE_HZ};
+use crate::dsp::{self, unpack_vorbis_float};
+use crate::{ogg_crc, Error, BLOCKSIZE, SAMPLE_RATE_HZ};
 
 /// Decode one Ogg Vorbis bitstream that holds a single short mono audio packet.
 pub fn decode_packet(bytes: &[u8]) -> Result<Vec<f32>, Error> {
@@ -18,12 +19,26 @@ pub fn decode_packet(bytes: &[u8]) -> Result<Vec<f32>, Error> {
     if packets.len() < 4 {
         return Err(Error::Truncated);
     }
-    if packets.len() != 4 {
+    parse_comment(&packets[1])?;
+    if packets.len() == 4 {
+        let setup = parse_setup(&packets[2], &id)?;
+        return decode_audio(&packets[3], &id, &setup);
+    }
+    if packets.len() != 5 {
         return Err(Error::BadHeader);
     }
-    parse_comment(&packets[1])?;
-    let setup = parse_setup(&packets[2], &id)?;
-    decode_audio(&packets[3], &id, &setup)
+    if id.blocksize_0 != BLOCKSIZE || id.blocksize_1 != BLOCKSIZE {
+        return Err(Error::Unsupported);
+    }
+    let values = parse_tone_setup(&packets[2])?;
+    let mut saved = [0.0f64; 16];
+    let mut pcm = [0.0f32; dsp::BINS];
+    for packet in [&packets[3], &packets[4]] {
+        let (frame, next) = decode_tone_frame(packet, &values, &saved)?;
+        saved = next;
+        pcm = frame;
+    }
+    Ok(pcm.to_vec())
 }
 
 struct Identification {
@@ -686,6 +701,139 @@ fn split_packets(bytes: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
         return Err(Error::Truncated);
     }
     Ok(packets)
+}
+
+fn parse_tone_setup(packet: &[u8]) -> Result<[f32; 256], Error> {
+    if packet.len() < 7 {
+        return Err(Error::Truncated);
+    }
+    if packet[0] != 5 || &packet[1..7] != b"vorbis" {
+        return Err(Error::BadHeader);
+    }
+    let mut r = BitReader::new(&packet[7..]);
+    expect(&mut r, 8, 1)?;
+    expect_classbook(&mut r)?;
+    let values = read_value_book(&mut r)?;
+    expect(&mut r, 6, 0)?;
+    expect(&mut r, 16, 0)?;
+    expect(&mut r, 6, 0)?;
+    expect(&mut r, 16, 1)?;
+    expect(&mut r, 5, 0)?;
+    expect(&mut r, 2, 0)?;
+    expect(&mut r, 4, 5)?;
+    expect(&mut r, 6, 0)?;
+    expect(&mut r, 16, 1)?;
+    expect(&mut r, 24, 0)?;
+    expect(&mut r, 24, (BLOCKSIZE / 2) as u32)?;
+    expect(&mut r, 24, 0)?;
+    expect(&mut r, 6, 0)?;
+    expect(&mut r, 8, 0)?;
+    expect(&mut r, 3, 1)?;
+    expect(&mut r, 1, 0)?;
+    expect(&mut r, 8, 1)?;
+    expect(&mut r, 6, 0)?;
+    expect(&mut r, 16, 0)?;
+    expect(&mut r, 1, 0)?;
+    expect(&mut r, 1, 0)?;
+    expect(&mut r, 2, 0)?;
+    expect(&mut r, 8, 0)?;
+    expect(&mut r, 8, 0)?;
+    expect(&mut r, 8, 0)?;
+    expect(&mut r, 6, 0)?;
+    expect(&mut r, 1, 0)?;
+    expect(&mut r, 16, 0)?;
+    expect(&mut r, 16, 0)?;
+    expect(&mut r, 8, 0)?;
+    expect(&mut r, 1, 1)?;
+    Ok(values)
+}
+
+fn expect(r: &mut BitReader<'_>, bits: usize, value: u32) -> Result<(), Error> {
+    if r.read(bits)? != value {
+        Err(Error::Unsupported)
+    } else {
+        Ok(())
+    }
+}
+
+fn expect_sync(r: &mut BitReader<'_>) -> Result<(), Error> {
+    if r.read(24)? != 0x0056_4342 {
+        Err(Error::BadHeader)
+    } else {
+        Ok(())
+    }
+}
+
+fn expect_classbook(r: &mut BitReader<'_>) -> Result<(), Error> {
+    expect_sync(r)?;
+    expect(r, 16, 1)?;
+    expect(r, 24, 1)?;
+    expect(r, 1, 0)?;
+    expect(r, 1, 0)?;
+    expect(r, 5, 0)?;
+    expect(r, 4, 0)?;
+    Ok(())
+}
+
+fn read_value_book(r: &mut BitReader<'_>) -> Result<[f32; 256], Error> {
+    expect_sync(r)?;
+    expect(r, 16, 1)?;
+    expect(r, 24, 256)?;
+    expect(r, 1, 0)?;
+    expect(r, 1, 0)?;
+    for _ in 0..256 {
+        expect(r, 5, 7)?;
+    }
+    expect(r, 4, 1)?;
+    let min = unpack_vorbis_float(r.read(32)?);
+    let step = unpack_vorbis_float(r.read(32)?);
+    expect(r, 4, 7)?;
+    expect(r, 1, 0)?;
+    let mut values = [0.0f32; 256];
+    for (index, slot) in values.iter_mut().enumerate() {
+        expect(r, 8, index as u32)?;
+        *slot = min + index as f32 * step;
+    }
+    Ok(values)
+}
+
+fn decode_tone_frame(
+    packet: &[u8],
+    values: &[f32; 256],
+    saved: &[f64; 16],
+) -> Result<([f32; dsp::BINS], [f64; 16]), Error> {
+    if packet.is_empty() {
+        return Err(Error::Truncated);
+    }
+    let mut r = BitReader::new(packet);
+    if r.read(1)? != 0 {
+        return Err(Error::BadHeader);
+    }
+    let mut spectrum = [0.0f64; dsp::BINS];
+    if r.read(1)? == 1 {
+        if r.read(8)? != 255 || r.read(8)? != 255 {
+            return Err(Error::Unsupported);
+        }
+        for bin in &mut spectrum {
+            if r.read(1)? != 0 {
+                return Err(Error::BadHeader);
+            }
+            let index = bitreverse(r.read(8)?, 8) as usize;
+            *bin = f64::from(values[index]);
+        }
+    }
+    let time = dsp::imdct(&spectrum);
+    let (pcm, next) = dsp::overlap(saved, &time);
+    Ok((pcm.map(|sample| sample as f32), next))
+}
+
+fn bitreverse(mut value: u32, bits: u32) -> u32 {
+    let mut out = 0u32;
+    for _ in 0..bits {
+        out = (out << 1) | (value & 1);
+        value >>= 1;
+    }
+    out
 }
 
 fn ilog(mut value: usize) -> usize {

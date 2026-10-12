@@ -1,14 +1,17 @@
 //! One Vorbis audio packet: mono, 48 kHz, one short frame.
 //!
-//! This crate writes that packet and decodes it back to PCM. It is not a song encoder.
+//! `encode_packet` writes a silent frame. `encode_half_scale_sine` writes one
+//! half-scale 440 Hz frame. `decode_packet` reads either bitstream back to PCM.
+//! This crate is not a song encoder.
 
 #![forbid(unsafe_code)]
 
 mod decoder;
+mod dsp;
 mod encoder;
 
 pub use decoder::decode_packet;
-pub use encoder::encode_packet;
+pub use encoder::{encode_half_scale_sine, encode_packet, half_scale_sine};
 
 /// Sample rate of the one packet this crate writes.
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
@@ -26,7 +29,7 @@ pub enum Error {
     Truncated,
     /// A header magic, framing bit, or setup field is invalid.
     BadHeader,
-    /// Stereo, a non-48 kHz rate, or anything other than one silent short frame.
+    /// Stereo, a non-48 kHz rate, or a frame this crate does not write.
     Unsupported,
 }
 
@@ -129,5 +132,36 @@ mod tests {
         let mut pcm = [0.0f32; FRAME_SAMPLES];
         pcm[0] = 0.25;
         assert_eq!(encode_packet(&pcm).unwrap_err(), Error::Unsupported);
+    }
+
+    #[test]
+    fn half_scale_sine_decodes() {
+        let ideal = half_scale_sine();
+        assert!(ideal[0].abs() < 1.0e-6);
+        assert!(ideal.iter().any(|sample| sample.abs() > 0.2));
+
+        let packet = encode_half_scale_sine().expect("encode");
+        let decoded = decode_packet(&packet).expect("decode");
+        assert_eq!(decoded.len(), FRAME_SAMPLES);
+        let mut error = 0.0f32;
+        let mut peak = 0.0f32;
+        for (got, want) in decoded.iter().zip(ideal.iter()) {
+            let delta = got - want;
+            error += delta * delta;
+            peak = peak.max(got.abs());
+        }
+        let rms = (error / FRAME_SAMPLES as f32).sqrt();
+        assert!(peak > 0.2, "peak {peak}");
+        assert!(rms < 0.02, "rms {rms}");
+    }
+
+    #[test]
+    fn truncated_sine_errors() {
+        let packet = encode_half_scale_sine().expect("encode");
+        assert_eq!(decode_packet(&packet[..20]).unwrap_err(), Error::Truncated);
+        assert_eq!(
+            decode_packet(&packet[..packet.len() - 1]).unwrap_err(),
+            Error::Truncated
+        );
     }
 }

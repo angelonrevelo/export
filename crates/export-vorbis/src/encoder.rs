@@ -1,9 +1,12 @@
 //! Build one Ogg Vorbis bitstream: mono, 48 kHz, one short frame.
 //!
-//! The audio packet uses an unused floor, so the frame is silence. This is one
-//! packet, not a song encoder.
+//! `encode_packet` uses an unused floor, so that frame is silence.
+//! `encode_half_scale_sine` writes one 440 Hz frame. This is not a song encoder.
 
+use crate::dsp::{self, pack_vorbis_float, unpack_vorbis_float};
 use crate::{ogg_crc, Error, BLOCKSIZE, BLOCKSIZE_EXP, FRAME_SAMPLES, SAMPLE_RATE_HZ};
+
+const TONE_MIN: f32 = -0.4;
 
 const VENDOR: &[u8] = b"export-vorbis";
 const SERIAL: u32 = 0x766F_7262;
@@ -28,6 +31,167 @@ pub fn encode_packet(pcm: &[f32]) -> Result<Vec<u8>, Error> {
     out.extend(ogg_page(0x00, 0, SERIAL, 2, &[&setup]));
     out.extend(ogg_page(0x04, FRAME_SAMPLES as u64, SERIAL, 3, &[&audio]));
     Ok(out)
+}
+
+/// One half-scale 440 Hz sine at [`SAMPLE_RATE_HZ`], `FRAME_SAMPLES` long.
+///
+/// Sample `n` is `0.5 * sin(2π * 440 * n / SAMPLE_RATE_HZ)`.
+pub fn half_scale_sine() -> [f32; FRAME_SAMPLES] {
+    ideal_sine().map(|sample| sample as f32)
+}
+
+/// Encode [`half_scale_sine`] as one short mono frame.
+///
+/// Vorbis overlap needs a leading delay frame in the same bitstream. The audible
+/// result is still that one frame. This is not a song encoder.
+pub fn encode_half_scale_sine() -> Result<Vec<u8>, Error> {
+    let (min, step) = tone_grid();
+    let (delay, tone) = dsp::overlap_pair(&ideal_sine());
+    let delay = quantize_time(&delay, min, step)?;
+    let tone = quantize_time(&tone, min, step)?;
+
+    let id = identification_packet();
+    let comment = comment_packet();
+    let setup = tone_setup_packet(min, step);
+    let delay = tone_audio(&delay);
+    let tone = tone_audio(&tone);
+
+    let mut out = Vec::with_capacity(1024);
+    out.extend(ogg_page(0x02, 0, SERIAL, 0, &[&id]));
+    out.extend(ogg_page(0x00, 0, SERIAL, 1, &[&comment]));
+    out.extend(ogg_page(0x00, 0, SERIAL, 2, &[&setup]));
+    out.extend(ogg_page(0x00, FRAME_SAMPLES as u64, SERIAL, 3, &[&delay]));
+    out.extend(ogg_page(
+        0x04,
+        (FRAME_SAMPLES * 2) as u64,
+        SERIAL,
+        4,
+        &[&tone],
+    ));
+    Ok(out)
+}
+
+fn ideal_sine() -> [f64; FRAME_SAMPLES] {
+    let mut pcm = [0.0; FRAME_SAMPLES];
+    for (n, sample) in pcm.iter_mut().enumerate() {
+        let phase = 2.0 * std::f64::consts::PI * 440.0 * n as f64 / f64::from(SAMPLE_RATE_HZ);
+        *sample = 0.5 * phase.sin();
+    }
+    pcm
+}
+
+fn tone_grid() -> (f32, f32) {
+    let min = unpack_vorbis_float(pack_vorbis_float(TONE_MIN));
+    let step = unpack_vorbis_float(pack_vorbis_float(0.8 / 255.0));
+    (min, step)
+}
+
+fn quantize_time(time: &[f64; FRAME_SAMPLES], min: f32, step: f32) -> Result<[u32; 32], Error> {
+    let spectrum = dsp::mdct(time);
+    let min = f64::from(min);
+    let step = f64::from(step);
+    let mut indices = [0u32; 32];
+    for (index, coeff) in indices.iter_mut().zip(spectrum.iter()) {
+        let raw = ((*coeff - min) / step).round();
+        if !(0.0..=255.0).contains(&raw) {
+            return Err(Error::Unsupported);
+        }
+        *index = raw as u32;
+    }
+    Ok(indices)
+}
+
+fn tone_setup_packet(min: f32, step: f32) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(5, 8);
+    for &byte in b"vorbis" {
+        w.write_bits(u32::from(byte), 8);
+    }
+
+    // Class book, then the 256-level value book.
+    w.write_bits(1, 8);
+    write_classbook(&mut w);
+    write_value_book(&mut w, min, step);
+
+    w.write_bits(0, 6);
+    w.write_bits(0, 16);
+
+    w.write_bits(0, 6);
+    w.write_bits(1, 16);
+    w.write_bits(0, 5);
+    w.write_bits(0, 2);
+    w.write_bits(5, 4);
+
+    // Residue type 1, one sample per partition, one class, value book 1.
+    w.write_bits(0, 6);
+    w.write_bits(1, 16);
+    w.write_bits(0, 24);
+    w.write_bits((BLOCKSIZE / 2) as u32, 24);
+    w.write_bits(0, 24);
+    w.write_bits(0, 6);
+    w.write_bits(0, 8);
+    w.write_bits(1, 3);
+    w.write_bits(0, 1);
+    w.write_bits(1, 8);
+
+    w.write_bits(0, 6);
+    w.write_bits(0, 16);
+    w.write_bits(0, 1);
+    w.write_bits(0, 1);
+    w.write_bits(0, 2);
+    w.write_bits(0, 8);
+    w.write_bits(0, 8);
+    w.write_bits(0, 8);
+
+    w.write_bits(0, 6);
+    w.write_bits(0, 1);
+    w.write_bits(0, 16);
+    w.write_bits(0, 16);
+    w.write_bits(0, 8);
+    w.write_bits(1, 1);
+    w.finish()
+}
+
+fn write_classbook(w: &mut BitWriter) {
+    w.write_bits(0x0056_4342, 24);
+    w.write_bits(1, 16);
+    w.write_bits(1, 24);
+    w.write_bits(0, 1);
+    w.write_bits(0, 1);
+    w.write_bits(0, 5);
+    w.write_bits(0, 4);
+}
+
+fn write_value_book(w: &mut BitWriter, min: f32, step: f32) {
+    w.write_bits(0x0056_4342, 24);
+    w.write_bits(1, 16);
+    w.write_bits(256, 24);
+    w.write_bits(0, 1);
+    w.write_bits(0, 1);
+    for _ in 0..256 {
+        w.write_bits(7, 5);
+    }
+    w.write_bits(1, 4);
+    w.write_bits(pack_vorbis_float(min), 32);
+    w.write_bits(pack_vorbis_float(step), 32);
+    w.write_bits(7, 4);
+    w.write_bits(0, 1);
+    for index in 0..256 {
+        w.write_bits(index, 8);
+    }
+}
+
+fn tone_audio(indices: &[u32; 32]) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 1);
+    w.write_bits(1, 1);
+    w.write_bits(255, 8);
+    w.write_bits(255, 8);
+    for &index in indices {
+        w.write_bit(0);
+        w.write_bits_msb(index, 8);
+    }
+    w.finish()
 }
 
 fn identification_packet() -> Vec<u8> {
@@ -185,6 +349,12 @@ impl BitWriter {
     fn write_bits(&mut self, value: u32, n: u32) {
         for i in 0..n {
             self.write_bit(((value >> i) & 1) as u8);
+        }
+    }
+
+    fn write_bits_msb(&mut self, value: u32, n: u32) {
+        for shift in (0..n).rev() {
+            self.write_bit(((value >> shift) & 1) as u8);
         }
     }
 
