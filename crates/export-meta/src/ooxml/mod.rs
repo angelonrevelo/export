@@ -99,10 +99,12 @@ pub fn encrypt_ooxml(
     Ok(())
 }
 
-/// Decrypt a standard-encrypted OOXML package into `out`.
+/// Decrypt an encrypted OOXML package into `out`.
 ///
-/// Seeks within `input`. Writes plaintext only after the password verifier matches.
-/// A wrong password returns [`DecryptError::WrongPassword`] and does not write.
+/// Standard packages use AES-128-ECB. Agile 4.4 packages use AES-256-CBC when
+/// the descriptor is SHA-512. Seeks within `input`. Writes plaintext only after
+/// the password verifier matches. A wrong password returns
+/// [`DecryptError::WrongPassword`] and does not write.
 pub fn decrypt_ooxml<R: Read + Seek, W: Write>(
     input: &mut R,
     password: &str,
