@@ -65,6 +65,35 @@ impl<'a> Bits<'a> {
         self.pos = end;
         Ok(value)
     }
+
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_mul(8).saturating_sub(self.pos)
+    }
+
+    /// Next eight bits, first bit in the high position. Past-the-end bits read as zero.
+    fn peek8(&self) -> u32 {
+        let byte = self.pos / 8;
+        let shift = self.pos % 8;
+        let b0 = u32::from(self.data.get(byte).copied().unwrap_or(0));
+        let b1 = u32::from(self.data.get(byte + 1).copied().unwrap_or(0));
+        let raw = ((b0 | (b1 << 8)) >> shift) & 0xff;
+        raw.reverse_bits() >> 24
+    }
+
+    fn skip(&mut self, n: u32) -> Result<(), Error> {
+        let end = self.pos + n as usize;
+        if end > self.data.len().saturating_mul(8) {
+            return Err(TRUNCATED);
+        }
+        self.pos = end;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LutHit {
+    symbol: u16,
+    nbits: u8,
 }
 
 struct Huff {
@@ -73,6 +102,39 @@ struct Huff {
     maxcode: [i32; 16],
     valptr: [i32; 16],
     symbols: Vec<u16>,
+    /// Codes of 1..=8 bits. `nbits == 0` means the 8-bit window is not a whole code.
+    lut: [LutHit; 256],
+}
+
+fn empty_lut() -> [LutHit; 256] {
+    [LutHit { symbol: 0, nbits: 0 }; 256]
+}
+
+fn fill_lut(
+    mincode: &[i32; 16],
+    maxcode: &[i32; 16],
+    valptr: &[i32; 16],
+    symbols: &[u16],
+) -> [LutHit; 256] {
+    let mut lut = empty_lut();
+    for window in 0..256u32 {
+        let mut code = 0i32;
+        for len in 1..=8 {
+            let bit = (window >> (8 - len)) & 1;
+            code = (code << 1) | bit as i32;
+            if maxcode[len] >= 0 && code <= maxcode[len] {
+                let idx = valptr[len] + code - mincode[len];
+                if idx >= 0 && (idx as usize) < symbols.len() {
+                    lut[window as usize] = LutHit {
+                        symbol: symbols[idx as usize],
+                        nbits: len as u8,
+                    };
+                }
+                break;
+            }
+        }
+    }
+    lut
 }
 
 impl Huff {
@@ -82,6 +144,11 @@ impl Huff {
         }
         if self.symbols.is_empty() {
             return Err(INVALID);
+        }
+        let hit = self.lut[bits.peek8() as usize];
+        if hit.nbits != 0 && bits.remaining() >= usize::from(hit.nbits) {
+            bits.skip(u32::from(hit.nbits))?;
+            return Ok(hit.symbol);
         }
         let mut code = 0i32;
         for len in 1..16 {
@@ -120,6 +187,7 @@ fn build_huff(lengths: &[u8]) -> Result<Huff, Error> {
             maxcode: [-1; 16],
             valptr: [0; 16],
             symbols: Vec::new(),
+            lut: empty_lut(),
         });
     }
     if used == 1 {
@@ -129,6 +197,7 @@ fn build_huff(lengths: &[u8]) -> Result<Huff, Error> {
             maxcode: [-1; 16],
             valptr: [0; 16],
             symbols: Vec::new(),
+            lut: empty_lut(),
         });
     }
     let mut kraft = 0u32;
@@ -169,12 +238,14 @@ fn build_huff(lengths: &[u8]) -> Result<Huff, Error> {
         cursor[len] += 1;
         next[len] = assigned + 1;
     }
+    let lut = fill_lut(&mincode, &maxcode, &valptr, &symbols);
     Ok(Huff {
         single: None,
         mincode,
         maxcode,
         valptr,
         symbols,
+        lut,
     })
 }
 
@@ -934,5 +1005,22 @@ mod tests {
         let bytes = encode_vp8l(&src).unwrap();
         let back = decode_vp8l(&bytes).unwrap();
         assert_eq!(back.pixels, pixels);
+    }
+
+    #[test]
+    fn codes_longer_than_eight_bits_skip_the_lookup() {
+        let mut lengths = vec![0u8; 257];
+        lengths[0] = 1;
+        for length in lengths.iter_mut().skip(1) {
+            *length = 9;
+        }
+        let huff = build_huff(&lengths).unwrap();
+        let mut bits = Bits::new(&[0x00]);
+        assert_eq!(huff.decode(&mut bits).unwrap(), 0);
+        assert_eq!(bits.pos, 1);
+        // Canonical code 256 is nine bits: a one, then eight zeros.
+        let mut bits = Bits::new(&[0x01, 0x00]);
+        assert_eq!(huff.decode(&mut bits).unwrap(), 1);
+        assert_eq!(bits.pos, 9);
     }
 }

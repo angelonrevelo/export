@@ -62,4 +62,22 @@ The PNG, resize, JPEG, shrink, and thumbnail rows below are the numbers already 
 
 One shrink call outside the timer: quality 95, 0 scales, 7 probes, 8,000 output bytes, not a copy. Lossless report on two good PNGs and one bad buffer: seen 3, restored 2, failed 1.
 
-WebP rows are appended on the same 640×480 gradient and filled from the release bench of this revision.
+WebP rows are appended on the same 640×480 gradient. This is the release bench of the lookup decoder below. The earlier PNG, resize, JPEG, shrink, and thumbnail bodies were not changed, and their reprinted times from this process were not substituted for the table above.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| VP8L decode 640×480 (file 921,676 bytes) | 40 | 7,750.6 µs | 7,896.5 µs | 118.91 (p99 116.71) | file MB/s p50 118.92; 12 allocs; 39.06 allocs/MP |
+| VP8 decode 640×480, quantizer index 8 (file 16,288 bytes) | 40 | 4,019.9 µs | 4,230.4 µs | 229.26 (p99 217.85) | file MB/s p50 4.05; 5 allocs; 16.28 allocs/MP |
+| WebP decode miss, `RIFF` form `JPEG` (`Invalid`) | 80 | 24 ns | 44 ns | — | 0 allocs |
+
+The miss is a bad signature. It returns before a chunk is decoded.
+
+## Huffman lookup
+
+VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
+
+The bit-by-bit binary, run twice: p50 9,227.2 µs (p99 12,894.4 µs), then p50 9,271.7 µs (p99 9,554.9 µs). The p50 moved 45 µs. That second run’s p99−p50 spread is 283 µs. The first p99 was one slow sample.
+
+The lookup’s p50 is 7,750.6 µs, about 1.5 ms under the bit-by-bit p50. That is outside the 45 µs repeat and outside the 283 µs spread, so the table stays. It is inside the first run’s p99−p50 gap only because of that one slow sample.
+
+`cargo build --release --target wasm32-unknown-unknown --manifest-path crates/export-image/Cargo.toml` succeeds for this revision. The bench harness is native-only.

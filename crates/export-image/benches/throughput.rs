@@ -7,6 +7,7 @@
 //! are nearest-rank on the high side: index ceil(p * n) - 1 of the sorted samples.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -274,19 +275,18 @@ fn main() {
     );
 
     // Bad signature. This is the miss: the call returns Invalid and does not decode.
-    let miss: &[u8] = b"RIFF\x04\x00\x00\x00JPEG";
+    let miss: &[u8] = black_box(b"RIFF\x04\x00\x00\x00JPEG");
     for _ in 0..4 {
-        assert!(decode_webp(miss).is_err());
+        assert!(black_box(decode_webp(black_box(miss))).is_err());
     }
     let (p50, p99) = time_n(80, || {
-        assert!(decode_webp(miss).is_err());
+        assert!(black_box(decode_webp(black_box(miss))).is_err());
     });
     ALLOCS.store(0, Ordering::Relaxed);
     let miss_err = decode_webp(miss).unwrap_err();
     let allocs = ALLOCS.load(Ordering::Relaxed);
     println!(
-        "webp_decode_miss bad_signature samples=80 p50_us={:.1} p99_us={:.1} error={miss_err} allocs={allocs}",
-        p50 as f64 / 1_000.0,
-        p99 as f64 / 1_000.0,
+        "webp_decode_miss bad_signature samples=80 p50_ns={} p99_ns={} error={miss_err} allocs={allocs}",
+        p50, p99,
     );
 }
