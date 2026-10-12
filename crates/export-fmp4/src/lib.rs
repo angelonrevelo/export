@@ -19,7 +19,7 @@ mod sniff;
 
 pub use demux::{demux, Fragment, Movie, Run, Sample, Track};
 pub use error::Error;
-pub use h264::h264_file;
+pub use h264::{h264_file, h264_repeat_file, H264_REPEAT};
 pub use remux::{remux, sample_file, sample_movie};
 pub use sha256::sha256;
 pub use sniff::{sniff, Sniff};
@@ -193,6 +193,19 @@ mod tests {
         let again = demux(&copied.bytes).unwrap();
         assert_eq!(payloads(&parsed), payloads(&again));
         assert_eq!(payloads(&again), vec![h264::h264_payload().to_vec()]);
+    }
+
+    #[test]
+    fn h264_repeat_copies_the_same_access_unit() {
+        let original = h264_repeat_file();
+        let parsed = demux(&original).unwrap();
+        let samples = &parsed.fragments[0].runs[0].samples;
+        assert_eq!(samples.len(), H264_REPEAT);
+        let one = h264::h264_payload();
+        assert!(samples.iter().all(|sample| sample.payload == one));
+        let copied = stream_copy(&original).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(payloads(&parsed), payloads(&again));
     }
 
     #[test]

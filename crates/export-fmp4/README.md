@@ -4,7 +4,7 @@ Stream copy for fragmented MP4.
 
 Each input is hashed once with SHA-256, sniffed as ISO BMFF, then the `moof` / `mdat` sample bytes are copied into a new fragmented file. AAC (`mp4a`), Opus (`Opus`), and VP9 (`vp09`) are sniffed and return `unsupported`. They are not decoded.
 
-One fragmented file carries a single `avc1` sample. Those bytes are copied. `avcC` and the NAL payload are not parsed. `scripts/identify.sh` runs ffmpeg on that copy; ffmpeg names it `Video: h264 (Constrained Baseline)`, 16×16. The library does not call ffmpeg.
+One fragmented file carries a single `avc1` sample. Those bytes are copied. `avcC` and the NAL payload are not parsed. `scripts/identify.sh` runs ffmpeg on that copy; ffmpeg names it `Video: h264 (Constrained Baseline)`, 16×16. A second file repeats that same access unit 47 times in one fragment. The host script decodes it and requires ffmpeg to report 47 frames. The library does not call ffmpeg.
 
 The same host script checks that the PCM copy is named `mov,mp4,m4a,3gp,3g2,mj2`.
 
@@ -18,3 +18,4 @@ Threading is off. There is no parallel copy path.
 - This is not a video shrink, and it does not flatten a non-fragmented MP4. A file with no `moof` is invalid.
 - The PCM file is one `ipcm` track, two fragments, 1 MiB of sample bytes.
 - The H.264 file is one 16×16 `avc1` sample. It is a byte copy, not a decoder.
+- The 47-sample file repeats that same access unit. It is still a byte copy.

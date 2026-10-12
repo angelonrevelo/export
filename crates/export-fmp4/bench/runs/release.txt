@@ -17,3 +17,12 @@ row=truncated samples=400 input_bytes=524717 p50_ns=1618473 p99_ns=1810456
 
 threading=off
 row=h264 samples=2000 input_bytes=1404 output_bytes=1404 p50_ns=6989 p99_ns=8303
+
+# 47 copies of the same 16×16 access unit. Not a re-run of the 1,404-byte row.
+# `cargo bench --manifest-path crates/export-fmp4/Cargo.toml --bench h264x47 -j 1`
+# Threading off. The bitstream is not decoded.
+# Repeat of the same binary: input_bytes=30706 output_bytes=30706 p50_ns=101100 p99_ns=126946.
+# p50 agrees. p99 moves with the timer.
+
+threading=off
+row=h264x47 samples=2000 input_bytes=30706 output_bytes=30706 p50_ns=101207 p99_ns=169448

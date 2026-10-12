@@ -1,4 +1,4 @@
-//! One fragmented H.264 sample, stored as bytes.
+//! Fragmented H.264 samples, stored as bytes.
 //!
 //! The `avc1` sample entry and the sample payload are opaque. `avcC` and the
 //! NAL bytes are not parsed.
@@ -16,7 +16,35 @@ pub fn h264_file() -> Vec<u8> {
     remux(&h264_movie()).expect("h264 fragment is valid")
 }
 
+/// How many times the 16×16 access unit is repeated in [`h264_repeat_file`].
+pub const H264_REPEAT: usize = 47;
+
+/// Fragmented file with [`H264_REPEAT`] copies of the same access unit.
+///
+/// Each sample is the payload from [`h264_file`]. The bytes are not decoded.
+pub fn h264_repeat_file() -> Vec<u8> {
+    remux(&h264_repeat_movie()).expect("repeated h264 fragment is valid")
+}
+
 fn h264_movie() -> Movie {
+    movie_with_samples(vec![one_sample()])
+}
+
+fn h264_repeat_movie() -> Movie {
+    let samples = (0..H264_REPEAT).map(|_| one_sample()).collect();
+    movie_with_samples(samples)
+}
+
+fn one_sample() -> Sample {
+    Sample {
+        duration: DURATION,
+        flags: SYNC_FLAGS,
+        cts: 0,
+        payload: SAMPLE_PAYLOAD.to_vec(),
+    }
+}
+
+fn movie_with_samples(samples: Vec<Sample>) -> Movie {
     Movie {
         brand: *b"iso5",
         timescale: TIMESCALE,
@@ -36,12 +64,7 @@ fn h264_movie() -> Movie {
             runs: vec![Run {
                 track_id: 1,
                 base_media_decode_time: 0,
-                samples: vec![Sample {
-                    duration: DURATION,
-                    flags: SYNC_FLAGS,
-                    cts: 0,
-                    payload: SAMPLE_PAYLOAD.to_vec(),
-                }],
+                samples,
             }],
         }],
     }
