@@ -1,14 +1,14 @@
 use export_h264::{
-    decode_iframe, decode_pair, encode, encode_ip, encode_ip_motion, encode_ip_split,
-    encode_sequence, encode_sequence_split, fixture_1280x720, fixture_1280x720_split,
-    fixture_1280x720_split_eight, fixture_1280x720_split_four, fixture_1280x720_split_sixteen,
-    fixture_1280x720_split_thirtytwo, fixture_160x160, fixture_160x160_eight,
-    fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_320x240,
-    fixture_320x240_predicted, fixture_320x240_shifted, fixture_320x240_split,
-    fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
-    fixture_32x32_shifted, fixture_640x480, fixture_640x480_split, fixture_640x480_split_four,
-    mean_absolute_error, still, EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame,
-    Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
+    decode_iframe, decode_motion, decode_pair, encode, encode_ip, encode_ip_motion,
+    encode_ip_split, encode_sequence, encode_sequence_split, fixture_1280x720,
+    fixture_1280x720_split, fixture_1280x720_split_eight, fixture_1280x720_split_four,
+    fixture_1280x720_split_sixteen, fixture_1280x720_split_thirtytwo, fixture_160x160,
+    fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
+    fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
+    fixture_320x240_split, fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight,
+    fixture_32x32_predicted, fixture_32x32_shifted, fixture_640x480, fixture_640x480_split,
+    fixture_640x480_split_four, mean_absolute_error, still, EncodeOptions, Error, Motion, Pass,
+    Picture, PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -234,6 +234,62 @@ fn decode_reads_the_415_byte_pair() {
                 pass: Pass::Second,
                 ..opts
             },
+        )
+        .unwrap_err(),
+        Error::SecondPass
+    );
+}
+
+#[test]
+fn decode_reads_the_shifted_pair() {
+    let intra = fixture_32x32();
+    let shifted = fixture_32x32_shifted();
+    let opts = EncodeOptions::default();
+    let alone = encode(&intra, &opts).unwrap();
+    assert_eq!(alone.annex_b.len(), 272);
+    let pair = encode_ip_motion(&intra, &shifted, &opts, SHIFTED_MV).unwrap();
+    assert_eq!(pair.annex_b.len(), 304);
+    assert!(pair.annex_b.starts_with(&alone.annex_b));
+    assert_eq!(pair.annex_b[0..4], [0, 0, 0, 1]);
+    let (dec_i, dec_p) = decode_motion(&pair.annex_b).unwrap();
+    assert_eq!(dec_i, pair.intra);
+    assert_eq!(dec_p, pair.predicted);
+    assert_eq!(decode_pair(&pair.annex_b).unwrap_err(), Error::Bytes);
+    let mut changed = false;
+    for i in alone.annex_b.len()..pair.annex_b.len() {
+        let mut flipped = pair.annex_b.clone();
+        flipped[i] ^= 0x1f;
+        match decode_motion(&flipped) {
+            Ok((y, p)) if y == pair.intra && p == pair.predicted => {}
+            _ => {
+                changed = true;
+                break;
+            }
+        }
+    }
+    assert!(changed, "decode ignored the shifted P-frame bytes");
+    assert_eq!(
+        encode_ip_motion(
+            &intra,
+            &shifted,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            },
+            SHIFTED_MV,
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_ip_motion(
+            &intra,
+            &shifted,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            },
+            SHIFTED_MV,
         )
         .unwrap_err(),
         Error::SecondPass

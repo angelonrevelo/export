@@ -730,7 +730,7 @@ fn median3(a: i32, b: i32, c: i32) -> i32 {
 }
 
 /// Quarter-pel predictor for one 16×16 partition. Unavailable neighbors are zero.
-fn mvp_16x16(mvs: &[(i32, i32)], mb_w: usize, mx: usize, my: usize) -> (i32, i32) {
+pub(crate) fn mvp_16x16(mvs: &[(i32, i32)], mb_w: usize, mx: usize, my: usize) -> (i32, i32) {
     let mut mv = [(0i32, 0i32); 3];
     let mut same = [false; 3];
     if mx > 0 {

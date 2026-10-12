@@ -199,6 +199,15 @@ pub fn decode_pair(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
     decode::decode_pair(annex_b)
 }
 
+/// Read the shifted 32×32 pair and return both reconstructions.
+///
+/// The P-frame uses quarter-pel (16, 0), four luma samples, on the 16×16
+/// vector this encoder already writes. The Annex B bytes are parsed. A stored
+/// buffer is not returned. A B-frame and any other partition are refused.
+pub fn decode_motion(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
+    decode::decode_motion(annex_b)
+}
+
 fn check_common(opts: &EncodeOptions) -> Result<(), Error> {
     if opts.qp > 51 {
         return Err(Error::Qp);

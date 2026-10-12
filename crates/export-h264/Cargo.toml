@@ -38,6 +38,10 @@ name = "decodepair32"
 path = "src/bin/decodepair32.rs"
 
 [[bin]]
+name = "decodeshift32"
+path = "src/bin/decodeshift32.rs"
+
+[[bin]]
 name = "iframe160"
 path = "src/bin/iframe160.rs"
 

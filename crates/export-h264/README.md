@@ -227,3 +227,11 @@ The 415-byte file: that I-frame plus the zero-motion P-frame. The call reads tho
 - release p50: 70 µs, p99: 93 µs on the recorded run (69829 ns and 92501 ns). Two later runs on that binary were p50 70 µs and p99 92–107 µs
 
 Both pictures match the encoder reconstruction. `scripts/check-decodepair32.sh` checks those pixels. It does not run ffmpeg.
+
+## Shifted 32×32 pair decode
+
+The existing Annex B pair that moves four luma samples with quarter-pel (16, 0). The call reads those bytes. The vector is the 16×16 motion this encoder already writes, on a whole chroma sample. Encode time is outside this timer. 200 calls after 20 warmup.
+
+- release p50: 52 µs, p99: 66 µs on the recorded run (51415 ns and 65152 ns). Two later runs on that binary were p50 52–53 µs and p99 65–76 µs
+
+Both pictures match the encoder reconstruction. `scripts/check-decodeshift32.sh` checks those pixels. It does not run ffmpeg.
