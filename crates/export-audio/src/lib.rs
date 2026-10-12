@@ -22,6 +22,6 @@ mod wav;
 pub use dedup::{digest_of, Dedup, Prior};
 pub use error::{Error, Result};
 pub use export::{export, export_reader, Job, Output, DEFAULT_MAX_BYTES};
-pub use flac::{decode, encode, Pcm, MAX_SAMPLES};
+pub use flac::{decode, encode, encode_with_seek_table, Pcm, MAX_SAMPLES};
 pub use sha256::{hash, hash_reader, hex, Sha256};
 pub use sniff::{sniff, Kind};

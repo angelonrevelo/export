@@ -45,8 +45,10 @@ match the samples returns `corrupt: md5`.
 ## Honest limits
 
 - Not an MP3, AAC, or Opus codec. Those byte streams error.
-- The encoder does not write seek tables, cues, pictures, or wasted-bits.
-  It uses one Rice partition per subframe. LPC is not a second codec. The
+- `encode` does not write a seek table, cues, pictures, or wasted-bits.
+  `encode_with_seek_table` writes one seekpoint per block. The one-second
+  16-bit stereo measurement is the file that uses it. The encoder uses one
+  Rice partition per subframe. LPC is not a second codec. The
   only candidate is order 11 at precision 12, tried against the fixed
   predictor already chosen for that block, and kept only when that subframe
   is strictly shorter. A search over orders 1..=12 and precisions 8, 12,
@@ -139,7 +141,10 @@ The encoded file is 87,272 bytes. Encode p50 is 5.97 ms and p99 is 6.33 ms
 (29.56 MB/s on the 176,400 PCM bytes). Decode p50 is 1.58 ms and p99 is
 1.72 ms (55.24 MB/s on the 87,272 FLAC bytes). Release, 31 iterations after
 3 warmup passes. A linear scale of the 4,096-sample stereo encode is about
-5.5 ms. This encode is 5.97 ms, so the length stayed.
+5.5 ms. This encode is 5.97 ms, so the length stayed. The same audio with
+one seekpoint per block is 87,474 bytes. Encode p50 is 5.96 ms, beside the
+87,272 bytes and 5.97 ms above. 5.96 ms is under the 6.57 ms cap, so the
+seek table stayed.
 
 ### Reader experiment
 

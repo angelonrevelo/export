@@ -4,8 +4,9 @@
 //! is constant, verbatim, or fixed order 0..=4, with a single Rice partition
 //! or an unencoded residual. One LPC candidate (order 11, or the subset cap
 //! when that is lower, at precision 12) replaces that fixed predictor only
-//! when the written subframe is strictly shorter. The decoder also accepts
-//! stereo decorrelation, wasted bits, and Rice partitions.
+//! when the written subframe is strictly shorter. `encode` does not write a
+//! seek table. `encode_with_seek_table` adds one seekpoint per block. The
+//! decoder also accepts stereo decorrelation, wasted bits, and Rice partitions.
 
 use crate::crc::{crc8, crc16};
 use crate::error::{Error, Result};
@@ -841,10 +842,17 @@ fn write_rice(w: &mut BitWriter, sample: i32, param: u32) {
 }
 
 pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
-    encode_with(pcm, 4096)
+    encode_with(pcm, 4096, false)
 }
 
-fn encode_with(pcm: &Pcm, nominal: usize) -> Result<Vec<u8>> {
+/// Same encoder as [`encode`], plus one seekpoint per block.
+///
+/// `encode` does not write a seek table. This is the only path that does.
+pub fn encode_with_seek_table(pcm: &Pcm) -> Result<Vec<u8>> {
+    encode_with(pcm, 4096, true)
+}
+
+fn encode_with(pcm: &Pcm, nominal: usize, seek_table: bool) -> Result<Vec<u8>> {
     if pcm.channels == 0 || pcm.channels > 8 {
         return Err(Error::Unsupported("channel count"));
     }
@@ -875,11 +883,13 @@ fn encode_with(pcm: &Pcm, nominal: usize) -> Result<Vec<u8>> {
     let nominal = nominal.clamp(16, cap).min(per);
     let blocks = plan_blocks(per, nominal);
     let mut frames = Vec::new();
+    let mut points = Vec::new();
     let mut min_block = u16::MAX;
     let mut max_block = 0u16;
     let mut min_frame = u32::MAX;
     let mut max_frame = 0u32;
     let mut done = 0usize;
+    let mut frame_off = 0u64;
     for (idx, block) in blocks.iter().copied().enumerate() {
         let frame = write_frame(pcm, done, block, idx as u64)?;
         let flen = frame.len() as u32;
@@ -888,6 +898,10 @@ fn encode_with(pcm: &Pcm, nominal: usize) -> Result<Vec<u8>> {
         let b = block as u16;
         min_block = min_block.min(b);
         max_block = max_block.max(b);
+        if seek_table {
+            points.push((done as u64, frame_off, b));
+        }
+        frame_off += u64::from(flen);
         frames.extend_from_slice(&frame);
         done += block;
     }
@@ -906,15 +920,39 @@ fn encode_with(pcm: &Pcm, nominal: usize) -> Result<Vec<u8>> {
         per as u64,
         md5,
     );
-    let mut out = Vec::with_capacity(42 + frames.len());
+    let table = if seek_table {
+        Some(seek_table_block(&points))
+    } else {
+        None
+    };
+    let extra = table.as_ref().map(|t| t.len()).unwrap_or(0);
+    let mut out = Vec::with_capacity(42 + extra + frames.len());
     out.extend_from_slice(b"fLaC");
-    out.push(0x80);
+    out.push(if table.is_some() { 0x00 } else { 0x80 });
     out.push(0);
     out.push(0);
     out.push(34);
     out.extend_from_slice(&info);
+    if let Some(table) = table {
+        out.extend_from_slice(&table);
+    }
     out.extend_from_slice(&frames);
     Ok(out)
+}
+
+fn seek_table_block(points: &[(u64, u64, u16)]) -> Vec<u8> {
+    let len = points.len() * 18;
+    let mut out = Vec::with_capacity(4 + len);
+    out.push(0x83);
+    out.push((len >> 16) as u8);
+    out.push((len >> 8) as u8);
+    out.push(len as u8);
+    for &(sample, offset, count) in points {
+        out.extend_from_slice(&sample.to_be_bytes());
+        out.extend_from_slice(&offset.to_be_bytes());
+        out.extend_from_slice(&count.to_be_bytes());
+    }
+    out
 }
 
 fn plan_blocks(n: usize, nominal: usize) -> Vec<usize> {
@@ -1792,6 +1830,93 @@ mod tests {
     }
 
     #[test]
+    fn stereo_second_seek_table_one_point_per_block() {
+        let pcm = stereo_pcm(44_100);
+        let plain = encode(&pcm).unwrap();
+        assert_eq!(plain.len(), 87_272);
+        let bytes = encode_with_seek_table(&pcm).unwrap();
+        assert_eq!(bytes.len(), 87_474);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 2);
+        assert_eq!(back.bits, 16);
+        assert_eq!(back.sample_rate, 44_100);
+        let mut left = Vec::with_capacity(44_100);
+        let mut right = Vec::with_capacity(44_100);
+        for i in 0..44_100 {
+            assert_eq!(back.samples[i * 2], pcm.samples[i * 2]);
+            assert_eq!(back.samples[i * 2 + 1], pcm.samples[i * 2 + 1]);
+            left.push(pcm.samples[i * 2]);
+            right.push(pcm.samples[i * 2 + 1]);
+        }
+        assert_ne!(left, right);
+        let points = seek_points(&bytes).unwrap();
+        assert_eq!(points.len(), 11);
+        let mut sample = 0u64;
+        let mut offset = 0u64;
+        let audio = seek_audio_start(&bytes).unwrap();
+        for (i, (sample_n, off, count)) in points.iter().copied().enumerate() {
+            assert_eq!(sample_n, sample);
+            assert_eq!(off, offset);
+            let next = if i + 1 < points.len() {
+                audio + points[i + 1].1 as usize
+            } else {
+                bytes.len()
+            };
+            let frame_len = next - (audio + off as usize);
+            offset += frame_len as u64;
+            sample += u64::from(count);
+        }
+        assert_eq!(sample, 44_100);
+        assert_eq!(offset, (bytes.len() - audio) as u64);
+    }
+
+    fn seek_audio_start(bytes: &[u8]) -> Option<usize> {
+        if bytes.len() < 8 || &bytes[0..4] != b"fLaC" {
+            return None;
+        }
+        let mut pos = 4usize;
+        loop {
+            if pos + 4 > bytes.len() {
+                return None;
+            }
+            let last = bytes[pos] & 0x80 != 0;
+            let len = (usize::from(bytes[pos + 1]) << 16)
+                | (usize::from(bytes[pos + 2]) << 8)
+                | usize::from(bytes[pos + 3]);
+            pos += 4 + len;
+            if last {
+                return Some(pos);
+            }
+        }
+    }
+
+    fn seek_points(bytes: &[u8]) -> Option<Vec<(u64, u64, u16)>> {
+        if bytes.len() < 42 || &bytes[0..4] != b"fLaC" || bytes[4] & 0x80 != 0 {
+            return None;
+        }
+        let pos = 42usize;
+        if bytes[pos] != 0x83 {
+            return None;
+        }
+        let len = (usize::from(bytes[pos + 1]) << 16)
+            | (usize::from(bytes[pos + 2]) << 8)
+            | usize::from(bytes[pos + 3]);
+        if len % 18 != 0 || pos + 4 + len > bytes.len() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(len / 18);
+        let mut at = pos + 4;
+        while at < pos + 4 + len {
+            let sample = u64::from_be_bytes(bytes[at..at + 8].try_into().ok()?);
+            let offset = u64::from_be_bytes(bytes[at + 8..at + 16].try_into().ok()?);
+            let count = u16::from_be_bytes(bytes[at + 16..at + 18].try_into().ok()?);
+            out.push((sample, offset, count));
+            at += 18;
+        }
+        Some(out)
+    }
+
+    #[test]
     fn stereo_eight_and_twentyfour() {
         let stereo: Vec<i32> = (0..8000)
             .map(|i| {
@@ -1831,7 +1956,7 @@ mod tests {
             bits: 16,
             samples,
         };
-        let bytes = encode_with(&pcm, 16).unwrap();
+        let bytes = encode_with(&pcm, 16, false).unwrap();
         let back = decode(&bytes).unwrap();
         assert_eq!(back.samples, pcm.samples);
     }

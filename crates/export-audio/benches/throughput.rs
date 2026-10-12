@@ -1,4 +1,4 @@
-use export_audio::{decode, encode, export, hash, Dedup, Job, Output, Pcm};
+use export_audio::{decode, encode, encode_with_seek_table, export, hash, Dedup, Job, Output, Pcm};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -306,4 +306,14 @@ fn main() {
         std::hint::black_box(decode(&second_flac).expect("decode one second"));
     });
     report("second_decode", "miss", second_flac.len() as u64, &second_decode);
+
+    let sought = encode_with_seek_table(&second).expect("encode one second with seek table");
+    let sought_back = decode(&sought).expect("decode seek table file");
+    assert_eq!(sought_back.samples, second.samples, "seek table file is not exact");
+    assert_eq!(sought_back.channels, 2);
+    let sought_encode = measure(ITERS, || {
+        std::hint::black_box(encode_with_seek_table(&second).expect("encode seek table"));
+    });
+    report("second_seek_encode", "miss", second_pcm_len, &sought_encode);
+    println!("second_seek_bytes {}", sought.len());
 }
