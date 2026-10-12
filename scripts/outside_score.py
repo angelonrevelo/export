@@ -20,11 +20,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-# Advertised exact cap. app/main.py capabilities shrink_target_byte.
-SHRINK_CAP = 20_000_000
+# Byte cap per shrink kind. The advertised 20 MB maximum
+# (app/main.py shrink_target_byte) is larger than almost every phone photo, so
+# the app copies the source and a converter that only copies would score. Score
+# against caps that force a real re-encode: 1 MB for a photo, and 5 MB for
+# video (the smallest preset in static/index.html).
+SHRINK_CAP = {"phone-jpeg": 1_000_000, "heic": 1_000_000, "mp4": 5_000_000}
 
 # tests/test_meta.py: abs(mtime - want) < 2. Filesystem clocks only.
 # Not applied to converted bytes.
@@ -251,13 +256,11 @@ def python_reference(src: Path, kind: str, out_dir: Path) -> tuple[bytes, str]:
     from app.jobs import _convert_one, _pdf_to_text, _shrink_image, _shrink_video
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    if kind in {"phone-jpeg", "heic"}:
-        out = _shrink_image(src, "medium", out_dir, target_byte=SHRINK_CAP)
-        copied = src.stat().st_size <= SHRINK_CAP and out.stat().st_size == src.stat().st_size
-        return out.read_bytes(), "exact" if copied else "shrink-cap"
-    if kind == "mp4":
-        out = _shrink_video(src, "medium", out_dir, target_byte=SHRINK_CAP)
-        copied = src.stat().st_size <= SHRINK_CAP and out.stat().st_size == src.stat().st_size
+    if kind in {"phone-jpeg", "heic", "mp4"}:
+        cap = SHRINK_CAP[kind]
+        shrink = _shrink_video if kind == "mp4" else _shrink_image
+        out = shrink(src, "medium", out_dir, target_byte=cap)
+        copied = src.stat().st_size <= cap and out.stat().st_size == src.stat().st_size
         return out.read_bytes(), "exact" if copied else "shrink-cap"
     if kind == "docx":
         out = _convert_one(src, "txt", out_dir)
@@ -291,6 +294,44 @@ def _rust_output(src: Path, kind: str, out_dir: Path) -> bytes:
     return dest.read_bytes()
 
 
+def _probe_duration(data: bytes, directory: Path, name: str) -> float | None:
+    path = directory / name
+    path.write_bytes(data)
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=nw=1:nk=1", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    try:
+        return float(proc.stdout.strip())
+    except ValueError:
+        return None
+
+
+def decodes_like(reference: bytes, candidate: bytes, kind: str, directory: Path) -> bool:
+    """A shrink-cap match must be a real, decodable file, not padding behind a magic.
+
+    Images decode to the same pixel size as the app's output; video probes to
+    the same duration within half a second.
+    """
+    if kind == "mp4":
+        want = _probe_duration(reference, directory, "reference.mp4")
+        got = _probe_duration(candidate, directory, "candidate.mp4")
+        return want is not None and got is not None and abs(want - got) <= 0.5
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(reference)) as want, Image.open(io.BytesIO(candidate)) as got:
+            got.load()
+            return want.size == got.size
+    except Exception:
+        return False
+
+
 def _materialize(repo: Path, row: dict, directory: Path) -> Path:
     """Copy the source into the scratch dir; a corpus file is never written to."""
     dest = directory / Path(row["path"]).name
@@ -303,7 +344,9 @@ def _materialize(repo: Path, row: dict, directory: Path) -> Path:
 
 def score_file(repo: Path, row: dict) -> dict:
     kind = row["kind"]
-    with tempfile.TemporaryDirectory() as tmp:
+    # Windows: a converter that still holds an output file open must not abort
+    # the whole run during scratch cleanup.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         root = Path(tmp)
         src = _materialize(repo, row, root)
         size = src.stat().st_size
@@ -328,6 +371,8 @@ def score_file(repo: Path, row: dict) -> dict:
                 "reason": str(exc),
             }
         ok = within_tolerance(reference, rust, mode)
+        if ok and mode == "shrink-cap":
+            ok = decodes_like(reference, rust, kind, root)
         return {
             "path": row["path"],
             "kind": kind,
@@ -356,12 +401,20 @@ def failure_list(file_rows: list[dict]) -> list[dict]:
 
 
 def score_repository(repo: Path, corpus: Path | None = None) -> dict:
+    # python_reference imports `app`; run as `python scripts/outside_score.py`,
+    # only scripts/ is on sys.path.
+    if str(repo.resolve()) not in sys.path:
+        sys.path.insert(0, str(repo.resolve()))
     inventory = collect(repo, corpus)
     rows = [score_file(repo, row) for row in inventory["counted"]]
     matched = sum(1 for row in rows if row["match"])
     missing = [kind for kind in COUNTED_KINDS if inventory["counts"][kind] == 0]
+    reference_failed = sum(
+        1 for row in rows if row["reason"].startswith("python reference failed")
+    )
     return {
         "n": matched,
+        "reference_failed": reference_failed,
         "m": inventory["m"],
         "tolerance": TOLERANCE,
         "mtime_slack_seconds": MTIME_SLACK_SECONDS,

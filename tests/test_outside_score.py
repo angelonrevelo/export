@@ -51,6 +51,35 @@ class ToleranceTest(unittest.TestCase):
         self.assertFalse(score.within_tolerance(reference, shorter, "shrink-cap"))
         self.assertFalse(score.within_tolerance(reference, same_size, "exact"))
 
+    def _jpeg_bytes(self, size, quality):
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", size, (30, 120, 200)).save(buf, "JPEG", quality=quality)
+        return buf.getvalue()
+
+    def test_padding_behind_a_jpeg_magic_does_not_decode(self):
+        reference = self._jpeg_bytes((64, 48), 90)
+        padding = b"\xff\xd8" + b"\x00" * (len(reference) - 2)
+        self.assertTrue(score.within_tolerance(reference, padding, "shrink-cap"))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(score.decodes_like(reference, padding, "phone-jpeg", Path(tmp)))
+
+    def test_real_jpeg_of_the_same_pixel_size_decodes_like(self):
+        reference = self._jpeg_bytes((64, 48), 90)
+        other = self._jpeg_bytes((64, 48), 40)
+        wrong_size = self._jpeg_bytes((32, 24), 90)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertTrue(score.decodes_like(reference, other, "heic", Path(tmp)))
+            self.assertFalse(score.decodes_like(reference, wrong_size, "heic", Path(tmp)))
+
+    def test_shrink_caps_force_a_re_encode(self):
+        self.assertLess(score.SHRINK_CAP["phone-jpeg"], 2_000_000)
+        self.assertLess(score.SHRINK_CAP["heic"], 2_000_000)
+        self.assertEqual(score.SHRINK_CAP["mp4"], 5_000_000)
+
     def test_mtime_slack_is_not_a_byte_tolerance(self):
         self.assertEqual(score.MTIME_SLACK_SECONDS, 2)
         self.assertIn("not applied to file bytes", score.TOLERANCE)
@@ -92,7 +121,9 @@ class RepositoryScoreTest(unittest.TestCase):
         self.assertEqual(report["missing_kinds"], list(score.COUNTED_KINDS))
         self.assertEqual(report["failures"][0]["id"], "6144x4608-png-shrink")
         self.assertFalse(report["mtime_slack_applies_to_bytes"])
-        self.assertEqual(report["shrink_cap"], 20_000_000)
+        self.assertEqual(
+            report["shrink_cap"], {"phone-jpeg": 1_000_000, "heic": 1_000_000, "mp4": 5_000_000}
+        )
         for path in report["generated_excluded"]:
             self.assertTrue(score.is_generated(path), path)
         for path in report["counted"]:
