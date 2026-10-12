@@ -92,12 +92,10 @@ pub fn encode_half_scale_sine() -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Two audible frames: n = 0 through 31, then n = 32 through 63, then one more
-/// frame aimed at n = 64 through 95.
+/// Two audible frames: n = 0 through 31, then n = 32 through 63.
 ///
 /// The first frame leaves the overlap state the continuation needs, so the
-/// continuation is the second frame. The third frame does not continue that
-/// sine. This is not a song encoder.
+/// continuation is the second frame. This is not a song encoder.
 pub fn encode_half_scale_sine_pair() -> Result<Vec<u8>, Error> {
     let tone_packets = tone_packets()?;
     let (_bridge, continuation) =
@@ -124,43 +122,19 @@ pub fn encode_half_scale_sine_pair() -> Result<Vec<u8>, Error> {
         &[&first],
     ));
     out.extend(ogg_page(
-        0x00,
+        0x04,
         (FRAME_SAMPLES * 3) as u64,
         SERIAL,
         5,
         &[&continuation],
     ));
-    let third = slice_packet(
-        FRAME_SAMPLES * 2,
-        tone_packets.setup_min,
-        tone_packets.setup_step,
-    )?;
-    out.extend(ogg_page(
-        0x04,
-        (FRAME_SAMPLES * 4) as u64,
-        SERIAL,
-        6,
-        &[&third],
-    ));
     Ok(out)
 }
 
-fn slice_packet(start: usize, min: f32, step: f32) -> Result<Vec<u8>, Error> {
-    let (_delay, mut time) = dsp::overlap_pair(&sine_block(start));
-    if quantize_time(&time, min, step).is_err() {
-        // The right quarter does not change this frame's samples.
-        time[16..].fill(0.0);
-    }
-    Ok(tone_audio(&quantize_time(&time, min, step)?))
-}
-
 fn handoff_packet(min: f32, step: f32) -> Result<Vec<u8>, Error> {
-    handoff_from(0, FRAME_SAMPLES, min, step)
-}
-
-fn handoff_from(start: usize, next: usize, min: f32, step: f32) -> Result<Vec<u8>, Error> {
-    let (_delay, mut time) = dsp::overlap_pair(&sine_block(start));
-    let (bridge, _next) = dsp::overlap_pair(&sine_block(next));
+    let (_delay, first) = dsp::overlap_pair(&ideal_sine());
+    let (bridge, _continuation) = dsp::overlap_pair(&continuation_sine());
+    let mut time = first;
     time[16..].copy_from_slice(&bridge[16..]);
     Ok(tone_audio(&quantize_time(&time, min, step)?))
 }
@@ -203,19 +177,15 @@ fn tone_packets() -> Result<TonePackets, Error> {
     })
 }
 
-/// Samples `n = start..start+32` of the half-scale 440 Hz sine.
-fn sine_block(start: usize) -> [f64; FRAME_SAMPLES] {
+/// Samples `n = 32..64` of the same half-scale 440 Hz sine.
+fn continuation_sine() -> [f64; FRAME_SAMPLES] {
     let mut pcm = [0.0; FRAME_SAMPLES];
     for (offset, sample) in pcm.iter_mut().enumerate() {
-        let n = (start + offset) as f64;
+        let n = (FRAME_SAMPLES + offset) as f64;
         let phase = 2.0 * std::f64::consts::PI * 440.0 * n / f64::from(SAMPLE_RATE_HZ);
         *sample = 0.5 * phase.sin();
     }
     pcm
-}
-
-fn continuation_sine() -> [f64; FRAME_SAMPLES] {
-    sine_block(FRAME_SAMPLES)
 }
 
 fn continuation_packets(min: f32, step: f32) -> Result<(Vec<u8>, Vec<u8>), Error> {

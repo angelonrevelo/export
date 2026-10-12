@@ -53,6 +53,4 @@ pair = load(sys.argv[4])
 print(f"pair file samples={len(pair)}")
 if len(pair) >= 64:
     report("pair second", pair[32:64], 32)
-if len(pair) >= 96:
-    report("pair third", pair[64:96], 64)
 PY

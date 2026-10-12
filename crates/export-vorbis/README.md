@@ -18,6 +18,4 @@ A later frame is samples n = 32 through 63 of that sine, after the overlap frame
 
 `encode_half_scale_sine_pair` puts that continuation in the second position of a two-frame file. ffmpeg returns 64 samples. The second frame is 32 samples, peak 0.50916, error RMS 0.00597 against that sine for n = 32 through 63.
 
-A third frame in that file is n = 64 through 95. ffmpeg returns 96 samples. That frame is 32 samples, peak 0.49088, error RMS 0.61950. That error RMS is above 0.02, so the file does not continue.
-
 The same audio packet with no frame before it does not match the sine. Default ffmpeg emits 0 samples. With `-flags2 +skip_manual` it emits 32 samples, peak 0.50377, error RMS 0.25002.
