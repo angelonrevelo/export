@@ -64,6 +64,11 @@ fn main() {
         eprintln!("NOT JUDGED");
         return;
     }
+    if std::env::var_os("EXPORT_PACK_BENCH").is_some_and(|value| value == "font-roundtrip") {
+        println!("profile=release");
+        bench_font_roundtrip();
+        return;
+    }
     let data = payload(PAYLOAD);
     let dir = PathBuf::from(env_dir());
     fs::create_dir_all(&dir).expect("bench dir");
@@ -106,6 +111,7 @@ fn main() {
     bench_pdf16(&dir);
     bench_pdf32(&dir);
     bench_font();
+    bench_font_roundtrip();
 }
 
 fn bench_inflate() {
@@ -325,6 +331,35 @@ fn bench_font() {
     print_spread("font_allocs_per_mib", &allocs);
     print_spread("font_alloc_bytes_per_mib", &alloc_bytes);
     println!("note=font rate is a repeated tiny-font container copy, not a bulk font benchmark");
+}
+
+fn bench_font_roundtrip() {
+    const PASSES_RT: usize = 100;
+    let ttf = export_pack::tiny_ttf();
+    assert_eq!(ttf.len(), 492, "existing tiny font");
+    let otf = export_pack::convert_font(&ttf, export_pack::FontContainer::Otf).expect("otf");
+    let back = export_pack::convert_font(&otf, export_pack::FontContainer::Ttf).expect("ttf");
+    assert_eq!(back, ttf, "round-trip bytes");
+    let mut micros = Vec::with_capacity(PASSES_RT);
+    for _ in 0..PASSES_RT {
+        let t0 = Instant::now();
+        let otf = export_pack::convert_font(black_box(&ttf), export_pack::FontContainer::Otf)
+            .expect("otf");
+        let back = export_pack::convert_font(black_box(&otf), export_pack::FontContainer::Ttf)
+            .expect("ttf");
+        let dur = t0.elapsed();
+        assert_eq!(back, ttf);
+        micros.push(dur.as_secs_f64() * 1_000_000.0);
+    }
+    println!("font_rt_bytes_in={}", ttf.len());
+    println!("font_rt_bytes_out={}", back.len());
+    println!("font_rt_passes={PASSES_RT}");
+    println!("font_rt_us_p50={:.3}", percentile(&micros, 50.0));
+    println!("font_rt_us_p99={:.3}", percentile(&micros, 99.0));
+    println!("note=one sample is TTF to OTF to TTF and the bytes match");
+    println!(
+        "note=percentile is nearest-rank on microseconds sorted ascending, so p99 is the slow tail"
+    );
 }
 
 const PASSES: usize = 5;

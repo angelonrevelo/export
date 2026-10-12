@@ -89,6 +89,17 @@ Same 2048×1024 RGB image, stored-zlib PNG, thirty-two copies in one CBZ. 100 me
 | p50 | 84.7 MB/s |
 | p99 | 86.3 MB/s |
 
+### Font round-trip
+
+The existing 492-byte `tiny_ttf` copied TTF → OTF → TTF. 100 measured passes after one warmup, release build, `EXPORT_PACK_BENCH=font-roundtrip`. Each sample is one round-trip. The bytes matched on every pass. Percentiles are nearest-rank on microseconds sorted ascending, so p99 is the slow tail. The CBZ rows above are unchanged.
+
+| | |
+|---|---|
+| Bytes in | 492 |
+| Bytes out | 492 |
+| p50 | 1.687 µs |
+| p99 | 1.845 µs |
+
 ## Honest limits
 
 - The writer emits store only. Deflate read is stored blocks. Fixed and dynamic Huffman return an error and do not emit bytes. Zip64, encryption, and split archives return an error.
