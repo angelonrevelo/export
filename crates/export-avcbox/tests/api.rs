@@ -1,5 +1,6 @@
 use export_avcbox::{
-    box_iframe, Error, Options, IFRAME_160X160, IFRAME_320X240, IFRAME_32X32, SEQUENCE_160X160,
+    box_iframe, Error, Options, IFRAME_160X160, IFRAME_320X240, IFRAME_32X32, PAIR_320X240,
+    SEQUENCE_160X160,
 };
 
 fn opts() -> Options {
@@ -92,6 +93,35 @@ fn wider_iframe_is_one_avc1_sample() {
         box_iframe(SEQUENCE_160X160, &opts()).unwrap().mp4.len(),
         7819
     );
+}
+
+#[test]
+fn pair_is_two_320_by_240_samples() {
+    assert_eq!(PAIR_320X240.len(), 29090);
+    assert!(PAIR_320X240.starts_with(IFRAME_320X240));
+    let boxed = box_iframe(PAIR_320X240, &opts()).unwrap();
+    assert_eq!(boxed.width, 320);
+    assert_eq!(boxed.height, 240);
+    assert_eq!(boxed.samples, 2);
+    assert_eq!(boxed.mp4.len(), 29724);
+    assert!(boxed.mp4.starts_with(b"\x00\x00\x00\x20ftyp"));
+    assert_eq!(top_level(&boxed.mp4), vec!["ftyp", "moov", "mdat"]);
+    let stsz = find(&boxed.mp4, b"stsz");
+    let sample_count = u32::from_be_bytes(boxed.mp4[stsz + 12..stsz + 16].try_into().unwrap());
+    assert_eq!(sample_count, boxed.samples);
+    assert_eq!(
+        box_iframe(&PAIR_320X240[..PAIR_320X240.len() - 1], &opts()).unwrap_err(),
+        Error::Truncated
+    );
+    let prefix = box_iframe(&PAIR_320X240[..IFRAME_320X240.len()], &opts()).unwrap();
+    assert_eq!(prefix.mp4.len(), 19953);
+    assert_eq!(prefix.samples, 1);
+    assert_eq!(
+        box_iframe(SEQUENCE_160X160, &opts()).unwrap().mp4.len(),
+        7819
+    );
+    let again = box_iframe(PAIR_320X240, &opts()).unwrap();
+    assert_eq!(again.mp4, boxed.mp4);
 }
 
 #[test]
