@@ -45,11 +45,12 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
     })
 }
 
-/// Four text shapes become a text PDF. The PDF is kept only when its extracted
-/// text contains each shape. Every other file stays a miss.
+/// A generated one-shape file, and four text shapes, become a text PDF when the
+/// extracted text contains those strings. The published 2,560-byte one-shape
+/// file stays a miss. Every other file stays a miss.
 pub fn ppt_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let (input_bytes, bytes, texts) = load_texts(src)?;
-    if texts.len() != 4 {
+    if !pdf_shape_ready(input_bytes, texts.len()) {
         return Err(miss(input_bytes, "file is not four text shapes"));
     }
     let pdf = shapes_pdf(&texts).map_err(|err| miss(input_bytes, &err.message))?;
@@ -96,6 +97,13 @@ fn load_texts<R: Read + Seek>(src: &mut R) -> Result<(u64, Vec<u8>, Vec<String>)
         }
     })?;
     Ok((input_bytes, bytes, texts))
+}
+
+/// The smallest one-shape compound file is the published 2,560-byte miss.
+const ONE_SHAPE_PDF_MISS: u64 = 2560;
+
+fn pdf_shape_ready(input_bytes: u64, count: usize) -> bool {
+    count == 4 || (count == 1 && input_bytes != ONE_SHAPE_PDF_MISS)
 }
 
 fn shapes_pdf(texts: &[String]) -> Result<Vec<u8>> {
@@ -710,6 +718,22 @@ mod tests {
     }
 
     #[test]
+    fn one_shape_becomes_pdf_with_the_text() {
+        let mut text = String::new();
+        for i in 0..60 {
+            text.push_str(&format!(
+                "Sentence {i} of the generated PowerPoint text shape. "
+            ));
+        }
+        let file = ppt_text_document(&text).unwrap();
+        assert_eq!(file.len(), 5632);
+        assert_ne!(file.len() as u64, ONE_SHAPE_PDF_MISS);
+        let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        let got = crate::pdf::plain_text(&pdf).unwrap();
+        assert!(got.contains(&text), "{got}");
+    }
+
+    #[test]
     fn two_text_shapes_become_html() {
         let first = "First generated legacy PowerPoint text shape.";
         let second = "Second generated legacy PowerPoint text shape.";
@@ -811,7 +835,9 @@ mod tests {
     fn four_text_shapes_become_pdf_with_the_text() {
         let (north, east, south, west) = four_shape_fixture();
         let file = ppt_four_text_document(&north, &east, &south, &west).unwrap();
+        assert_eq!(file.len(), 7680);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        assert_eq!(pdf.len(), 6710);
         let text = crate::pdf::plain_text(&pdf).unwrap();
         assert!(text.contains(&north), "{text}");
         assert!(text.contains(&east), "{text}");
@@ -827,6 +853,7 @@ mod tests {
     #[test]
     fn fewer_shapes_stay_a_pdf_miss() {
         let file = ppt_text_document("Only one generated text shape.").unwrap();
+        assert_eq!(file.len() as u64, ONE_SHAPE_PDF_MISS);
         let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
         assert!(err.message.contains("not four text shapes"), "{err}");

@@ -1640,6 +1640,110 @@ fn report_ppt_pdf_four() {
     }
 }
 
+fn report_ppt_pdf_one() {
+    let (north, east, south, west) = ppt_html_four_texts();
+    let four = ppt_four_text_document(&north, &east, &south, &west).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let four_pdf = convert("ppt", "pdf", &four).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if four.len() != 7680 || four_pdf.len() != 6710 {
+        eprintln!(
+            "ppt four-shape pdf size changed: input_b={} output_b={}",
+            four.len(),
+            four_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let text = ppt_html_text();
+    let file = ppt_text_document(&text).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let html = convert("ppt", "html", &file).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if file.len() != 5632 || html.len() != 3193 {
+        eprintln!(
+            "ppt one-shape html size changed: input_b={} output_b={}",
+            file.len(),
+            html.len()
+        );
+        std::process::exit(1);
+    }
+    match convert("ppt", "pdf", &file) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("ppt→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            if extracted.contains(&text) {
+                let sample = measure(|| ready_bytes("ppt", "pdf", &file));
+                emit_ready("ppt→pdf one shape", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→pdf one shape p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                emit_untimed(
+                    "ppt→pdf one shape",
+                    file.len() as u64,
+                    Some(pdf.len() as u64),
+                    &format!(
+                        "MISS: pdf text does not contain the text (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains(&format!("input_b={}", file.len()))
+            {
+                eprintln!("ppt pdf one miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→pdf one shape", file.len() as u64, None, &err.message);
+        }
+    }
+    let small = ppt_text_document("Only one generated text shape.").unwrap_or_else(|err| {
+        eprintln!("ppt 2560 fixture failed: {err}");
+        std::process::exit(1);
+    });
+    if small.len() != 2560 {
+        eprintln!("2560-byte miss changed size: {}", small.len());
+        std::process::exit(1);
+    }
+    match convert("ppt", "pdf", &small) {
+        Ok(_) => {
+            eprintln!("2560-byte ppt produced pdf");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains("not four text shapes")
+                || !err.message.contains("input_b=2560")
+            {
+                eprintln!("ppt pdf 2560 miss hid the reason: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→pdf 2560", small.len() as u64, None, &err.message);
+        }
+    }
+}
+
 fn ppt_html_four_texts() -> (String, String, String, String) {
     let mut north = String::new();
     let mut east = String::new();
@@ -2145,6 +2249,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_pdf_four();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-pdf-one") {
+        println!("export-docs ppt one-shape pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_pdf_one();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {
