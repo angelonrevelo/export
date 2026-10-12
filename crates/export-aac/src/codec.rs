@@ -60,7 +60,8 @@ pub fn encode_frame(samples: &[f32]) -> Result<Vec<u8>, Error> {
 /// `previous` is the prior 1024 PCM samples, not a decoded overlap tail.
 /// The library does not store it. [`encode_second_frame`] passes
 /// [`crate::one_frame_pcm`] here. [`encode_third_frame`] passes
-/// [`crate::second_frame_pcm`].
+/// [`crate::second_frame_pcm`]. [`encode_fourth_frame`] passes
+/// [`crate::third_frame_pcm`].
 pub fn encode_frame_following(previous: &[f32], samples: &[f32]) -> Result<Vec<u8>, Error> {
     if previous.len() != FRAME_SAMPLES || samples.len() != FRAME_SAMPLES {
         return Err(Error::Invalid);
@@ -94,6 +95,12 @@ pub fn encode_second_frame() -> Result<Vec<u8>, Error> {
 /// the next 1024 samples of that same half-scale 440 Hz sine.
 pub fn encode_third_frame() -> Result<Vec<u8>, Error> {
     encode_frame_following(&crate::second_frame_pcm(), &crate::third_frame_pcm())
+}
+
+/// The recorded fourth frame: left half [`crate::third_frame_pcm`], right half
+/// the next 1024 samples of that same half-scale 440 Hz sine.
+pub fn encode_fourth_frame() -> Result<Vec<u8>, Error> {
+    encode_frame_following(&crate::third_frame_pcm(), &crate::fourth_frame_pcm())
 }
 
 /// Decode one AAC-LC ADTS frame to 1024 mono PCM samples.
@@ -134,6 +141,28 @@ pub fn decode_third_frame(
     let _ = mdct::synthesis_overlap(&spec1, &mut overlap);
     let spec2 = spectrum(third)?;
     Ok(pcm_f32(&mdct::synthesis_overlap(&spec2, &mut overlap)))
+}
+
+/// Decode `fourth` overlap-added against the tail left by `third`.
+///
+/// Earlier frames are decoded only to prime that tail. With the recorded
+/// series, the samples are [`crate::third_frame_pcm`], still one frame late.
+/// They are not [`crate::fourth_frame_pcm`].
+pub fn decode_fourth_frame(
+    first: &[u8],
+    second: &[u8],
+    third: &[u8],
+    fourth: &[u8],
+) -> Result<[f32; FRAME_SAMPLES], Error> {
+    let spec0 = spectrum(first)?;
+    let mut overlap = [0.0; FRAME_SAMPLES];
+    let _ = mdct::synthesis_overlap(&spec0, &mut overlap);
+    let spec1 = spectrum(second)?;
+    let _ = mdct::synthesis_overlap(&spec1, &mut overlap);
+    let spec2 = spectrum(third)?;
+    let _ = mdct::synthesis_overlap(&spec2, &mut overlap);
+    let spec3 = spectrum(fourth)?;
+    Ok(pcm_f32(&mdct::synthesis_overlap(&spec3, &mut overlap)))
 }
 
 fn spectrum(bytes: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
@@ -666,6 +695,46 @@ mod tests {
         let sbr = fill_frame(EXT_SBR_DATA);
         assert_eq!(
             decode_third_frame(&first, &second, &sbr).unwrap_err(),
+            Error::Unsupported
+        );
+    }
+
+    #[test]
+    fn fourth_frame_is_still_one_frame_late() {
+        let first_pcm = crate::one_frame_pcm();
+        let third_pcm = crate::third_frame_pcm();
+        let fourth_pcm = crate::fourth_frame_pcm();
+        let first = encode_frame(&first_pcm).unwrap();
+        let second = encode_second_frame().unwrap();
+        let third = encode_third_frame().unwrap();
+        let fourth = encode_fourth_frame().unwrap();
+        assert_eq!(first.len(), 513);
+        assert_eq!(second.len(), 68);
+        assert_eq!(third.len(), 94);
+        let out = decode_fourth_frame(&first, &second, &third, &fourth).unwrap();
+        let mut late = 0.0f32;
+        let mut own = 0.0f32;
+        for i in 0..FRAME_SAMPLES {
+            late = late.max((out[i] - third_pcm[i]).abs());
+            own = own.max((out[i] - fourth_pcm[i]).abs());
+        }
+        assert!(
+            late <= crate::RECORDED_FOURTH_FRAME_MAX_ABS_ERROR,
+            "fourth frame vs delayed sine {late}"
+        );
+        assert!(
+            own > 0.4,
+            "fourth frame vs its own input {own} is not one frame late"
+        );
+        let mut truncated = fourth.clone();
+        truncated.pop();
+        assert_eq!(
+            decode_fourth_frame(&first, &second, &third, &truncated).unwrap_err(),
+            Error::Truncated
+        );
+        let sbr = fill_frame(EXT_SBR_DATA);
+        assert_eq!(
+            decode_fourth_frame(&first, &second, &third, &sbr).unwrap_err(),
             Error::Unsupported
         );
     }

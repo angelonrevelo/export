@@ -1,8 +1,8 @@
 //! Mono AAC-LC ADTS frames at 44.1 kHz, 1024 samples each.
 //!
 //! This is not a song encoder. [`encode_frame`] starts from a zero history and
-//! does not keep overlap. [`encode_second_frame`] and [`encode_third_frame`]
-//! are two more frames of the same sine. Each overlap-add is one frame late.
+//! does not keep overlap. Later frames of the same sine each overlap-add one
+//! frame late.
 //! HE-AAC, SBR, and parametric stereo return [`Error::Unsupported`].
 
 #![forbid(unsafe_code)]
@@ -13,8 +13,9 @@ mod huff;
 mod mdct;
 
 pub use codec::{
-    decode_frame, decode_second_frame, decode_third_frame, encode_frame, encode_frame_following,
-    encode_second_frame, encode_third_frame, Error,
+    decode_fourth_frame, decode_frame, decode_second_frame, decode_third_frame,
+    encode_fourth_frame, encode_frame, encode_frame_following, encode_second_frame,
+    encode_third_frame, Error,
 };
 
 /// PCM samples in one AAC long-window frame.
@@ -49,6 +50,14 @@ pub const RECORDED_SECOND_FRAME_MAX_ABS_ERROR: f32 = 0.002;
 /// bound is that measurement, padded only enough to stay stable.
 pub const RECORDED_THIRD_FRAME_MAX_ABS_ERROR: f32 = 0.001;
 
+/// Recorded maximum absolute PCM error of [`decode_fourth_frame`] against
+/// [`third_frame_pcm`]. Full scale is 1.0.
+///
+/// Measured max was 0.0012165308. The fourth frame is still one frame late:
+/// overlap-add emits the third frame's sine, not [`fourth_frame_pcm`]. The
+/// bound is that measurement, padded only enough to stay stable.
+pub const RECORDED_FOURTH_FRAME_MAX_ABS_ERROR: f32 = 0.0014;
+
 /// Half-scale 440 Hz sine, 1024 samples at 44.1 kHz. This is the one frame
 /// the recorded error bound refers to.
 pub fn one_frame_pcm() -> [f32; FRAME_SAMPLES] {
@@ -69,6 +78,14 @@ pub fn second_frame_pcm() -> [f32; FRAME_SAMPLES] {
 /// of that frame emits [`second_frame_pcm`], not these samples.
 pub fn third_frame_pcm() -> [f32; FRAME_SAMPLES] {
     sine_frame(FRAME_SAMPLES * 2)
+}
+
+/// Samples 3072..4096 of the same half-scale 440 Hz sine.
+///
+/// This is the right half of [`encode_fourth_frame`]'s long window. Overlap-add
+/// of that frame emits [`third_frame_pcm`], not these samples.
+pub fn fourth_frame_pcm() -> [f32; FRAME_SAMPLES] {
+    sine_frame(FRAME_SAMPLES * 3)
 }
 
 fn sine_frame(offset: usize) -> [f32; FRAME_SAMPLES] {

@@ -3,7 +3,7 @@
 One AAC-LC ADTS frame. Mono. 44.1 kHz. 1024 samples. Long sine window. No CRC.
 
 This is not a song encoder. `encode_frame` does not keep overlap from one
-call to the next, and these three frames do not replace a multi-frame FFmpeg
+call to the next, and these four frames do not replace a multi-frame FFmpeg
 encode of a song. HE-AAC, SBR, and parametric stereo return
 `Error::Unsupported`. A truncated frame or a bad ADTS header returns an
 error. The library does not link or spawn FFmpeg.
@@ -68,6 +68,22 @@ Same profile, 200 calls. Not a throughput number for a song.
 | | p50 | p99 | output bytes |
 | --- | --- | --- | --- |
 | encode | 6.041 ms (6040873 ns) | 8.329 ms (8329276 ns) | 94 |
+
+## Fourth frame, release
+
+The fourth frame is the same mono AAC-LC long window. Its left half is the
+third frame's PCM. Its right half is the next 1024 samples of the same
+half-scale 440 Hz sine. Overlap-add against the third frame's history is
+still one frame late: it emits the third frame's sine, not its own input.
+
+Max abs error versus that delayed sine is 0.0012165308. Max abs error versus
+this frame's own samples is 0.6303679.
+
+Same profile, 200 calls. Not a throughput number for a song.
+
+| | p50 | p99 | output bytes |
+| --- | --- | --- | --- |
+| encode | 6.402 ms (6402279 ns) | 7.589 ms (7588843 ns) | 60 |
 
 ## Build
 
