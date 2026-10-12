@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.74"
 license = "MIT"
 publish = false
-description = "Streaming CSV, TSV, and JSON conversions. Zero dependencies."
+description = "Streaming CSV, TSV, and JSON, plus one-sheet XLSX. Zero dependencies."
 readme = "README.md"
 
 [[bin]]

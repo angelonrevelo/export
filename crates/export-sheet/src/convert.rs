@@ -1,4 +1,8 @@
-//! Cross-converts the three formats without holding the table.
+//! Cross-converts CSV, TSV, JSON, and one-sheet XLSX.
+//!
+//! The delimited and JSON paths do not hold the table. XLSX is a zip, so that
+//! path keeps the worksheet and the shared-string table until the package is
+//! finished.
 //!
 //! CSV and TSV share one reader. JSON is an array of objects when the
 //! delimited input has a header, or an array of arrays when it does not.
@@ -21,6 +25,7 @@ pub enum Format {
     Csv,
     Tsv,
     Json,
+    Xlsx,
 }
 
 impl Format {
@@ -29,6 +34,7 @@ impl Format {
             Format::Csv => "csv",
             Format::Tsv => "tsv",
             Format::Json => "json",
+            Format::Xlsx => "xlsx",
         }
     }
 
@@ -36,7 +42,7 @@ impl Format {
         match self {
             Format::Csv => Some(b','),
             Format::Tsv => Some(b'\t'),
-            Format::Json => None,
+            Format::Json | Format::Xlsx => None,
         }
     }
 }
@@ -75,6 +81,9 @@ pub fn convert<R: BufRead, W: Write>(
     mut output: W,
     options: Options,
 ) -> Result<Stats> {
+    if from == Format::Xlsx || to == Format::Xlsx {
+        return convert_xlsx(from, to, input, &mut output);
+    }
     match (from.delim(), to.delim()) {
         (Some(src_delim), Some(dst_delim)) => {
             delim_to_delim(input, &mut output, src_delim, dst_delim)
@@ -94,6 +103,21 @@ pub fn convert_bytes(
     let mut out = Vec::new();
     let stats = convert(from, to, std::io::Cursor::new(input), &mut out, options)?;
     Ok((out, stats))
+}
+
+fn convert_xlsx<R: BufRead, W: Write>(
+    from: Format,
+    to: Format,
+    input: R,
+    output: &mut W,
+) -> Result<Stats> {
+    match (from, to) {
+        (Format::Csv, Format::Xlsx) => crate::xlsx::delim_to_xlsx(input, output, b','),
+        (Format::Tsv, Format::Xlsx) => crate::xlsx::delim_to_xlsx(input, output, b'\t'),
+        (Format::Xlsx, Format::Csv) => crate::xlsx::xlsx_to_delim(input, output, b','),
+        (Format::Xlsx, Format::Tsv) => crate::xlsx::xlsx_to_delim(input, output, b'\t'),
+        _ => Err(Error::new("xlsx converts to and from csv and tsv")),
+    }
 }
 
 fn delim_to_delim<R: BufRead, W: Write>(
