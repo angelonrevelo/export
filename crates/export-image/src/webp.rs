@@ -4,8 +4,9 @@
 //! and `ANMF`. A two-frame or four-frame animation is a `VP8X`/`ANIM`/`ANMF`
 //! wrapper around `VP8 ` keyframes from the existing encoder. That wrapper is not an
 //! entropy coder. The first frame is the canvas. A later frame may be a smaller
-//! rectangle at an even pixel origin and comes back at that size with that origin.
-//! An odd origin, alpha, ICC, EXIF, and XMP stay errors. There is no compositor.
+//! rectangle at an even pixel origin. The decoder paints that rectangle onto the
+//! canvas and returns the canvas. An odd origin, alpha, ICC, EXIF, and XMP stay
+//! errors. There is no loop filter.
 
 use crate::error::{Error, INVALID, TRUNCATED, UNSUPPORTED};
 use crate::raster::Raster;
@@ -109,11 +110,11 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Frames of an animation this crate wrote, in order. A frame smaller than
-/// the canvas comes back at its own size with [`Raster::x`] and [`Raster::y`]
-/// set to its origin. It is not painted onto the canvas. [`decode_webp`] still
-/// returns [`UNSUPPORTED`] for the same bytes, because that function returns
-/// one raster.
+/// Frames of an animation this crate wrote, in order. Each frame is the canvas
+/// after that frame's rectangle is painted on. A smaller rectangle overwrites
+/// its pixels and leaves the rest of the previous canvas in place. [`decode_webp`]
+/// still returns [`UNSUPPORTED`] for the same bytes, because that function
+/// returns one raster.
 pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     let end = riff_end(bytes)?;
     let vp8x = read_chunk(bytes, 12, end)?;
@@ -137,6 +138,7 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     }
     let mut at = anim.next;
     let mut frames = Vec::new();
+    let mut canvas = None;
     while at < end {
         let anmf = read_chunk(bytes, at, end)?;
         if &anmf.tag != b"ANMF" {
@@ -151,7 +153,12 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
         let frame_h = read_u24(&anmf.payload[9..12]).wrapping_add(1);
         let right = origin_x.saturating_add(frame_w);
         let bottom = origin_y.saturating_add(frame_h);
-        if frame_w == 0 || frame_h == 0 || right > canvas_w || bottom > canvas_h {
+        if anmf.payload[15] != NO_BLEND
+            || frame_w == 0
+            || frame_h == 0
+            || right > canvas_w
+            || bottom > canvas_h
+        {
             return Err(UNSUPPORTED);
         }
         let mut raster = decode_frame(&anmf.payload[16..])?;
@@ -160,13 +167,55 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
         }
         raster.x = origin_x;
         raster.y = origin_y;
-        frames.push(raster);
+        frames.push(paint(&mut canvas, &raster, canvas_w, canvas_h)?);
         at = anmf.next;
     }
     if frames.len() != 2 && frames.len() != 4 {
         return Err(UNSUPPORTED);
     }
     Ok(frames)
+}
+
+fn paint(
+    canvas: &mut Option<Raster>,
+    frame: &Raster,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Result<Raster, Error> {
+    if frame.x == 0 && frame.y == 0 && frame.width == canvas_w && frame.height == canvas_h {
+        let mut full = frame.clone();
+        full.x = 0;
+        full.y = 0;
+        *canvas = Some(full.clone());
+        return Ok(full);
+    }
+    if canvas.is_none() {
+        let bytes = (canvas_w as usize)
+            .saturating_mul(canvas_h as usize)
+            .saturating_mul(frame.channels as usize);
+        *canvas = Some(Raster::new(
+            canvas_w,
+            canvas_h,
+            frame.channels,
+            vec![0; bytes],
+        )?);
+    }
+    let Some(base) = canvas.as_mut() else {
+        return Err(INVALID);
+    };
+    if base.channels != frame.channels || base.width != canvas_w || base.height != canvas_h {
+        return Err(INVALID);
+    }
+    let channels = frame.channels as usize;
+    let dst_stride = canvas_w as usize * channels;
+    let src_stride = frame.width as usize * channels;
+    for row in 0..frame.height as usize {
+        let src = row * src_stride;
+        let dst = (frame.y as usize + row) * dst_stride + frame.x as usize * channels;
+        base.pixels[dst..dst + src_stride]
+            .copy_from_slice(&frame.pixels[src..src + src_stride]);
+    }
+    Ok(base.clone())
 }
 
 fn anmf(x: u32, y: u32, width: u32, height: u32, bitstream: &[u8]) -> Vec<u8> {
@@ -298,6 +347,38 @@ mod tests {
             pixels.extend_from_slice(&rgb);
         }
         Raster::new(16, 16, 3, pixels).unwrap()
+    }
+
+    fn overlay_matches(canvas: &Raster, tile: &Raster, x: u32, y: u32, got: &Raster) -> bool {
+        if got.width != canvas.width
+            || got.height != canvas.height
+            || got.channels != canvas.channels
+            || got.x != 0
+            || got.y != 0
+        {
+            return false;
+        }
+        let ch = canvas.channels as usize;
+        let stride = canvas.width as usize * ch;
+        let tile_stride = tile.width as usize * ch;
+        for row in 0..canvas.height as usize {
+            for col in 0..canvas.width as usize {
+                let covered = (col as u32) >= x
+                    && (col as u32) < x + tile.width
+                    && (row as u32) >= y
+                    && (row as u32) < y + tile.height;
+                let at = row * stride + col * ch;
+                if covered {
+                    let sr = (row - y as usize) * tile_stride + (col - x as usize) * ch;
+                    if got.pixels[at..at + ch] != tile.pixels[sr..sr + ch] {
+                        return false;
+                    }
+                } else if got.pixels[at..at + ch] != canvas.pixels[at..at + ch] {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     #[test]
@@ -578,16 +659,12 @@ mod tests {
         assert_eq!(back.len(), 2);
         assert_eq!(back[0].width, 64);
         assert_eq!(back[0].height, 64);
-        assert_eq!(back[1].width, 16);
-        assert_eq!(back[1].height, 16);
+        assert_eq!(back[1].width, 64);
+        assert_eq!(back[1].height, 64);
         let still_full = decode_webp(&encode_webp_lossy(&full).unwrap()).unwrap();
         let still_tile = decode_webp(&encode_webp_lossy(&tile).unwrap()).unwrap();
         assert_eq!(back[0].pixels, still_full.pixels);
-        assert_eq!(back[1].pixels, still_tile.pixels);
-        assert_eq!(back[0].x, 0);
-        assert_eq!(back[0].y, 0);
-        assert_eq!(back[1].x, 0);
-        assert_eq!(back[1].y, 0);
+        assert!(overlay_matches(&still_full, &still_tile, 0, 0, &back[1]));
         let mut shifted = file.clone();
         let mut at = 12usize;
         let end = 8 + u32::from_le_bytes(shifted[4..8].try_into().unwrap()) as usize;
@@ -632,9 +709,9 @@ mod tests {
         assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
         let back = decode_webp_animation(&file).unwrap();
         assert_eq!(back.len(), 2);
-        assert_eq!((back[0].x, back[0].y, back[0].width, back[0].height), (0, 0, 64, 64));
-        assert_eq!((back[1].x, back[1].y, back[1].width, back[1].height), (16, 32, 16, 16));
+        let still_full = decode_webp(&encode_webp_lossy(&full).unwrap()).unwrap();
         let still_tile = decode_webp(&encode_webp_lossy(&tile).unwrap()).unwrap();
-        assert_eq!(back[1].pixels, still_tile.pixels);
+        assert_eq!(back[0].pixels, still_full.pixels);
+        assert!(overlay_matches(&still_full, &still_tile, 16, 32, &back[1]));
     }
 }

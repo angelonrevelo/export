@@ -69,6 +69,38 @@ fn mb_s(bytes: f64, nanos: u128) -> f64 {
     (bytes / 1_000_000.0) / (nanos as f64 / 1_000_000_000.0)
 }
 
+fn overlay_matches(canvas: &Raster, tile: &Raster, x: u32, y: u32, got: &Raster) -> bool {
+    if got.width != canvas.width
+        || got.height != canvas.height
+        || got.channels != canvas.channels
+        || got.x != 0
+        || got.y != 0
+    {
+        return false;
+    }
+    let ch = canvas.channels as usize;
+    let stride = canvas.width as usize * ch;
+    let tile_stride = tile.width as usize * ch;
+    for row in 0..canvas.height as usize {
+        for col in 0..canvas.width as usize {
+            let covered = (col as u32) >= x
+                && (col as u32) < x + tile.width
+                && (row as u32) >= y
+                && (row as u32) < y + tile.height;
+            let at = row * stride + col * ch;
+            if covered {
+                let sr = (row - y as usize) * tile_stride + (col - x as usize) * ch;
+                if got.pixels[at..at + ch] != tile.pixels[sr..sr + ch] {
+                    return false;
+                }
+            } else if got.pixels[at..at + ch] != canvas.pixels[at..at + ch] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn gradient(w: u32, h: u32) -> Raster {
     let mut pixels = Vec::with_capacity((w * h * 3) as usize);
     for y in 0..h {
@@ -723,12 +755,8 @@ fn main() {
     let still_canvas = decode_webp(&encode_webp_lossy(&partial[0]).unwrap()).unwrap();
     let still_tile = decode_webp(&encode_webp_lossy(&partial[1]).unwrap()).unwrap();
     let both_part = decoded_part.len() == 2
-        && decoded_part[0].width == 64
-        && decoded_part[0].height == 64
         && decoded_part[0].pixels == still_canvas.pixels
-        && decoded_part[1].width == 16
-        && decoded_part[1].height == 16
-        && decoded_part[1].pixels == still_tile.pixels;
+        && overlay_matches(&still_canvas, &still_tile, 0, 0, &decoded_part[1]);
     println!(
         "webp_anim64_partial_decode frames={} both_frames={both_part} still_match={both_part} single_raster_errors={}",
         decoded_part.len(),
@@ -761,16 +789,38 @@ fn main() {
         allocs as f64 / (anim_placed_pixels / 1_000_000.0),
     );
     let decoded_placed = decode_webp_animation(&anim_placed).unwrap();
+    let still_placed_canvas = decode_webp(&encode_webp_lossy(&placed[0]).unwrap()).unwrap();
     let still_placed = decode_webp(&encode_webp_lossy(&placed[1]).unwrap()).unwrap();
     let placed_ok = decoded_placed.len() == 2
-        && decoded_placed[1].x == 16
-        && decoded_placed[1].y == 32
-        && decoded_placed[1].width == 16
-        && decoded_placed[1].height == 16
-        && decoded_placed[1].pixels == still_placed.pixels;
+        && decoded_placed[0].pixels == still_placed_canvas.pixels
+        && overlay_matches(&still_placed_canvas, &still_placed, 16, 32, &decoded_placed[1]);
     println!(
         "webp_anim64_placed_decode frames={} at_origin={placed_ok} still_match={placed_ok} single_raster_errors={}",
         decoded_placed.len(),
         decode_webp(&anim_placed).is_err(),
+    );
+
+    // Decode timing for the composited canvas. The encode rows above are unchanged.
+    for _ in 0..2 {
+        let _ = decode_webp_animation(&anim_placed).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(decode_webp_animation(black_box(&anim_placed)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let composited = decode_webp_animation(&anim_placed).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let composited_pixels = 64.0 * 64.0 * 2.0;
+    let overlay = composited.len() == 2
+        && composited[0].pixels == still_placed_canvas.pixels
+        && overlay_matches(&still_placed_canvas, &still_placed, 16, 32, &composited[1]);
+    println!(
+        "webp_anim64_paint_decode canvas=64x64 frames=2 origin=16,32 tile=16x16 samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2} overlay={overlay}",
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(composited_pixels * 3.0, p50),
+        mb_s(composited_pixels * 3.0, p99),
+        mb_s(anim_placed.len() as f64, p50),
+        allocs as f64 / (composited_pixels / 1_000_000.0),
     );
 }
