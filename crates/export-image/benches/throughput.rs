@@ -435,4 +435,45 @@ fn main() {
         decoded4.len(),
         decode_webp(&anim4).is_err(),
     );
+
+    // Appended 64×64 two-frame animation. The 16×16 rows above are unchanged.
+    let mut wide = Vec::with_capacity(2);
+    for rgb in [[220u8, 40, 60], [20, 180, 90]] {
+        let mut pixels = vec![0u8; 64 * 64 * 3];
+        for px in pixels.chunks_exact_mut(3) {
+            px.copy_from_slice(&rgb);
+        }
+        wide.push(Raster::new(64, 64, 3, pixels).unwrap());
+    }
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&wide).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&wide)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim64 = encode_webp_animation(&wide).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim64_pixels = 64.0 * 64.0 * 2.0;
+    println!(
+        "webp_anim64_encode 64x64 frames=2 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim64.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim64_pixels * 3.0, p50),
+        mb_s(anim64_pixels * 3.0, p99),
+        mb_s(anim64.len() as f64, p50),
+        allocs as f64 / (anim64_pixels / 1_000_000.0),
+    );
+    let decoded64 = decode_webp_animation(&anim64).unwrap();
+    let still64_a = decode_webp(&encode_webp_lossy(&wide[0]).unwrap()).unwrap();
+    let still64_b = decode_webp(&encode_webp_lossy(&wide[1]).unwrap()).unwrap();
+    let both64 = decoded64.len() == 2
+        && decoded64[0].pixels == still64_a.pixels
+        && decoded64[1].pixels == still64_b.pixels;
+    println!(
+        "webp_anim64_decode frames={} both_frames={both64} single_raster_errors={}",
+        decoded64.len(),
+        decode_webp(&anim64).is_err(),
+    );
 }
