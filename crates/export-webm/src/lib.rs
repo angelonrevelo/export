@@ -143,6 +143,7 @@ pub fn vp8_460800_opus_vorbis_webm() -> Vec<u8> {
     take_fresh(&mut vorbis_track.number, &mut numbers);
     take_fresh(&mut vorbis_track.uid, &mut uids);
     let video_blocks = vp8.blocks.len();
+    let opus_blocks = opus.blocks.len();
     let mut blocks = vp8.blocks;
     for mut block in opus.blocks {
         if block.track == opus_src {
@@ -156,9 +157,10 @@ pub fn vp8_460800_opus_vorbis_webm() -> Vec<u8> {
         }
         blocks.push(block);
     }
-    // Video stays in the first cluster. Audio opens a second cluster.
-    // Absolute timestamps stay the same. Payloads are not changed.
-    open_second_cluster(&mut blocks, video_blocks);
+    // Video stays in the first cluster. Opus opens a second cluster.
+    // Vorbis opens a third. Absolute timestamps stay the same.
+    // Payloads are not changed.
+    open_audio_clusters(&mut blocks, video_blocks, opus_blocks);
     let movie = Movie {
         doctype: "webm".to_owned(),
         timestamp_scale: vp8.timestamp_scale,
@@ -168,20 +170,27 @@ pub fn vp8_460800_opus_vorbis_webm() -> Vec<u8> {
     remux(&movie).expect("460800-byte vp8, opus, and vorbis webm")
 }
 
-fn open_second_cluster(blocks: &mut [MediaBlock], video_blocks: usize) {
+fn open_audio_clusters(blocks: &mut [MediaBlock], video_blocks: usize, opus_blocks: usize) {
     if video_blocks == 0 || blocks.len() <= video_blocks {
         return;
     }
     let first = blocks[0].cluster_timestamp;
-    if blocks[video_blocks].cluster_timestamp != first {
+    let opus_end = video_blocks.saturating_add(opus_blocks);
+    if opus_end > blocks.len() || blocks[video_blocks].cluster_timestamp != first {
         return;
     }
-    let second = first.saturating_add(1);
-    let second_i64 = i64::try_from(second).expect("cluster timestamp");
-    for block in &mut blocks[video_blocks..] {
-        let rel = block.timestamp() - second_i64;
-        block.cluster_timestamp = second;
-        block.rel_timestamp = i16::try_from(rel).expect("audio relative timestamp");
+    place_cluster(&mut blocks[video_blocks..opus_end], first.saturating_add(1));
+    if opus_end < blocks.len() && blocks[opus_end].cluster_timestamp == first {
+        place_cluster(&mut blocks[opus_end..], first.saturating_add(2));
+    }
+}
+
+fn place_cluster(blocks: &mut [MediaBlock], cluster: u64) {
+    let cluster_i64 = i64::try_from(cluster).expect("cluster timestamp");
+    for block in blocks {
+        let rel = block.timestamp() - cluster_i64;
+        block.cluster_timestamp = cluster;
+        block.rel_timestamp = i16::try_from(rel).expect("relative timestamp");
     }
 }
 
@@ -830,12 +839,12 @@ mod tests {
         assert_eq!(parsed.tracks[1].codec_id, crate::ebml::CODEC_OPUS);
         assert_eq!(parsed.tracks[2].codec_id, crate::ebml::CODEC_VORBIS);
         let (clusters, cues) = clusters_and_cues(&file);
-        assert_eq!(clusters.len(), 2);
-        assert_eq!(cues.len(), 2);
-        assert_eq!(cues[0].1, clusters[0]);
-        assert_eq!(cues[1].1, clusters[1]);
-        assert_ne!(clusters[0], clusters[1]);
-        assert_eq!(cluster_count(&parsed.blocks), 2);
+        assert_eq!(clusters.len(), 3);
+        assert_eq!(cues.len(), 3);
+        for (cue, cluster) in cues.iter().zip(clusters.iter()) {
+            assert_eq!(cue.1, *cluster);
+        }
+        assert_eq!(cluster_count(&parsed.blocks), 3);
         assert!(!has_cues(&vp8_460800_opus_webm()));
         let vp8_blocks: Vec<_> = parsed
             .blocks
@@ -872,11 +881,12 @@ mod tests {
         assert_eq!(again.tracks[1].codec_id, crate::ebml::CODEC_OPUS);
         assert_eq!(again.tracks[2].codec_id, crate::ebml::CODEC_VORBIS);
         let (copied_clusters, copied_cues) = clusters_and_cues(&copied.bytes);
-        assert_eq!(copied_clusters.len(), 2);
-        assert_eq!(copied_cues.len(), 2);
-        assert_eq!(copied_cues[0].1, copied_clusters[0]);
-        assert_eq!(copied_cues[1].1, copied_clusters[1]);
-        assert_eq!(cluster_count(&again.blocks), 2);
+        assert_eq!(copied_clusters.len(), 3);
+        assert_eq!(copied_cues.len(), 3);
+        for (cue, cluster) in copied_cues.iter().zip(copied_clusters.iter()) {
+            assert_eq!(cue.1, *cluster);
+        }
+        assert_eq!(cluster_count(&again.blocks), 3);
         assert_eq!(again.blocks.len(), parsed.blocks.len());
         for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
             assert_eq!(left.payload, right.payload);

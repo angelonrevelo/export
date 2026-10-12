@@ -120,7 +120,7 @@ fn main() {
         &vp8_460800_opus_ns,
     );
     print_copy_row(
-        "vp8_460800_opus_vorbis_two_clusters",
+        "vp8_460800_opus_vorbis_three_clusters",
         &vp8_460800_opus_vorbis,
         &vp8_460800_opus_vorbis_out,
         &vp8_460800_opus_vorbis_ns,
