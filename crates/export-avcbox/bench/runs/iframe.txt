@@ -1,0 +1,17 @@
+# Release bench, threading off.
+# opt-level 3, lto thin, codegen-units 1.
+# 200 calls after 20 warmup. One process, no other threads.
+# input_bytes=272 output_bytes=888
+
+# Immediately after linking
+release_p50_ns=33967
+release_p99_ns=47958
+
+# Four later runs on that same binary (p50_ns p99_ns)
+31271 33805
+30209 43627
+30307 41292
+32692 39124
+
+# Host identify, after the file was written. ffmpeg reported:
+# Stream #0:0: Video: h264 (Constrained Baseline) (avc1), yuv420p, 32x32

@@ -1,0 +1,19 @@
+# Release bench, threading off. 320x240 I-frame plus one P-frame.
+# opt-level 3, lto thin, codegen-units 1.
+# 200 calls after 20 warmup. One process, no other threads.
+# input_bytes=29090 output_bytes=29724 width=320 height=240 samples=2
+
+# Immediately after linking
+release_p50_ns=4023270
+release_p99_ns=5397145
+
+# Four later runs on that same binary (p50_ns p99_ns)
+3967198 4243110
+3961751 4488919
+4020310 4425321
+4023005 4636733
+
+# Host identify, after the file was written. ffmpeg reported:
+# Stream #0:0: Video: h264 (Constrained Baseline) (avc1), yuv420p, 320x240
+# frame=2
+# ffprobe nb_read_frames=2

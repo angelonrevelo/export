@@ -1,0 +1,19 @@
+# Release bench, threading off. 1280x720 I-frame plus seven zero-motion P-frames. Level 3.1.
+# opt-level 3, lto thin, codegen-units 1.
+# 200 calls after 20 warmup. One process, no other threads.
+# input_bytes=363671 output_bytes=364293 width=1280 height=720 samples=8
+
+# Immediately after linking
+release_p50_ns=48307069
+release_p99_ns=52865097
+
+# Four later runs on that same binary (p50_ns p99_ns)
+48153944 61492409
+48019622 50752189
+48213807 53717925
+48134985 51719680
+
+# Host identify, after the file was written. ffmpeg reported:
+# Stream #0:0: Video: h264 (Constrained Baseline) (avc1), yuv420p, 1280x720
+# frame=8
+# ffprobe level=31 profile=Constrained Baseline nb_read_frames=8
