@@ -409,4 +409,13 @@ fn main() {
     });
     report("aligned_stereo_encode", "miss", aligned_st_pcm, &aligned_st_encode);
     println!("aligned_stereo_bytes {}", aligned_st_flac.len());
+    let aligned_st_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&aligned_st_flac).expect("decode aligned stereo"));
+    });
+    report(
+        "aligned_stereo_decode",
+        "miss",
+        aligned_st_flac.len() as u64,
+        &aligned_st_decode,
+    );
 }
