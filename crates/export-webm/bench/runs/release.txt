@@ -1,13 +1,9 @@
 # One host measurement. Not a comparison and not a speedup claim.
-# Release bench, threading off (`cargo bench -j 1`). 2000 copy samples and 2000 truncated-input errors.
+# Release bench, threading off (`cargo bench -j 1`).
+# Copy rows are copy-only. Truncated errors are a separate row.
+# mb_s is input bytes / p50 seconds / 1_000_000.
 
-samples=2000
 threading=off
-p50_ns=2432
-p99_ns=3077
-copy_p50_ns=2518
-copy_p99_ns=3130
-copy_p50_mib_s=78.778
-truncated_errors=2000
-truncated_p50_ns=575
-truncated_p99_ns=729
+row=2x2 samples=2000 input_bytes=208 output_bytes=208 p50_ns=2702 p99_ns=3882 mb_s=76.980
+row=large samples=400 input_bytes=460999 output_bytes=460999 p50_ns=1968232 p99_ns=2233795 mb_s=234.220
+row=truncated samples=2000 input_bytes=104 p50_ns=562 p99_ns=736

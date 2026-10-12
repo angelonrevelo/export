@@ -1,60 +1,95 @@
-//! Single-threaded release bench. Prints p50 and p99.
-//! The sample set includes the truncated-input error.
+//! Single-threaded release bench.
+//! Copy rows are copy-only. The truncated error is its own row.
 //! This process does not spawn threads.
 
-use export_webm::{sample_file, stream_copy, Error};
+use export_webm::{large_sample_file, sample_file, stream_copy, Error};
 use std::time::Instant;
 
 fn main() {
-    let file = sample_file();
-    let mut truncated = file.clone();
+    let small = sample_file();
+    let large = large_sample_file();
+    let mut truncated = small.clone();
     truncated.truncate(truncated.len() / 2);
 
-    const N: usize = 2000;
-    let mut copy_ns = Vec::with_capacity(N);
-    let mut truncated_ns = Vec::with_capacity(N);
+    let small_out = stream_copy(&small).expect("2x2 copies").bytes;
+    let large_out = stream_copy(&large).expect("large copies").bytes;
+    assert_eq!(
+        stream_copy(&truncated).expect_err("truncated fails"),
+        Error::Truncated
+    );
 
-    for _ in 0..32 {
-        let _ = stream_copy(&file);
+    const N_SMALL: usize = 2000;
+    const N_LARGE: usize = 400;
+
+    for _ in 0..16 {
+        let _ = stream_copy(&small);
+        let _ = stream_copy(&large);
         let _ = stream_copy(&truncated);
     }
 
-    for _ in 0..N {
-        let start = Instant::now();
-        let copied = stream_copy(&file).expect("sample copies");
-        copy_ns.push(start.elapsed().as_nanos());
-        assert!(!copied.bytes.is_empty());
+    let small_ns = time_copy(&small, small_out.len(), N_SMALL);
+    let large_ns = time_copy(&large, large_out.len(), N_LARGE);
+    let truncated_ns = time_truncated(&truncated, N_SMALL);
 
+    println!("threading=off");
+    print_copy_row("2x2", &small, &small_out, &small_ns);
+    print_copy_row("large", &large, &large_out, &large_ns);
+    print_truncated_row(&truncated, &truncated_ns);
+}
+
+fn time_copy(input: &[u8], expected_len: usize, samples: usize) -> Vec<u128> {
+    let mut times = Vec::with_capacity(samples);
+    for _ in 0..samples {
         let start = Instant::now();
-        let err = stream_copy(&truncated).expect_err("truncated fails");
-        truncated_ns.push(start.elapsed().as_nanos());
+        let copied = stream_copy(input).expect("copy");
+        let elapsed = start.elapsed().as_nanos();
+        assert_eq!(copied.bytes.len(), expected_len);
+        times.push(elapsed);
+    }
+    times.sort_unstable();
+    times
+}
+
+fn time_truncated(input: &[u8], samples: usize) -> Vec<u128> {
+    let mut times = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let start = Instant::now();
+        let err = stream_copy(input).expect_err("truncated");
+        times.push(start.elapsed().as_nanos());
         assert_eq!(err, Error::Truncated);
     }
+    times.sort_unstable();
+    times
+}
 
-    copy_ns.sort_unstable();
-    truncated_ns.sort_unstable();
-    let mut all = copy_ns.clone();
-    all.extend_from_slice(&truncated_ns);
-    all.sort_unstable();
+fn print_copy_row(name: &str, input: &[u8], output: &[u8], times: &[u128]) {
+    let p50 = percentile(times, 50.0);
+    let p99 = percentile(times, 99.0);
+    println!(
+        "row={name} samples={} input_bytes={} output_bytes={} p50_ns={p50} p99_ns={p99} mb_s={:.3}",
+        times.len(),
+        input.len(),
+        output.len(),
+        mb_s(input.len(), p50),
+    );
+}
 
-    let copy_p50 = percentile(&copy_ns, 50.0);
-    let bytes = file.len() as f64;
-    let copy_p50_mib_s = if copy_p50 == 0 {
-        0.0
-    } else {
-        (bytes / (copy_p50 as f64 / 1e9)) / (1024.0 * 1024.0)
-    };
+fn print_truncated_row(input: &[u8], times: &[u128]) {
+    let p50 = percentile(times, 50.0);
+    let p99 = percentile(times, 99.0);
+    println!(
+        "row=truncated samples={} input_bytes={} p50_ns={p50} p99_ns={p99}",
+        times.len(),
+        input.len(),
+    );
+}
 
-    println!("samples={N}");
-    println!("threading=off");
-    println!("p50_ns={}", percentile(&all, 50.0));
-    println!("p99_ns={}", percentile(&all, 99.0));
-    println!("copy_p50_ns={copy_p50}");
-    println!("copy_p99_ns={}", percentile(&copy_ns, 99.0));
-    println!("copy_p50_mib_s={copy_p50_mib_s:.3}");
-    println!("truncated_errors={N}");
-    println!("truncated_p50_ns={}", percentile(&truncated_ns, 50.0));
-    println!("truncated_p99_ns={}", percentile(&truncated_ns, 99.0));
+/// Decimal megabytes per second from input bytes and the p50 copy time.
+fn mb_s(input_bytes: usize, p50_ns: u128) -> f64 {
+    if p50_ns == 0 {
+        return 0.0;
+    }
+    (input_bytes as f64) / (p50_ns as f64 / 1e9) / 1_000_000.0
 }
 
 fn percentile(sorted: &[u128], pct: f64) -> u128 {

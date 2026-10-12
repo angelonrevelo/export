@@ -6,11 +6,19 @@ fn main() -> ExitCode {
     let path = match env::args().nth(1) {
         Some(path) => path,
         None => {
-            eprintln!("usage: write_sample OUTPUT.webm");
+            eprintln!("usage: write_sample OUTPUT.webm [2x2|large]");
             return ExitCode::from(2);
         }
     };
-    let input = export_webm::sample_file();
+    let kind = env::args().nth(2).unwrap_or_else(|| "2x2".to_owned());
+    let input = match kind.as_str() {
+        "2x2" | "small" => export_webm::sample_file(),
+        "large" => export_webm::large_sample_file(),
+        _ => {
+            eprintln!("usage: write_sample OUTPUT.webm [2x2|large]");
+            return ExitCode::from(2);
+        }
+    };
     let copied = match export_webm::stream_copy(&input) {
         Ok(copied) => copied,
         Err(err) => {

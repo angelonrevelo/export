@@ -4,14 +4,23 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-out=$(mktemp "${TMPDIR:-/tmp}/export-webm.XXXXXX.webm")
-trap 'rm -f "$out"' EXIT INT TERM
+small=$(mktemp "${TMPDIR:-/tmp}/export-webm-2x2.XXXXXX.webm")
+large=$(mktemp "${TMPDIR:-/tmp}/export-webm-large.XXXXXX.webm")
+trap 'rm -f "$small" "$large"' EXIT INT TERM
 
-cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$out"
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$small" 2x2
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$large" large
 
 # `ffmpeg -i` exits 1 when no output is requested. Rejection is a missing
 # container line, not that exit code.
-log=$(ffmpeg -hide_banner -i "$out" 2>&1 || true)
-printf '%s\n' "$log"
-printf '%s\n' "$log" | grep -E 'Input #0, (matroska|webm)' >/dev/null
-echo "identified $(printf '%s\n' "$log" | grep -E 'Input #0, (matroska|webm)' | head -n 1)"
+identify() {
+  label=$1
+  file=$2
+  log=$(ffmpeg -hide_banner -i "$file" 2>&1 || true)
+  printf '%s\n' "$log"
+  printf '%s\n' "$log" | grep -E 'Input #0, (matroska|webm)' >/dev/null
+  echo "identified $label $(printf '%s\n' "$log" | grep -E 'Input #0, (matroska|webm)' | head -n 1)"
+}
+
+identify 2x2 "$small"
+identify large "$large"

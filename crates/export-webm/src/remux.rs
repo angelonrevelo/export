@@ -191,3 +191,49 @@ pub fn sample_movie() -> Movie {
 pub fn sample_file() -> Vec<u8> {
     remux(&sample_movie()).expect("sample movie is valid")
 }
+
+/// One uncompressed track and four SimpleBlocks.
+///
+/// The payload is 320×240 I420 frames, 460800 bytes in total. The codec id
+/// is not VP8, VP9, Opus, or Vorbis.
+pub fn large_sample_movie() -> Movie {
+    const WIDTH: usize = 320;
+    const HEIGHT: usize = 240;
+    const FRAMES: usize = 4;
+    let frame_bytes = WIDTH * HEIGHT * 3 / 2;
+    let mut blocks = Vec::with_capacity(FRAMES);
+    for index in 0..FRAMES {
+        let mut payload = vec![0u8; frame_bytes];
+        for (i, byte) in payload.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_add(index as u8);
+        }
+        blocks.push(MediaBlock {
+            track: 1,
+            cluster_timestamp: 0,
+            rel_timestamp: (index as i16) * 40,
+            flags: if index == 0 { 0x80 } else { 0x00 },
+            payload,
+        });
+    }
+    Movie {
+        doctype: "matroska".to_owned(),
+        timestamp_scale: 1_000_000,
+        tracks: vec![Track {
+            number: 1,
+            uid: 1,
+            track_type: 1,
+            codec_id: "V_UNCOMPRESSED".to_owned(),
+            codec_private: None,
+            pixel_width: Some(WIDTH as u64),
+            pixel_height: Some(HEIGHT as u64),
+            colour_space: Some(b"I420".to_vec()),
+            sampling_frequency: None,
+            channels: None,
+        }],
+        blocks,
+    }
+}
+
+pub fn large_sample_file() -> Vec<u8> {
+    remux(&large_sample_movie()).expect("large sample movie is valid")
+}

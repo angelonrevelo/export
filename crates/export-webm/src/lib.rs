@@ -16,7 +16,7 @@ mod sha256;
 
 pub use demux::{demux, sniff, MediaBlock, Movie, Track};
 pub use error::Error;
-pub use remux::{remux, sample_file, sample_movie};
+pub use remux::{large_sample_file, large_sample_movie, remux, sample_file, sample_movie};
 pub use sha256::sha256;
 
 use std::collections::BTreeMap;
@@ -110,6 +110,21 @@ mod tests {
             assert_eq!(left.track, right.track);
         }
         assert_eq!(copied.sha256, sha256(&original));
+    }
+
+    #[test]
+    fn large_simple_block_payload_round_trips() {
+        let original = large_sample_file();
+        let parsed = demux(&original).unwrap();
+        let payload_bytes: usize = parsed.blocks.iter().map(|block| block.payload.len()).sum();
+        assert!(payload_bytes >= 300 * 1024);
+        let copied = stream_copy(&original).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.blocks.len(), parsed.blocks.len());
+        for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
+        }
     }
 
     #[test]
