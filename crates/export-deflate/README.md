@@ -35,6 +35,8 @@ Hashing every byte of a match, measured the same way, was compress p50 522.7 the
 
 The same sentence cut to **4,194,304** bytes, same bench profile, 3 warmups, 80 samples. p99 is the slow end. Output is **15,225** bytes. Compress p50 **856.2** MB/s, compress p99 **794.6** MB/s. A second run was p50 862.7 and p99 575.8, same size. Both p50 samples are above 741 MB/s, and the output is smaller than the input, so this rung stays.
 
+The same sentence cut to **8,388,608** bytes, same bench profile and sample count. Output is **30,449** bytes. Compress p50 **875.1** MB/s, compress p99 **800.0** MB/s. A second run was p50 875.1 and p99 750.9, same size. Both p50 samples are above 771 MB/s, and the output is smaller than the input, so this rung stays.
+
 ## Incompressible bytes
 
 1,048,576 bytes from a fixed generator: `state = 0xA5A51234`, then `state = state * 1664525 + 1013904223` (mod 2^32), and the byte is `state >> 24`. Same bench profile, 3 warmups, 80 samples. p99 is the slow end of those samples.
