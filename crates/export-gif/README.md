@@ -70,3 +70,15 @@ Both sizes divide the byte range evenly, so the means match the small fixture. T
 | p99 | 17947.2 µs |
 
 That p50 is about 1.05 times the linear estimate, so this size stays. Video-to-GIF still returns an error. The library does not call ffmpeg.
+
+## Eight-frame encode
+
+Four frames at 256×256 are 2519.3 µs, so eight frames should sit near 5,039 µs. `cargo bench --manifest-path crates/export-gif/Cargo.toml --bench quantize_anim8` is one GIF89a, eight generated 256×256 frames, same 3-3-2 palette and LZW writer. The four-frame 256×256 row and the four-frame 640×480 row were not remeasured.
+
+| | |
+|---|---|
+| output bytes | 92,296 |
+| p50 | 5055.2 µs |
+| p99 | 5134.4 µs |
+
+That p50 is about 1.00 times the linear estimate, so this frame count stays. Video-to-GIF still returns an error. The library does not call ffmpeg.
