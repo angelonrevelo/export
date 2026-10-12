@@ -31,6 +31,8 @@
 //! 13312 ns p99.
 //! A four-page reverse merge built the same way is 4 pages, 2336 bytes in, and
 //! 1377 bytes out. Release merge of that file is 14422 ns p50 and 15575 ns p99.
+//! An eight-page reverse merge built the same way is 8 pages, 4672 bytes in,
+//! and 2441 bytes out. Release merge of that file is 28529 ns p50 and 39425 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
 //! page, the gray page, or the CMYK page, and fonts other than the

@@ -1,4 +1,4 @@
-//! Release latency for a reverse merge of a four-page text file.
+//! Release latency for a reverse merge of an eight-page text file.
 //!
 //! ```text
 //! cargo run --release -p export-pdf --bin pdf-bench
@@ -8,7 +8,16 @@ use export_pdf::{merge, page_count, split, text_pdf};
 use std::time::Instant;
 
 fn main() {
-    let mut texts = ["Hello", "Second (line)", "Hello", "Second (line)"];
+    let mut texts = [
+        "Hello",
+        "Second (line)",
+        "Hello",
+        "Second (line)",
+        "Hello",
+        "Second (line)",
+        "Hello",
+        "Second (line)",
+    ];
     let pdf = text_pdf(&texts);
     let pages = split(&pdf).expect("split");
     texts.reverse();
