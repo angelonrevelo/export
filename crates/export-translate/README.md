@@ -79,6 +79,20 @@ A twelve-sentence paragraph, also not a stored fixture, uses only lemmas and cla
 
 A second release run of that binary was p50 924 ns and p99 1,210 ns. Both medians are within 1.16 µs.
 
+A twenty-four-sentence paragraph, also not a stored fixture, uses only lemmas and clause shapes already in the crate. Both directions, 2,000 iterations. Each sample is that iteration's time divided by sentences × 2. Nearest-rank percentiles, `cargo run --release --bin export-translate-tl-twentyfour`:
+
+> The doctor drove the car today. She sold bread at the market. The boy found the key at home. We can walk to the office tomorrow. The woman cooked fish, but the man is sleeping. I think the coffee is hot. He closed the window yesterday. They want to drink tea. The student came from school. We should buy food tomorrow. My mother saw the cat today. The children are working at home. The father called the doctor yesterday. She sent the letter today. The girl drank milk at school. We can eat rice tomorrow. The dog ran to the street, but the bird is sleeping. I think the tea is good. He read the note today. They need to help the family. The friend lived in the city. My father found money yesterday. She closed the door today. The children are reading at school.
+
+> Nagmaneho ang doktor ng kotse ngayon. Nagbenta siya ng tinapay sa palengke. Hinanap ng lalaki ang susi sa tahanan. Maaari tayong maglakad sa opisina bukas. Nagluto ang babae ng isda, pero natutulog ang lalaki. Sa palagay ko na mainit ang kape. Isinara niya ang bintana kahapon. Gusto silang uminom ng tsaa. Dumating ang estudyante mula sa paaralan. Dapat tayong bumili ng pagkain bukas. Nakita ng ina ko ang pusa ngayon. Nagtratrabaho ang mga bata sa tahanan. Tumawag ang ama sa doktor kahapon. Ipinadala niya ang liham ngayon. Uminom ang babae ng gatas sa paaralan. Maaari tayong kumain ng kanin bukas. Tumakbo ang aso sa kalye, pero natutulog ang ibon. Sa palagay ko na mabuti ang tsaa. Binabasa niya ang tala ngayon. Kailangan silang tumulong ng pamilya. Tumira ang kaibigan sa lungsod. Hinanap ng ama ko ang pera kahapon. Isinara niya ang pinto ngayon. Binabasa ng mga bata sa paaralan.
+
+| | |
+|---|---|
+| sentences | **24** |
+| p50 per sentence | **911 ns** (0.911 µs) |
+| p99 per sentence | **1,152 ns** (1.152 µs) |
+
+A second release run of that binary was p50 905 ns and p99 1,181 ns. Both medians are within 1.015 µs.
+
 The English ↔ Spanish paragraph harness is still `export-translate-paragraph` and was not rewritten. Its paragraph still translates to:
 
 > Ayer yo hablé con mi amigo sobre la reunión. Ella dijo que nosotros necesitamos terminar el informe antes del viernes, pero el tren estaba tarde y nosotros lo perdimos. Yo creo que nosotros podemos enviar las notas mañana.
@@ -91,6 +105,7 @@ cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin exp
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-pctl
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-six
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-twelve
+cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-twentyfour
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-paragraph
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-bench
 cargo build --release --manifest-path crates/export-translate/Cargo.toml --target wasm32-unknown-unknown --lib

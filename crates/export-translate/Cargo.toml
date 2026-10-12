@@ -31,6 +31,10 @@ path = "src/bin/tl-six.rs"
 name = "export-translate-tl-twelve"
 path = "src/bin/tl-twelve.rs"
 
+[[bin]]
+name = "export-translate-tl-twentyfour"
+path = "src/bin/tl-twentyfour.rs"
+
 [dependencies]
 
 [profile.release]
