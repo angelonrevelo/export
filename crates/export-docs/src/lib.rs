@@ -40,4 +40,5 @@ pub use convert::{
 pub use error::{Error, Result};
 pub use stats::RunStats;
 pub use doc::word97_document;
+pub use pptx::{pptx_raster_slide, pptx_raster_stored_pdf};
 pub use zip::{pack_deflated, pack_stored};

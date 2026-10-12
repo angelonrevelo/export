@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
-    pdf_split, pdf_text, pdf_watermark, word97_document,
+    pdf_split, pdf_text, pdf_watermark, pptx_raster_slide, pptx_raster_stored_pdf, word97_document,
 };
 
 const WARMUP: usize = 4;
@@ -294,6 +294,76 @@ fn report_pptx_pdf() {
                 std::process::exit(1);
             }
             emit_untimed("pptx→pdf pic", pic.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn report_pptx_raster() {
+    let pic = pptx_pic_deck();
+    match convert("pptx", "pdf", &pic) {
+        Ok(_) => {
+            eprintln!("empty picture deck produced pdf");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if pic.len() != 296
+                || !err.message.starts_with("MISS:")
+                || !err.message.contains("not a text shape")
+                || !err.message.contains(&format!("input_b={}", pic.len()))
+            {
+                eprintln!("empty picture miss changed: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("pptx→pdf pic", pic.len() as u64, None, &err.message);
+        }
+    }
+    let raster = pptx_raster_slide().unwrap_or_else(|err| {
+        eprintln!("raster slide failed: {err}");
+        std::process::exit(1);
+    });
+    let stored = pptx_raster_stored_pdf().unwrap_or_else(|err| {
+        eprintln!("stored pixel pdf failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("pptx", "pdf", &raster) {
+        Ok(pdf) => {
+            let image = pdf.windows(15).any(|w| w == b"/Subtype /Image");
+            let flate = pdf.windows(12).any(|w| w == b"/FlateDecode");
+            if !image || !flate || pdf.len() >= stored.len() {
+                eprintln!(
+                    "raster pdf is not a smaller image XObject pdf_b={} stored_b={}",
+                    pdf.len(),
+                    stored.len()
+                );
+                std::process::exit(1);
+            }
+            let sample = measure(|| ready_bytes("pptx", "pdf", &raster));
+            emit_ready("pptx→pdf raster", raster.len() as u64, &sample);
+            if !cfg!(debug_assertions) {
+                println!(
+                    "pptx→pdf raster p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={} stored_b={}",
+                    sample.p50_ns / 1_000,
+                    sample.p99_ns / 1_000,
+                    mb_per_s(raster.len() as u64, sample.p50_ns),
+                    sample.allocs_p50,
+                    sample.alloc_bytes_p50,
+                    raster.len(),
+                    sample.output_bytes,
+                    stored.len(),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains("pdf_b=")
+                || !err.message.contains("stored_b=")
+                || !err.message.contains(&format!("input_b={}", raster.len()))
+            {
+                eprintln!("raster miss hid both sizes: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("pptx→pdf raster", raster.len() as u64, None, &err.message);
+            println!("stored_b={}", stored.len());
         }
     }
 }
@@ -902,6 +972,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_pptx_pdf();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--pptx-raster") {
+        println!("export-docs pptx raster byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_pptx_raster();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {

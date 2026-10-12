@@ -794,6 +794,81 @@ pub struct Line {
     pub leading: f32,
 }
 
+/// One-page PDF that paints `rgb` (`width` × `height` × 3, top-down) as an image XObject.
+/// `flate` stores the pixels in a FlateDecode stream. Otherwise the stream is the raw pixels.
+pub fn image_xobject(width: u32, height: u32, rgb: &[u8], flate: bool) -> Result<Vec<u8>> {
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| Error::new("image size"))?;
+    if width == 0 || height == 0 || width > 4096 || height > 4096 || rgb.len() != pixels {
+        return Err(Error::new("image size"));
+    }
+    let data = if flate {
+        let packed = deflate_lz77(rgb);
+        if inflate_vec(&packed)? != rgb {
+            return Err(Error::new("image flate did not round-trip"));
+        }
+        packed
+    } else {
+        rgb.to_vec()
+    };
+    let mut image_dict = vec![
+        ("Type".into(), Obj::Name("XObject".into())),
+        ("Subtype".into(), Obj::Name("Image".into())),
+        ("Width".into(), Obj::Int(i64::from(width))),
+        ("Height".into(), Obj::Int(i64::from(height))),
+        ("ColorSpace".into(), Obj::Name("DeviceRGB".into())),
+        ("BitsPerComponent".into(), Obj::Int(8)),
+        ("Length".into(), Obj::Int(data.len() as i64)),
+    ];
+    if flate {
+        image_dict.push(("Filter".into(), Obj::Name("FlateDecode".into())));
+    }
+    let content = format!("q {width} 0 0 {height} 0 0 cm /Im1 Do Q\n");
+    let content_bytes = content.into_bytes();
+    let objs = vec![
+        Obj::Dict(vec![
+            ("Type".into(), Obj::Name("Catalog".into())),
+            ("Pages".into(), Obj::Ref(2)),
+        ]),
+        Obj::Dict(vec![
+            ("Type".into(), Obj::Name("Pages".into())),
+            ("Count".into(), Obj::Int(1)),
+            ("Kids".into(), Obj::Arr(vec![Obj::Ref(3)])),
+        ]),
+        Obj::Dict(vec![
+            ("Type".into(), Obj::Name("Page".into())),
+            (
+                "MediaBox".into(),
+                Obj::Arr(vec![
+                    Obj::Int(0),
+                    Obj::Int(0),
+                    Obj::Int(i64::from(width)),
+                    Obj::Int(i64::from(height)),
+                ]),
+            ),
+            (
+                "Resources".into(),
+                Obj::Dict(vec![(
+                    "XObject".into(),
+                    Obj::Dict(vec![("Im1".into(), Obj::Ref(4))]),
+                )]),
+            ),
+            ("Contents".into(), Obj::Ref(5)),
+        ]),
+        Obj::Stream {
+            dict: image_dict,
+            data,
+        },
+        Obj::Stream {
+            dict: vec![("Length".into(), Obj::Int(content_bytes.len() as i64))],
+            data: content_bytes,
+        },
+    ];
+    Ok(serialize(&objs))
+}
+
 pub fn from_lines(lines: &[Line]) -> Result<Vec<u8>> {
     let mut pages: Vec<Vec<&Line>> = Vec::new();
     let mut current: Vec<&Line> = Vec::new();
