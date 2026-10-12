@@ -1,4 +1,4 @@
-//! epub to HTML when the spine is one, two, or three XHTML files.
+//! epub to HTML when the spine is one, two, three, or four XHTML files.
 //! Those files are copied in spine order. Any other package stays a miss.
 //! Pandoc is not called.
 
@@ -112,7 +112,7 @@ fn container_opf<R: Read + Seek>(
 }
 
 fn spine_shape() -> Error {
-    Error::new("spine is not one, two, or three xhtml files")
+    Error::new("spine is not one, two, three, or four xhtml files")
 }
 
 fn spine_hrefs<R: Read + Seek>(
@@ -133,7 +133,7 @@ fn spine_hrefs<R: Read + Seek>(
         refs: Vec::new(),
     };
     xml::pull(&mut reader, &mut sink)?;
-    if !(1..=3).contains(&sink.refs.len()) {
+    if !(1..=4).contains(&sink.refs.len()) {
         return Err(spine_shape());
     }
     let mut hrefs = Vec::new();
@@ -435,10 +435,70 @@ mod tests {
         assert_eq!(html_of(&bytes).unwrap(), expect);
     }
 
+    fn four_opf(spine: &str) -> String {
+        format!(
+            r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    {spine}
+  </spine>
+</package>
+"#
+        )
+    }
+
     #[test]
-    fn four_spine_items_stay_a_miss() {
-        let opf = two_opf(
+    fn four_xhtml_files_are_copied_in_spine_order() {
+        let first = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
+        let second = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
+        let third = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>";
+        let fourth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Four</p></body></html>";
+        let forward = four_opf(
             "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>\n    <itemref idref=\"more\"/>\n    <itemref idref=\"tail\"/>",
+        );
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", forward.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+            ("OEBPS/more.xhtml", third),
+            ("OEBPS/tail.xhtml", fourth),
+        ]);
+        let mut expect = first.to_vec();
+        expect.extend_from_slice(second);
+        expect.extend_from_slice(third);
+        expect.extend_from_slice(fourth);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+        let reverse = four_opf(
+            "<itemref idref=\"tail\"/>\n    <itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>\n    <itemref idref=\"more\"/>",
+        );
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", reverse.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+            ("OEBPS/more.xhtml", third),
+            ("OEBPS/tail.xhtml", fourth),
+        ]);
+        let mut expect = fourth.to_vec();
+        expect.extend_from_slice(first);
+        expect.extend_from_slice(second);
+        expect.extend_from_slice(third);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+    }
+
+    #[test]
+    fn five_spine_items_stay_a_miss() {
+        let opf = four_opf(
+            "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>\n    <itemref idref=\"more\"/>\n    <itemref idref=\"tail\"/>\n    <itemref idref=\"end\"/>",
         );
         let bytes = pack_stored(&[
             ("mimetype", b"application/epub+zip"),
@@ -453,10 +513,17 @@ mod tests {
                 "OEBPS/more.xhtml",
                 b"<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>",
             ),
+            (
+                "OEBPS/tail.xhtml",
+                b"<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Four</p></body></html>",
+            ),
         ]);
         let err = html_of(&bytes).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
-        assert!(err.message.contains("not one, two, or three"), "{err}");
+        assert!(
+            err.message.contains("not one, two, three, or four"),
+            "{err}"
+        );
         assert!(
             err.message.contains(&format!("input_b={}", bytes.len())),
             "{err}"
