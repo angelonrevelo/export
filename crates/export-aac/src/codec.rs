@@ -201,6 +201,20 @@ pub fn encode_second_stereo_frame() -> Result<Vec<u8>, Error> {
     )
 }
 
+/// The recorded third stereo frame.
+///
+/// Left continues the half-scale 440 Hz sine. Right stays silence. Overlap-add
+/// against the second stereo frame emits that frame's left sine, one frame
+/// late.
+pub fn encode_third_stereo_frame() -> Result<Vec<u8>, Error> {
+    encode_stereo_frame_following(
+        &crate::second_frame_pcm(),
+        &[0.0; FRAME_SAMPLES],
+        &crate::third_frame_pcm(),
+        &[0.0; FRAME_SAMPLES],
+    )
+}
+
 /// Decode one stereo AAC-LC ADTS frame.
 ///
 /// Overlap history is zero, so a lone frame does not reconstruct its input.
@@ -228,6 +242,31 @@ pub fn decode_second_stereo_frame(first: &[u8], second: &[u8]) -> Result<StereoP
     Ok(StereoPcm {
         left: pcm_f32(&mdct::synthesis_overlap(&left1, &mut left_tail)),
         right: pcm_f32(&mdct::synthesis_overlap(&right1, &mut right_tail)),
+    })
+}
+
+/// Decode `third` overlap-added against the tail left by `second`.
+///
+/// `first` is decoded only to prime that tail. With the recorded triple, the
+/// left samples are [`crate::second_frame_pcm`], still one frame late. They
+/// are not [`crate::third_frame_pcm`]. The right samples stay silence.
+pub fn decode_third_stereo_frame(
+    first: &[u8],
+    second: &[u8],
+    third: &[u8],
+) -> Result<StereoPcm, Error> {
+    let (left0, right0) = stereo_spectra(first)?;
+    let mut left_tail = [0.0; FRAME_SAMPLES];
+    let mut right_tail = [0.0; FRAME_SAMPLES];
+    let _ = mdct::synthesis_overlap(&left0, &mut left_tail);
+    let _ = mdct::synthesis_overlap(&right0, &mut right_tail);
+    let (left1, right1) = stereo_spectra(second)?;
+    let _ = mdct::synthesis_overlap(&left1, &mut left_tail);
+    let _ = mdct::synthesis_overlap(&right1, &mut right_tail);
+    let (left2, right2) = stereo_spectra(third)?;
+    Ok(StereoPcm {
+        left: pcm_f32(&mdct::synthesis_overlap(&left2, &mut left_tail)),
+        right: pcm_f32(&mdct::synthesis_overlap(&right2, &mut right_tail)),
     })
 }
 
@@ -1243,6 +1282,30 @@ mod tests {
             "second stereo left vs delayed sine {left_err}"
         );
         assert!(right_peak <= 0.01, "second stereo right peak {right_peak}");
+        assert_eq!(second.len(), 71);
+    }
+
+    #[test]
+    fn third_stereo_frame_emits_the_delayed_sine() {
+        let delayed = crate::second_frame_pcm();
+        let silence = [0.0f32; FRAME_SAMPLES];
+        let first = encode_stereo_frame(&crate::one_frame_pcm(), &silence).unwrap();
+        let second = encode_second_stereo_frame().unwrap();
+        let third = encode_third_stereo_frame().unwrap();
+        assert_eq!(first.len(), 517);
+        assert_eq!(second.len(), 71);
+        let pcm = decode_third_stereo_frame(&first, &second, &third).unwrap();
+        let mut left_err = 0.0f32;
+        let mut right_peak = 0.0f32;
+        for ((left, src), right) in pcm.left.iter().zip(delayed.iter()).zip(pcm.right.iter()) {
+            left_err = left_err.max((left - src).abs());
+            right_peak = right_peak.max(right.abs());
+        }
+        assert!(
+            left_err <= 0.01,
+            "third stereo left vs delayed sine {left_err}"
+        );
+        assert!(right_peak <= 0.01, "third stereo right peak {right_peak}");
     }
 
     #[test]

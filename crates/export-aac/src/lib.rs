@@ -4,8 +4,8 @@
 //! does not keep overlap. Later frames of the same sine each overlap-add one
 //! frame late. A flush of silence after the fourth frame emits the sine that
 //! frame still delays. One stereo frame is a channel pair: the half-scale
-//! 440 Hz sine on the left and silence on the right. The next stereo frame
-//! continues that pair and is still one frame late.
+//! 440 Hz sine on the left and silence on the right. Later stereo frames
+//! continue that pair and stay one frame late.
 //! HE-AAC, SBR, and parametric stereo return [`Error::Unsupported`].
 
 #![forbid(unsafe_code)]
@@ -18,10 +18,10 @@ mod mdct;
 pub use codec::{
     decode_flush_frame, decode_fourth_frame, decode_frame, decode_frame_with_tail,
     decode_second_frame, decode_second_stereo_frame, decode_stereo_frame, decode_third_frame,
-    encode_flush_frame, encode_fourth_frame, encode_frame, encode_frame_following,
-    encode_second_frame, encode_second_stereo_frame, encode_stereo_frame,
-    encode_stereo_frame_following, encode_third_frame, overlap_tail_after_third, Error,
-    OverlapTail, StereoPcm,
+    decode_third_stereo_frame, encode_flush_frame, encode_fourth_frame, encode_frame,
+    encode_frame_following, encode_second_frame, encode_second_stereo_frame, encode_stereo_frame,
+    encode_stereo_frame_following, encode_third_frame, encode_third_stereo_frame,
+    overlap_tail_after_third, Error, OverlapTail, StereoPcm,
 };
 
 /// PCM samples in one AAC long-window frame.

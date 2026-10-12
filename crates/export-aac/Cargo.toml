@@ -38,6 +38,10 @@ path = "src/bin/stereo_frame.rs"
 name = "second-stereo-frame"
 path = "src/bin/second_stereo_frame.rs"
 
+[[bin]]
+name = "third-stereo-frame"
+path = "src/bin/third_stereo_frame.rs"
+
 [dependencies]
 
 # Single-threaded. No thread pool, no atomics target-feature, no spawned work.
