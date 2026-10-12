@@ -16,7 +16,9 @@
 //! 1280×720 file, it returns the first frame. Every other animation stays an
 //! error on [`decode_webp`].
 //! Alpha-only (`ALPH`) and other extended features stay errors.
-//! Thumbnail and shrink do not take WebP. [`encode_svg`] writes one 16×16 or
+//! [`thumbnail_jpeg`] of the two-frame 640×480 WebP writes a JPEG of that file's
+//! first frame, long edge 220, quality 72. Every other WebP stays unsupported
+//! on that path. Shrink does not take WebP. [`encode_svg`] writes one 16×16 or
 //! 32×32 black square on white as a single `rect`, and [`rasterize_svg`] paints
 //! that file back. A path, a curve, text, and any other picture stay unsupported.
 //! Not in this crate: HEIC, AVIF, TIFF, RAW, JPEG XL, background removal, and
@@ -31,8 +33,10 @@
 //! of the same bytes and cap returns the cached encode without running it again.
 //!
 //! [`thumbnail_jpeg`] is a separate path: the long edge is at most 220 pixels
-//! and the JPEG quality is 72. Buffers larger than 50 MiB are rejected before
-//! decode. Progressive, arithmetic, and unknown JPEG markers stay errors.
+//! and the JPEG quality is 72. The two-frame 640×480 WebP is the one WebP input,
+//! and the picture is that file's first frame. Buffers larger than 50 MiB are
+//! rejected before decode. Progressive, arithmetic, and unknown JPEG markers
+//! stay errors.
 
 #![forbid(unsafe_code)]
 

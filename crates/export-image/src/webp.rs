@@ -297,7 +297,7 @@ fn first_256_frame(bytes: &[u8]) -> Result<Raster, Error> {
 
 /// This file only: a 640×480 canvas and two full frames. The check reads chunk
 /// headers. It does not decode coefficients.
-fn full_640_two_frame(bytes: &[u8]) -> bool {
+pub(crate) fn full_640_two_frame(bytes: &[u8]) -> bool {
     let Ok(end) = riff_end(bytes) else {
         return false;
     };

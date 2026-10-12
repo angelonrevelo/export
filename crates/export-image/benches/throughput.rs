@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_image::{
-    decode_png, decode_webp, decode_webp_animation, encode_jpeg, encode_png, encode_svg,
+    decode_jpeg, decode_png, decode_webp, decode_webp_animation, encode_jpeg, encode_png, encode_svg,
     encode_webp_animation, encode_webp_lossless, encode_webp_lossy, rasterize_svg,
     resize, restore_lossless_all, shrink_png, thumbnail_jpeg, Filter, Raster, ShrinkCache,
 };
@@ -1134,6 +1134,38 @@ fn main() {
     println!(
         "svg_rect_encode 32x32 out_bytes={} samples=40 p50_ns={p50} p99_ns={p99} p50_us={:.3} p99_us={:.3} allocs={allocs} pixels_match={pixels_match}",
         svg32.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+    );
+
+    // Thumbnail the existing two-frame 640×480 file's first frame.
+    // The PNG thumbnail loop above is unchanged.
+    for _ in 0..2 {
+        let _ = thumbnail_jpeg(&anim_hd).unwrap();
+    }
+    let (p50, p99) = time_n(20, || {
+        let _ = thumbnail_jpeg(&anim_hd).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let webp_thumb = thumbnail_jpeg(&anim_hd).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let jpeg = webp_thumb.jpeg.len() >= 3
+        && webp_thumb.jpeg[0] == 0xff
+        && webp_thumb.jpeg[1] == 0xd8
+        && webp_thumb.jpeg[2] == 0xff;
+    let decoded_jpeg = decode_jpeg(&webp_thumb.jpeg).unwrap();
+    let long_side = webp_thumb.width.max(webp_thumb.height);
+    let first = decode_webp(&anim_hd).unwrap();
+    let fitted = resize(&first, webp_thumb.width, webp_thumb.height, Filter::Area).unwrap();
+    let first_frame_match = webp_thumb.jpeg == encode_jpeg(&fitted, 72).unwrap()
+        && decoded_jpeg.width == webp_thumb.width
+        && decoded_jpeg.height == webp_thumb.height;
+    println!(
+        "thumbnail_webp640_first file_bytes={} out_bytes={} width={} height={} long_side={long_side} jpeg={jpeg} samples=20 p50_us={:.1} p99_us={:.1} allocs={allocs} first_frame_match={first_frame_match}",
+        anim_hd.len(),
+        webp_thumb.jpeg.len(),
+        webp_thumb.width,
+        webp_thumb.height,
         p50 as f64 / 1_000.0,
         p99 as f64 / 1_000.0,
     );
