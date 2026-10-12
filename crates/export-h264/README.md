@@ -2,7 +2,7 @@
 
 One baseline H.264 I-frame, and one P-frame after it. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
 
-This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The P-frame is only the second picture, motion zero, one reference (the I-frame reconstruction). It does not link or spawn ffmpeg.
+This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. It does not link or spawn ffmpeg.
 
 Chroma residual is the DC coefficient of each 4×4 block. Luma residual is a full 4×4 transform. Deblocking is off so a decoder's pixels are the inverse transform.
 
@@ -18,10 +18,20 @@ That decode matches the encoder reconstruction. `scripts/check-decode.sh` is a h
 
 ## Two frames
 
-Same release profile and QP, the 32×32 fixture then a shifted copy, one thread. 200 calls after 20 warmup. The I-frame bytes are the 272-byte picture above.
+Same release profile and QP, the 32×32 fixture then a brighter copy, motion zero, one thread. 200 calls after 20 warmup. The I-frame bytes are the 272-byte picture above.
 
 - output: 415 bytes
 - release p50: 18 µs, p99: 21 µs on the recorded run. Five later runs on that binary were p50 18–21 µs and p99 23–41 µs
 - mean absolute error, ffmpeg decode versus both sources: 2.5098. The I-frame half is still 2.4974. The P-frame half is 2.5221
 
 `scripts/check-pframe.sh` may run ffmpeg only to decode that two-picture file.
+
+## One motion vector
+
+Same release profile and QP. The I-frame is the 272-byte picture above. The P-frame is the fixture moved four luma samples left, predicted with one 16×16 vector, quarter-pel (16, 0). That is four luma samples and two chroma samples, shared by every macroblock. 200 calls after 20 warmup.
+
+- output: 304 bytes
+- release p50: 17 µs, p99: 21 µs on the recorded run. Four later runs on that binary were p50 17 µs and p99 17–21 µs
+- mean absolute error, ffmpeg decode versus both sources: 2.4368. The I-frame half is still 2.4974. The P-frame half is 2.3763
+
+The ffmpeg decode matches the encoder reconstruction. `scripts/check-motion.sh` may run ffmpeg only to decode that file.

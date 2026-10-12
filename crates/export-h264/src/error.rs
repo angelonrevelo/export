@@ -21,6 +21,8 @@ pub enum Error {
     TooLarge,
     /// The P-frame dimensions do not match the I-frame.
     Shape,
+    /// The motion vector is not an integer chroma shift.
+    Motion,
 }
 
 impl fmt::Display for Error {
@@ -35,6 +37,7 @@ impl fmt::Display for Error {
             Error::Plane => "planes are not 4:2:0",
             Error::TooLarge => "frame exceeds 128 by 128",
             Error::Shape => "the P-frame size does not match the I-frame",
+            Error::Motion => "motion must land on a whole chroma sample",
         })
     }
 }

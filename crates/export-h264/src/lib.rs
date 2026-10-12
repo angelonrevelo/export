@@ -3,9 +3,9 @@
 //! The I-frame bitstream is Annex B: access unit delimiter, SPS, PPS, and one
 //! IDR slice. Profile is Constrained Baseline, chroma is 4:2:0, there is one
 //! slice, and one QP covers each frame. I-frame prediction is intra DC.
-//! The P-frame is one slice with motion zero and that I-frame as its only
-//! reference. Luma residual is a 4x4 transform. Chroma residual is the DC
-//! coefficient only.
+//! [`encode_ip`] writes one P slice with motion zero and that I-frame as its
+//! only reference. [`encode_ip_motion`] uses one shared 16×16 vector instead.
+//! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
 //! return an error. Nothing here links or spawns ffmpeg. This is not a
@@ -178,11 +178,27 @@ fn check_common(opts: &EncodeOptions) -> Result<(), Error> {
     Ok(())
 }
 
+/// One quarter-luma motion vector, shared by every macroblock.
+///
+/// Both components must be multiples of 8 so the chroma sample is integer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Motion {
+    pub mvx: i32,
+    pub mvy: i32,
+}
+
+/// Four luma samples to the right. Chroma follows by two samples.
+pub const SHIFTED_MV: Motion = Motion { mvx: 16, mvy: 0 };
+
 /// I-frame, then one P-frame that references only that reconstruction.
 ///
-/// The leading bytes are exactly [`encode`] of `intra`. B-frames and a second
-/// pass are refused.
-pub fn encode_ip(intra: &Yuv420, predicted: &Yuv420, opts: &EncodeOptions) -> Result<EncodedPair, Error> {
+/// Motion is zero. The leading bytes are exactly [`encode`] of `intra`.
+/// B-frames and a second pass are refused.
+pub fn encode_ip(
+    intra: &Yuv420,
+    predicted: &Yuv420,
+    opts: &EncodeOptions,
+) -> Result<EncodedPair, Error> {
     intra.check()?;
     predicted.check()?;
     check_common(opts)?;
@@ -194,6 +210,38 @@ pub fn encode_ip(intra: &Yuv420, predicted: &Yuv420, opts: &EncodeOptions) -> Re
     }
     let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
     let (p_bytes, p_rec) = encode::encode_pframe(predicted, &i_rec, opts.qp)?;
+    let mut annex_b = i_bytes;
+    annex_b.extend(p_bytes);
+    Ok(EncodedPair {
+        annex_b,
+        intra: i_rec,
+        predicted: p_rec,
+        qp: opts.qp,
+    })
+}
+
+/// Same as [`encode_ip`], with one non-zero or zero motion vector on the P-frame.
+///
+/// A zero vector matches [`encode_ip`] byte for byte. A lone P-frame is still
+/// refused by [`encode`]. A B-frame and a second pass are refused here too.
+pub fn encode_ip_motion(
+    intra: &Yuv420,
+    predicted: &Yuv420,
+    opts: &EncodeOptions,
+    motion: Motion,
+) -> Result<EncodedPair, Error> {
+    intra.check()?;
+    predicted.check()?;
+    check_common(opts)?;
+    if matches!(opts.picture, Picture::Bipredicted) {
+        return Err(Error::BipredictedFrame);
+    }
+    if intra.width != predicted.width || intra.height != predicted.height {
+        return Err(Error::Shape);
+    }
+    let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
+    let (p_bytes, p_rec) =
+        encode::encode_pframe_mv(predicted, &i_rec, opts.qp, motion.mvx, motion.mvy)?;
     let mut annex_b = i_bytes;
     annex_b.extend(p_bytes);
     Ok(EncodedPair {
@@ -243,6 +291,32 @@ pub fn fixture_32x32_predicted() -> Yuv420 {
         *sample = sample.saturating_sub(4);
     }
     frame
+}
+
+fn shift_plane(src: &[u8], width: usize, height: usize, dx: i32, dy: i32) -> Vec<u8> {
+    let mut out = vec![0u8; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let sx = (x as i32 + dx).clamp(0, width as i32 - 1) as usize;
+            let sy = (y as i32 + dy).clamp(0, height as i32 - 1) as usize;
+            out[y * width + x] = src[sy * width + sx];
+        }
+    }
+    out
+}
+
+/// The 32×32 fixture moved four luma samples to the left.
+///
+/// [`SHIFTED_MV`] predicts this picture from the I-frame.
+pub fn fixture_32x32_shifted() -> Yuv420 {
+    let src = fixture_32x32();
+    Yuv420 {
+        width: 32,
+        height: 32,
+        y: shift_plane(&src.y, 32, 32, 4, 0),
+        u: shift_plane(&src.u, 16, 16, 2, 0),
+        v: shift_plane(&src.v, 16, 16, 2, 0),
+    }
 }
 
 /// Mean absolute error over every Y, U, and V sample.

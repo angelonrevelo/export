@@ -361,8 +361,16 @@ fn encode_chroma_mb(plane: &mut Plane<'_>, mb_x: usize, mb_y: usize, qp: i32) ->
 }
 
 fn nc_at(nnz: &[u8], stride: usize, x: usize, y: usize) -> i32 {
-    let left = if x > 0 { Some(nnz[y * stride + x - 1] as i32) } else { None };
-    let up = if y > 0 { Some(nnz[(y - 1) * stride + x] as i32) } else { None };
+    let left = if x > 0 {
+        Some(nnz[y * stride + x - 1] as i32)
+    } else {
+        None
+    };
+    let up = if y > 0 {
+        Some(nnz[(y - 1) * stride + x] as i32)
+    } else {
+        None
+    };
     match (left, up) {
         (Some(a), Some(b)) => (a + b + 1) >> 1,
         (Some(a), None) => a,
@@ -466,7 +474,13 @@ fn write_slice(slice: &Slice<'_>) -> Vec<u8> {
             let cv = &slice.chroma_v[mb];
             let ac = cu.ac_total.iter().any(|&t| t != 0) || cv.ac_total.iter().any(|&t| t != 0);
             let dc = cu.dc.iter().any(|&c| c != 0) || cv.dc.iter().any(|&c| c != 0);
-            let cbpc = if ac { 2 } else if dc { 1 } else { 0 };
+            let cbpc = if ac {
+                2
+            } else if dc {
+                1
+            } else {
+                0
+            };
             let cbp = (cbpl as usize) + (cbpc << 4);
             b.write_ue(intra_cbp_code(cbp));
             if cbp != 0 {
@@ -595,6 +609,17 @@ struct Inter<'a> {
     stride: usize,
     nnz: &'a mut [u8],
     nnz_stride: usize,
+    /// Integer-sample offset into the reference. Zero keeps the old indexing.
+    dx: i32,
+    dy: i32,
+    limit_x: i32,
+    limit_y: i32,
+}
+
+fn ref_sample(plane: &Inter<'_>, x: usize, y: usize) -> i32 {
+    let sx = (x as i32 + plane.dx).clamp(0, plane.limit_x - 1) as usize;
+    let sy = (y as i32 + plane.dy).clamp(0, plane.limit_y - 1) as usize;
+    plane.reference[sy * plane.stride + sx] as i32
 }
 
 fn encode_inter_luma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32) -> [LumaBlock; 16] {
@@ -609,7 +634,7 @@ fn encode_inter_luma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32) -
         for (r, row) in residual.iter_mut().enumerate() {
             for (c, sample) in row.iter_mut().enumerate() {
                 let at = (y + r) * plane.stride + x + c;
-                *sample = plane.src[at] as i32 - plane.reference[at] as i32;
+                *sample = plane.src[at] as i32 - ref_sample(plane, x + c, y + r);
             }
         }
         let z = quant4(&fwd4(&residual), qp);
@@ -618,7 +643,7 @@ fn encode_inter_luma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32) -
         for (r, row) in idct.iter().enumerate() {
             for (c, coef) in row.iter().enumerate() {
                 let at = (y + r) * plane.stride + x + c;
-                plane.rec[at] = clip8(plane.reference[at] as i32 + coef);
+                plane.rec[at] = clip8(ref_sample(plane, x + c, y + r) + coef);
             }
         }
         let bx = mb_x * 4 + BLK_X[i];
@@ -640,8 +665,10 @@ fn encode_inter_chroma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32)
         let mut residual = [[0i32; 4]; 4];
         for (r, row) in residual.iter_mut().enumerate() {
             for (c, sample) in row.iter_mut().enumerate() {
-                let at = (y0 + by * 4 + r) * plane.stride + x0 + bx * 4 + c;
-                *sample = plane.src[at] as i32 - plane.reference[at] as i32;
+                let px = x0 + bx * 4 + c;
+                let py = y0 + by * 4 + r;
+                let at = py * plane.stride + px;
+                *sample = plane.src[at] as i32 - ref_sample(plane, px, py);
             }
         }
         *dc = fwd4(&residual)[0][0];
@@ -656,8 +683,10 @@ fn encode_inter_chroma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32)
         let by = i >> 1;
         for (r, row) in idct.iter().enumerate() {
             for (c, add) in row.iter().enumerate() {
-                let at = (y0 + by * 4 + r) * plane.stride + x0 + bx * 4 + c;
-                plane.rec[at] = clip8(plane.reference[at] as i32 + add);
+                let px = x0 + bx * 4 + c;
+                let py = y0 + by * 4 + r;
+                let at = py * plane.stride + px;
+                plane.rec[at] = clip8(ref_sample(plane, px, py) + add);
             }
         }
         let cx = mb_x * 2 + bx;
@@ -671,7 +700,41 @@ fn encode_inter_chroma(plane: &mut Inter<'_>, mb_x: usize, mb_y: usize, qp: i32)
     }
 }
 
-fn write_p_slice(slice: &Slice<'_>) -> Vec<u8> {
+fn median3(a: i32, b: i32, c: i32) -> i32 {
+    a + b + c - a.min(b).min(c) - a.max(b).max(c)
+}
+
+/// Quarter-pel predictor for one 16×16 partition. Unavailable neighbors are zero.
+fn mvp_16x16(mvs: &[(i32, i32)], mb_w: usize, mx: usize, my: usize) -> (i32, i32) {
+    let mut mv = [(0i32, 0i32); 3];
+    let mut same = [false; 3];
+    if mx > 0 {
+        mv[0] = mvs[my * mb_w + (mx - 1)];
+        same[0] = true;
+    }
+    if my > 0 {
+        mv[1] = mvs[(my - 1) * mb_w + mx];
+        same[1] = true;
+    }
+    if my > 0 && mx + 1 < mb_w {
+        mv[2] = mvs[(my - 1) * mb_w + mx + 1];
+        same[2] = true;
+    } else if my > 0 && mx > 0 {
+        mv[2] = mvs[(my - 1) * mb_w + (mx - 1)];
+        same[2] = true;
+    }
+    let matches = same.iter().filter(|flag| **flag).count();
+    if matches == 1 {
+        let i = same.iter().position(|flag| *flag).unwrap_or(0);
+        return mv[i];
+    }
+    (
+        median3(mv[0].0, mv[1].0, mv[2].0),
+        median3(mv[0].1, mv[1].1, mv[2].1),
+    )
+}
+
+fn write_p_slice(slice: &Slice<'_>, mvx: i32, mvy: i32) -> Vec<u8> {
     let mb_w = (slice.width / 16) as usize;
     let mb_h = (slice.height / 16) as usize;
     let mut b = BitWriter::new();
@@ -683,14 +746,17 @@ fn write_p_slice(slice: &Slice<'_>) -> Vec<u8> {
     b.write_bit(0);
     b.write_se(0);
     b.write_ue(1);
+    let mb_count = mb_w * mb_h;
+    let mvs = vec![(mvx, mvy); mb_count];
     for my in 0..mb_h {
         for mx in 0..mb_w {
             let mb = my * mb_w + mx;
             let blocks = &slice.luma[mb * 16..(mb + 1) * 16];
+            let (px, py) = mvp_16x16(&mvs, mb_w, mx, my);
             b.write_ue(0);
             b.write_ue(0);
-            b.write_se(0);
-            b.write_se(0);
+            b.write_se(mvx - px);
+            b.write_se(mvy - py);
             let mut cbpl = 0u32;
             for i8 in 0..4 {
                 if (0..4).any(|k| blocks[i8 * 4 + k].total != 0) {
@@ -732,12 +798,37 @@ fn write_p_slice(slice: &Slice<'_>) -> Vec<u8> {
 }
 
 /// One P slice after an already-reconstructed I-frame. Motion is zero.
-pub fn encode_pframe(source: &Yuv420, reference: &Yuv420, qp: u8) -> Result<(Vec<u8>, Yuv420), Error> {
+pub fn encode_pframe(
+    source: &Yuv420,
+    reference: &Yuv420,
+    qp: u8,
+) -> Result<(Vec<u8>, Yuv420), Error> {
+    encode_pframe_mv(source, reference, qp, 0, 0)
+}
+
+/// P slice with one 16×16 motion vector, in quarter-luma samples, shared by every macroblock.
+///
+/// `mvx` and `mvy` must be multiples of 8 so chroma stays on an integer sample.
+pub fn encode_pframe_mv(
+    source: &Yuv420,
+    reference: &Yuv420,
+    qp: u8,
+    mvx: i32,
+    mvy: i32,
+) -> Result<(Vec<u8>, Yuv420), Error> {
     if source.width != reference.width || source.height != reference.height {
         return Err(Error::Shape);
     }
+    if mvx % 8 != 0 || mvy % 8 != 0 || !(-512..=512).contains(&mvx) || !(-512..=512).contains(&mvy)
+    {
+        return Err(Error::Motion);
+    }
     let width = source.width;
     let height = source.height;
+    let luma_dx = mvx / 4;
+    let luma_dy = mvy / 4;
+    let chroma_dx = mvx >> 3;
+    let chroma_dy = mvy >> 3;
     let qp_i = qp as i32;
     let mb_w = (width / 16) as usize;
     let mb_h = (height / 16) as usize;
@@ -762,6 +853,10 @@ pub fn encode_pframe(source: &Yuv420, reference: &Yuv420, qp: u8) -> Result<(Vec
                     stride: y_stride,
                     nnz: &mut luma_nnz,
                     nnz_stride: mb_w * 4,
+                    dx: luma_dx,
+                    dy: luma_dy,
+                    limit_x: width as i32,
+                    limit_y: height as i32,
                 },
                 mx,
                 my,
@@ -776,6 +871,10 @@ pub fn encode_pframe(source: &Yuv420, reference: &Yuv420, qp: u8) -> Result<(Vec
                     stride: c_stride,
                     nnz: &mut u_nnz,
                     nnz_stride: mb_w * 2,
+                    dx: chroma_dx,
+                    dy: chroma_dy,
+                    limit_x: (width / 2) as i32,
+                    limit_y: (height / 2) as i32,
                 },
                 mx,
                 my,
@@ -789,6 +888,10 @@ pub fn encode_pframe(source: &Yuv420, reference: &Yuv420, qp: u8) -> Result<(Vec
                     stride: c_stride,
                     nnz: &mut v_nnz,
                     nnz_stride: mb_w * 2,
+                    dx: chroma_dx,
+                    dy: chroma_dy,
+                    limit_x: (width / 2) as i32,
+                    limit_y: (height / 2) as i32,
                 },
                 mx,
                 my,
@@ -797,16 +900,20 @@ pub fn encode_pframe(source: &Yuv420, reference: &Yuv420, qp: u8) -> Result<(Vec
         }
     }
     let mut out = nal_unit(0, 9, &[0x30]);
-    out.extend(write_p_slice(&Slice {
-        width,
-        height,
-        luma: &luma_blocks,
-        chroma_u: &chroma_u,
-        chroma_v: &chroma_v,
-        luma_nnz: &luma_nnz,
-        u_nnz: &u_nnz,
-        v_nnz: &v_nnz,
-    }));
+    out.extend(write_p_slice(
+        &Slice {
+            width,
+            height,
+            luma: &luma_blocks,
+            chroma_u: &chroma_u,
+            chroma_v: &chroma_v,
+            luma_nnz: &luma_nnz,
+            u_nnz: &u_nnz,
+            v_nnz: &v_nnz,
+        },
+        mvx,
+        mvy,
+    ));
     Ok((
         out,
         Yuv420 {

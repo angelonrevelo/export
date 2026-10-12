@@ -28,3 +28,7 @@ path = "src/bin/iframe.rs"
 [[bin]]
 name = "ipframe"
 path = "src/bin/ipframe.rs"
+
+[[bin]]
+name = "mvframe"
+path = "src/bin/mvframe.rs"
