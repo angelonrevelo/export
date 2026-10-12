@@ -1,4 +1,4 @@
-//! One SVG: a 16×16 black square on white, stored as a single `rect`.
+//! One SVG: a 16×16 or 32×32 black square on white, stored as a single `rect`.
 //!
 //! A path, circle, ellipse, line, polygon, polyline, rounded corner, or text
 //! node is rejected. Cairo, vtracer, and resvg are not used. This path does
@@ -9,14 +9,34 @@ use crate::raster::Raster;
 
 const SIDE: u32 = 16;
 
-/// Encode the one supported picture: a solid black square on an otherwise
-/// white 16×16 RGB canvas. The file is one `<rect>`. Anything else is
+/// Encode one supported picture: a solid black square on an otherwise white
+/// 16×16 or 32×32 RGB canvas. The file is one `<rect>`. Anything else is
 /// [`UNSUPPORTED`].
 pub fn encode_svg(raster: &Raster) -> Result<Vec<u8>, Error> {
+    if raster.width == 32 {
+        return encode_svg_32(raster);
+    }
     let (x, y, side) = black_square(raster).ok_or(UNSUPPORTED)?;
     let mut out = Vec::with_capacity(160);
     out.extend_from_slice(
         b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"><rect x=\"",
+    );
+    push_u32(&mut out, x);
+    out.extend_from_slice(b"\" y=\"");
+    push_u32(&mut out, y);
+    out.extend_from_slice(b"\" width=\"");
+    push_u32(&mut out, side);
+    out.extend_from_slice(b"\" height=\"");
+    push_u32(&mut out, side);
+    out.extend_from_slice(b"\" fill=\"#000000\"/></svg>");
+    Ok(out)
+}
+
+fn encode_svg_32(raster: &Raster) -> Result<Vec<u8>, Error> {
+    let (x, y, side) = black_square_32(raster).ok_or(UNSUPPORTED)?;
+    let mut out = Vec::with_capacity(160);
+    out.extend_from_slice(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><rect x=\"",
     );
     push_u32(&mut out, x);
     out.extend_from_slice(b"\" y=\"");
@@ -47,7 +67,12 @@ pub fn rasterize_svg(bytes: &[u8]) -> Result<Raster, Error> {
         return Err(INVALID);
     }
     let open = p.finish_open()?;
-    if open.self_close || open.width != Some(SIDE) || open.height != Some(SIDE) || !open.xmlns {
+    let canvas = match (open.width, open.height) {
+        (Some(16), Some(16)) => 16,
+        (Some(32), Some(32)) => 32,
+        _ => return Err(UNSUPPORTED),
+    };
+    if open.self_close || !open.xmlns {
         return Err(UNSUPPORTED);
     }
     p.skip_ws();
@@ -78,7 +103,7 @@ pub fn rasterize_svg(bytes: &[u8]) -> Result<Raster, Error> {
     if !p.eof() {
         return Err(UNSUPPORTED);
     }
-    paint(rect.x, rect.y, rect.width, rect.height)
+    paint(canvas, rect.x, rect.y, rect.width, rect.height)
 }
 
 fn black_square(raster: &Raster) -> Option<(u32, u32, u32)> {
@@ -121,26 +146,101 @@ fn black_square(raster: &Raster) -> Option<(u32, u32, u32)> {
     Some((min_x, min_y, w))
 }
 
-fn paint(x: u32, y: u32, w: u32, h: u32) -> Result<Raster, Error> {
+fn black_square_32(raster: &Raster) -> Option<(u32, u32, u32)> {
+    const N: usize = 32;
+    const STRIDE: usize = N * 3;
+    if raster.width != N as u32
+        || raster.height != N as u32
+        || raster.channels != 3
+        || raster.x != 0
+        || raster.y != 0
+    {
+        return None;
+    }
+    let px = raster.pixels.as_slice();
+    let white = [255u8; STRIDE];
+    let mut top = 0usize;
+    while top < N && row32(px, top) == white.as_slice() {
+        top += 1;
+    }
+    if top == N {
+        return None;
+    }
+    let first = row32(px, top);
+    let mut left = 0usize;
+    while left < N {
+        let i = left * 3;
+        let r = first[i];
+        let g = first[i + 1];
+        let b = first[i + 2];
+        if r | g | b == 0 {
+            break;
+        }
+        if r & g & b != 255 {
+            return None;
+        }
+        left += 1;
+    }
+    if left == N {
+        return None;
+    }
+    let mut right = left;
+    while right < N && first[right * 3] | first[right * 3 + 1] | first[right * 3 + 2] == 0 {
+        right += 1;
+    }
+    let side = right - left;
+    if side == N || top + side > N {
+        return None;
+    }
+    let mut expect = white;
+    for col in left..right {
+        let i = col * 3;
+        expect[i] = 0;
+        expect[i + 1] = 0;
+        expect[i + 2] = 0;
+    }
+    if first != expect.as_slice() {
+        return None;
+    }
+    let bottom = top + side;
+    for y in (top + 1)..bottom {
+        if row32(px, y) != expect.as_slice() {
+            return None;
+        }
+    }
+    for y in bottom..N {
+        if row32(px, y) != white.as_slice() {
+            return None;
+        }
+    }
+    Some((left as u32, top as u32, side as u32))
+}
+
+fn row32(px: &[u8], y: usize) -> &[u8] {
+    let start = y * 96;
+    &px[start..start + 96]
+}
+
+fn paint(canvas: u32, x: u32, y: u32, w: u32, h: u32) -> Result<Raster, Error> {
     let Some(right) = x.checked_add(w) else {
         return Err(UNSUPPORTED);
     };
     let Some(bottom) = y.checked_add(h) else {
         return Err(UNSUPPORTED);
     };
-    if w == 0 || h == 0 || right > SIDE || bottom > SIDE {
+    if w == 0 || h == 0 || right > canvas || bottom > canvas {
         return Err(UNSUPPORTED);
     }
-    let mut pixels = vec![255u8; (SIDE * SIDE * 3) as usize];
+    let mut pixels = vec![255u8; (canvas * canvas * 3) as usize];
     for row in y..y + h {
         for col in x..x + w {
-            let i = ((row * SIDE + col) * 3) as usize;
+            let i = ((row * canvas + col) * 3) as usize;
             pixels[i] = 0;
             pixels[i + 1] = 0;
             pixels[i + 2] = 0;
         }
     }
-    Raster::new(SIDE, SIDE, 3, pixels)
+    Raster::new(canvas, canvas, 3, pixels)
 }
 
 fn push_u32(out: &mut Vec<u8>, n: u32) {
@@ -273,8 +373,8 @@ impl<'a> Parser<'a> {
         };
         while let Some((name, value)) = self.attr()? {
             match name {
-                b"width" if open.width.is_none() => open.width = Some(plain_16(value)?),
-                b"height" if open.height.is_none() => open.height = Some(plain_16(value)?),
+                b"width" if open.width.is_none() => open.width = Some(canvas_px(value)?),
+                b"height" if open.height.is_none() => open.height = Some(canvas_px(value)?),
                 b"xmlns" if !open.xmlns && value == b"http://www.w3.org/2000/svg" => {
                     open.xmlns = true;
                 }
@@ -318,9 +418,11 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn plain_16(value: &[u8]) -> Result<u32, Error> {
+fn canvas_px(value: &[u8]) -> Result<u32, Error> {
     if value == b"16" {
-        Ok(SIDE)
+        Ok(16)
+    } else if value == b"32" {
+        Ok(32)
     } else {
         Err(UNSUPPORTED)
     }
@@ -429,5 +531,85 @@ mod tests {
         }
         assert_eq!(rasterize_svg(b"").unwrap_err(), INVALID);
         assert_eq!(rasterize_svg(b"<svg width=\"16\"").unwrap_err(), TRUNCATED);
+    }
+
+    fn square32(x: u32, y: u32, side: u32) -> Raster {
+        let mut pixels = vec![255u8; 32 * 32 * 3];
+        for row in y..y + side {
+            for col in x..x + side {
+                let i = ((row * 32 + col) * 3) as usize;
+                pixels[i] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+            }
+        }
+        Raster::new(32, 32, 3, pixels).unwrap()
+    }
+
+    #[test]
+    fn black_square_32_on_white_round_trips() {
+        let src = square32(8, 8, 16);
+        let file = encode_svg(&src).unwrap();
+        assert_eq!(
+            file,
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><rect x=\"8\" y=\"8\" width=\"16\" height=\"16\" fill=\"#000000\"/></svg>"
+        );
+        let back = rasterize_svg(&file).unwrap();
+        assert_eq!(back.width, 32);
+        assert_eq!(back.height, 32);
+        assert_eq!(back.channels, 3);
+        assert_eq!(back.x, 0);
+        assert_eq!(back.y, 0);
+        assert_eq!(back.pixels, src.pixels);
+        let corner = square32(0, 0, 8);
+        let again = rasterize_svg(&encode_svg(&corner).unwrap()).unwrap();
+        assert_eq!(again.pixels, corner.pixels);
+    }
+
+    #[test]
+    fn other_32_pictures_and_shapes_stay_unsupported() {
+        assert_eq!(encode_svg(&square32(0, 0, 32)).unwrap_err(), UNSUPPORTED);
+        let mut bar = vec![255u8; 32 * 32 * 3];
+        for x in 2..20 {
+            let i = x * 3;
+            bar[i] = 0;
+            bar[i + 1] = 0;
+            bar[i + 2] = 0;
+        }
+        assert_eq!(
+            encode_svg(&Raster::new(32, 32, 3, bar).unwrap()).unwrap_err(),
+            UNSUPPORTED
+        );
+        let mut gray = vec![255u8; 32 * 32 * 3];
+        gray[0] = 1;
+        assert_eq!(
+            encode_svg(&Raster::new(32, 32, 3, gray).unwrap()).unwrap_err(),
+            UNSUPPORTED
+        );
+        let mut two = square32(1, 1, 4);
+        let i = ((20 * 32 + 20) * 3) as usize;
+        two.pixels[i] = 0;
+        two.pixels[i + 1] = 0;
+        two.pixels[i + 2] = 0;
+        assert_eq!(encode_svg(&two).unwrap_err(), UNSUPPORTED);
+        assert_eq!(
+            encode_svg(&Raster::new(64, 64, 3, vec![255; 64 * 64 * 3]).unwrap()).unwrap_err(),
+            UNSUPPORTED
+        );
+        let head = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\">";
+        for body in [
+            b"<circle cx=\"16\" cy=\"16\" r=\"8\"/>".as_slice(),
+            b"<path d=\"M0 0 L1 1\"/>".as_slice(),
+            b"<text x=\"0\" y=\"8\">a</text>".as_slice(),
+        ] {
+            let mut file = head.to_vec();
+            file.extend_from_slice(body);
+            file.extend_from_slice(b"</svg>");
+            assert_eq!(rasterize_svg(&file).unwrap_err(), UNSUPPORTED);
+        }
+        assert_eq!(
+            rasterize_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"16\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#000000\"/></svg>").unwrap_err(),
+            UNSUPPORTED
+        );
     }
 }

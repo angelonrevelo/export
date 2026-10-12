@@ -1102,4 +1102,39 @@ fn main() {
         p50 as f64 / 1_000.0,
         p99 as f64 / 1_000.0,
     );
+
+    // One 32×32 black square on white, encoded as an SVG rect.
+    // The 16×16 SVG row above is unchanged.
+    let mut square32 = vec![255u8; 32 * 32 * 3];
+    for y in 8..24 {
+        for x in 8..24 {
+            let i = (y * 32 + x) * 3;
+            square32[i] = 0;
+            square32[i + 1] = 0;
+            square32[i + 2] = 0;
+        }
+    }
+    let tile32 = Raster::new(32, 32, 3, square32).unwrap();
+    for _ in 0..2 {
+        let _ = encode_svg(&tile32).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_svg(black_box(&tile32)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let svg32 = encode_svg(&tile32).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let back32 = rasterize_svg(&svg32).unwrap();
+    let pixels_match = back32.width == 32
+        && back32.height == 32
+        && back32.channels == 3
+        && back32.x == 0
+        && back32.y == 0
+        && back32.pixels == tile32.pixels;
+    println!(
+        "svg_rect_encode 32x32 out_bytes={} samples=40 p50_ns={p50} p99_ns={p99} p50_us={:.3} p99_us={:.3} allocs={allocs} pixels_match={pixels_match}",
+        svg32.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+    );
 }

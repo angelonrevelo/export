@@ -43,7 +43,7 @@ The VP8 bool decoder zero-fills a coefficient partition that ends early, which i
 
 ## SVG rect
 
-`encode_svg` accepts one picture: a 16×16 RGB canvas that is white except for one solid black square. It writes a single `<rect>`. `rasterize_svg` fills that canvas white and paints the black square. Those pixels match the source. A path, circle, ellipse, line, polygon, polyline, rounded corner (`rx` or `ry`), text node, or any other picture is `Unsupported`. Cairo, vtracer, and resvg are not on this path.
+`encode_svg` accepts one picture: a 16×16 or 32×32 RGB canvas that is white except for one solid black square. It writes a single `<rect>`. `rasterize_svg` fills that canvas white and paints the black square. Those pixels match the source. A path, circle, ellipse, line, polygon, polyline, rounded corner (`rx` or `ry`), text node, or any other picture is `Unsupported`. Cairo, vtracer, and resvg are not on this path.
 
 ## Not in this crate
 

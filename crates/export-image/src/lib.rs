@@ -16,9 +16,9 @@
 //! 1280×720 file, it returns the first frame. Every other animation stays an
 //! error on [`decode_webp`].
 //! Alpha-only (`ALPH`) and other extended features stay errors.
-//! Thumbnail and shrink do not take WebP. [`encode_svg`] writes one 16×16
-//! black square on white as a single `rect`, and [`rasterize_svg`] paints that
-//! file back. A path, a curve, text, and any other picture stay unsupported.
+//! Thumbnail and shrink do not take WebP. [`encode_svg`] writes one 16×16 or
+//! 32×32 black square on white as a single `rect`, and [`rasterize_svg`] paints
+//! that file back. A path, a curve, text, and any other picture stay unsupported.
 //! Not in this crate: HEIC, AVIF, TIFF, RAW, JPEG XL, background removal, and
 //! vectorization. A file that
 //! cannot be restored exactly is an error and is counted by
