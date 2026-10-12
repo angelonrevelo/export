@@ -64,10 +64,19 @@ fn main() {
         eprintln!("NOT JUDGED");
         return;
     }
-    if std::env::var_os("EXPORT_PACK_BENCH").is_some_and(|value| value == "font-roundtrip") {
-        println!("profile=release");
-        bench_font_roundtrip();
-        return;
+    if let Some(value) = std::env::var_os("EXPORT_PACK_BENCH") {
+        if value == "font-roundtrip" {
+            println!("profile=release");
+            bench_font_roundtrip();
+            return;
+        }
+        if value == "zip-64mib" {
+            println!("profile=release");
+            let dir = PathBuf::from(env_dir());
+            fs::create_dir_all(&dir).expect("bench dir");
+            bench_zip_64mib(&dir);
+            return;
+        }
     }
     let data = payload(PAYLOAD);
     let dir = PathBuf::from(env_dir());
@@ -106,12 +115,58 @@ fn main() {
     println!("note=write is CRC plus local header plus payload, before fsync");
     println!("note=finish is central directory plus fsync plus rename");
     println!("note=read follows write in-process, so the page cache may hold the file");
+    bench_zip_64mib(&dir);
     bench_inflate();
     bench_pdf(&dir);
     bench_pdf16(&dir);
     bench_pdf32(&dir);
     bench_font();
     bench_font_roundtrip();
+}
+
+fn bench_zip_64mib(dir: &std::path::Path) {
+    const BYTES: usize = 64 * 1024 * 1024;
+    const PASSES_64: usize = 100;
+    let data = payload(BYTES);
+    verify_store_roundtrip(&data, dir);
+    let mut writes = Vec::with_capacity(PASSES_64);
+    let mut reads = Vec::with_capacity(PASSES_64);
+    for _ in 0..PASSES_64 {
+        let sample = run(&data, dir);
+        assert_eq!(sample.bytes, BYTES as u64);
+        writes.push(ms(sample.write));
+        reads.push(ms(sample.read));
+    }
+    println!("zip_64mib_bytes={}", data.len());
+    println!("zip_64mib_entries=1");
+    println!("zip_64mib_method=store");
+    println!("zip_64mib_passes={PASSES_64}");
+    println!("zip_64mib_write_ms_p50={:.1}", percentile(&writes, 50.0));
+    println!("zip_64mib_write_ms_p99={:.1}", percentile(&writes, 99.0));
+    println!("zip_64mib_read_ms_p50={:.1}", percentile(&reads, 50.0));
+    println!("zip_64mib_read_ms_p99={:.1}", percentile(&reads, 99.0));
+    println!("note=64 MiB store entry, the next size after the 32 MiB entry");
+    println!("note=no zip64 and no deflate; the existing store writer and reader");
+    println!("note=write is CRC plus local header plus payload, before fsync");
+    println!("note=read follows write in-process, so the page cache may hold the file");
+    println!("note=warmup compared every payload byte; each timed read checks length and CRC");
+    println!(
+        "note=percentile is nearest-rank on milliseconds sorted ascending, so p99 is the slow tail"
+    );
+}
+
+fn verify_store_roundtrip(data: &[u8], dir: &std::path::Path) {
+    let path = dir.join("bench64-check.zip");
+    let _ = fs::remove_file(&path);
+    let mut zip = ZipWriter::create(&path).expect("create");
+    zip.write_bytes("payload.bin", data).expect("write");
+    zip.finish().expect("finish");
+    let mut reader = ZipReader::open(&path).expect("open");
+    let mut out = Vec::new();
+    let n = reader.copy_entry(0, &mut out).expect("read");
+    assert_eq!(n, data.len() as u64);
+    assert_eq!(out, data);
+    let _ = fs::remove_file(&path);
 }
 
 fn bench_inflate() {

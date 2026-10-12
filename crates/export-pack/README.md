@@ -51,6 +51,18 @@ These numbers are the first-cut measurement and are not replaced by later runs o
 
 Write spread across the five passes was 364.7–388.4 MB/s. Read spread was 420.8–437.5 MB/s. Allocation counts did not move.
 
+### 64 MiB store entry
+
+The next size after that 32 MiB entry. One store entry, existing writer and reader, no Zip64 and no deflate. 100 measured passes after one warmup that compared every payload byte. Write is CRC, local header, and payload, before fsync. Read follows write in-process, so the page cache may hold the file, and each timed read checks length and CRC. Percentiles are nearest-rank on milliseconds sorted ascending, so p99 is the slow tail. The 32 MiB row above is unchanged.
+
+| | |
+|---|---|
+| Bytes | 67,108,864 |
+| Write p50 | 165.4 ms |
+| Write p99 | 187.2 ms |
+| Read p50 | 148.8 ms |
+| Read p99 | 156.4 ms |
+
 ### New paths
 
 Median of 5 measured passes after one warmup, from `./target/release/pack-bench` on this tree. Allocation counts did not move across those passes.
