@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "repeated_8mib"
 harness = false
+
+[[bench]]
+name = "repeated_8mib_inflate"
+harness = false
