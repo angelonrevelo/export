@@ -120,6 +120,12 @@ Four-frame 640×480 animation, a later release run. Same intra-DC keyframe coder
 | --- | --- | --- | --- | --- | --- |
 | four-frame VP8 animation encode, 640×480 (output 70,418 bytes) | 40 | 19,808.1 µs | 21,180.8 µs | 186.11 (p99 174.04) | file MB/s p50 3.56; 129 allocs; 104.98 allocs/MP |
 
+1280×720 two-frame animation, a later release run. 1280 and 720 are multiples of 16, so this is the same intra-DC keyframe encoder as the 640×480 pair. No new entropy coder. Three times the pixels of 640×480 is 26,732 µs; this p50 is 27,085.2 µs, about 1.0× that, so the size stays. The four-frame 640×480 row and the two-frame 640×480 row were not replaced. `decode_webp_animation` returned both frames, and each matched a still decode of that frame. `decode_webp` on the file still returns `Unsupported`.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| two-frame VP8 animation encode, 1280×720 (output 94,368 bytes) | 40 | 27,085.2 µs | 31,594.9 µs | 204.16 (p99 175.02) | file MB/s p50 3.48; 73 allocs; 39.61 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
