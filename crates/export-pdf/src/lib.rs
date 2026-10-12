@@ -12,9 +12,12 @@
 //! 35447 ns p50 and 43261 ns p99.
 //! A 256×256 page is 197268 bytes in and out. Release split of that page is
 //! 148981 ns p50 and 194503 ns p99.
+//! A 16×16 DeviceGray page is 905 bytes in and out. Release split of that
+//! page is 9438 ns p50 and 10426 ns p99.
 //!
-//! Honest limit: xref streams, object streams, any other image, and fonts
-//! other than the built-in Helvetica are not preserved. A truncated file, an
+//! Honest limit: xref streams, object streams, any image other than the RGB
+//! page or the 16×16 gray page, and fonts other than the built-in Helvetica
+//! are not preserved. A truncated file, an
 //! xref offset that does not land on an object, an xref stream, or an
 //! unsupported image is an error.
 
@@ -33,14 +36,38 @@ pub const RGB_MAX_EDGE: u32 = 256;
 /// from 1 through [`RGB_MAX_EDGE`].
 pub fn rgb_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Error> {
     checked_rgb_len(width, height, samples.len())?;
-    Ok(image_file(width, height, samples))
+    Ok(image_file(width, height, "/DeviceRGB", samples))
 }
 
-/// Width, height, and row-major RGB samples of the one supported image page.
+/// Edge, in pixels, of the one uncompressed gray page this crate keeps.
+pub const GRAY_EDGE: u32 = 16;
+
+/// One classic-xref page holding one uncompressed 8-bit DeviceGray image.
+///
+/// `samples` is row-major gray, length `width * height`. Width and height
+/// are both [`GRAY_EDGE`].
+pub fn gray_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Error> {
+    checked_gray_len(width, height, samples.len())?;
+    Ok(image_file(width, height, "/DeviceGray", samples))
+}
+
+/// Width, height, and row-major RGB samples of the one supported RGB page.
 pub fn rgb_samples(pdf: &[u8]) -> Result<(u32, u32, Vec<u8>), Error> {
     match one_rgb_page(pdf)? {
-        Some(image) => Ok((image.width, image.height, image.samples)),
-        None => Err(Error::BadPdf),
+        Some(image) if image.space == SampleSpace::Rgb => {
+            Ok((image.width, image.height, image.samples))
+        }
+        _ => Err(Error::BadPdf),
+    }
+}
+
+/// Width, height, and row-major samples of the one supported gray page.
+pub fn gray_samples(pdf: &[u8]) -> Result<(u32, u32, Vec<u8>), Error> {
+    match one_rgb_page(pdf)? {
+        Some(image) if image.space == SampleSpace::Gray => {
+            Ok((image.width, image.height, image.samples))
+        }
+        _ => Err(Error::BadPdf),
     }
 }
 
@@ -81,7 +108,11 @@ pub fn page_count(pdf: &[u8]) -> Result<usize, Error> {
 
 pub fn split(pdf: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
     if let Some(image) = one_rgb_page(pdf)? {
-        return Ok(vec![rgb_pdf(image.width, image.height, &image.samples)?]);
+        let page = match image.space {
+            SampleSpace::Rgb => rgb_pdf(image.width, image.height, &image.samples)?,
+            SampleSpace::Gray => gray_pdf(image.width, image.height, &image.samples)?,
+        };
+        return Ok(vec![page]);
     }
     let texts = page_texts(pdf)?;
     if texts.is_empty() {
@@ -324,10 +355,17 @@ fn text_from_stream(body: &[u8]) -> String {
     out
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SampleSpace {
+    Rgb,
+    Gray,
+}
+
 struct RgbPage {
     width: u32,
     height: u32,
     samples: Vec<u8>,
+    space: SampleSpace,
 }
 
 struct ContentMarks {
@@ -335,10 +373,10 @@ struct ContentMarks {
     shows_text: bool,
 }
 
-fn image_file(width: u32, height: u32, samples: &[u8]) -> Vec<u8> {
+fn image_file(width: u32, height: u32, space: &str, samples: &[u8]) -> Vec<u8> {
     let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ");
     let mut image = format!(
-        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >>\nstream\n",
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {space} /BitsPerComponent 8 /Length {} >>\nstream\n",
         samples.len()
     )
     .into_bytes();
@@ -362,6 +400,19 @@ fn wrap_stream(body: &[u8]) -> Vec<u8> {
     obj.extend_from_slice(body);
     obj.extend_from_slice(b"endstream");
     obj
+}
+
+fn checked_gray_len(width: u32, height: u32, len: usize) -> Result<(), Error> {
+    if width != GRAY_EDGE || height != GRAY_EDGE {
+        return Err(Error::BadPdf);
+    }
+    let need = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(Error::BadPdf)?;
+    if len != need {
+        return Err(Error::BadPdf);
+    }
+    Ok(())
 }
 
 fn checked_rgb_len(width: u32, height: u32, len: usize) -> Result<(), Error> {
@@ -501,7 +552,8 @@ fn rgb_image(body: &[u8]) -> Result<RgbPage, Error> {
     {
         return Err(Error::BadPdf);
     }
-    if !name_is(dict, b"/ColorSpace", b"/DeviceRGB") {
+    let gray = name_is(dict, b"/ColorSpace", b"/DeviceGray");
+    if !gray && !name_is(dict, b"/ColorSpace", b"/DeviceRGB") {
         return Err(Error::BadPdf);
     }
     let bits = direct_int(dict, b"/BitsPerComponent").ok_or(Error::BadPdf)?;
@@ -513,11 +565,21 @@ fn rgb_image(body: &[u8]) -> Result<RgbPage, Error> {
     let height = u32::try_from(direct_int(dict, b"/Height").ok_or(Error::BadPdf)?)
         .map_err(|_| Error::BadPdf)?;
     let samples = stream_bytes(body)?;
+    if gray {
+        checked_gray_len(width, height, samples.len())?;
+        return Ok(RgbPage {
+            width,
+            height,
+            samples: samples.to_vec(),
+            space: SampleSpace::Gray,
+        });
+    }
     checked_rgb_len(width, height, samples.len())?;
     Ok(RgbPage {
         width,
         height,
         samples: samples.to_vec(),
+        space: SampleSpace::Rgb,
     })
 }
 
@@ -899,8 +961,8 @@ fn is_name_char(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        finish, merge, page_count, rgb_pdf, rgb_samples, split, text_pdf, wrap_stream, Error,
-        RGB_MAX_EDGE,
+        finish, gray_pdf, gray_samples, merge, page_count, rgb_pdf, rgb_samples, split, text_pdf,
+        wrap_stream, Error, GRAY_EDGE, RGB_MAX_EDGE,
     };
 
     #[test]
@@ -1003,6 +1065,44 @@ mod tests {
             rgb_pdf(RGB_MAX_EDGE + 1, 1, &vec![0; past_edge]).unwrap_err(),
             Error::BadPdf
         );
+    }
+
+    #[test]
+    fn split_keeps_gray_pixels() {
+        let mut samples = vec![0u8; (GRAY_EDGE * GRAY_EDGE) as usize];
+        for (i, byte) in samples.iter_mut().enumerate() {
+            *byte = (i * 13 + 7) as u8;
+        }
+        let pdf = gray_pdf(GRAY_EDGE, GRAY_EDGE, &samples).unwrap();
+        assert_eq!(page_count(&pdf).unwrap(), 1);
+        assert_eq!(rgb_samples(&pdf).unwrap_err(), Error::BadPdf);
+        let (w, h, direct) = gray_samples(&pdf).unwrap();
+        assert_eq!((w, h, direct), (GRAY_EDGE, GRAY_EDGE, samples.clone()));
+        let pages = split(&pdf).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0], pdf);
+        assert_eq!(gray_samples(&pages[0]).unwrap().2, samples);
+        assert_eq!(
+            gray_pdf(GRAY_EDGE, GRAY_EDGE - 1, &samples[..240]).unwrap_err(),
+            Error::BadPdf
+        );
+        assert_eq!(
+            gray_pdf(GRAY_EDGE + 1, GRAY_EDGE, &samples).unwrap_err(),
+            Error::BadPdf
+        );
+
+        let wide = vec![0u8; ((GRAY_EDGE + 1) * GRAY_EDGE) as usize];
+        let wide_pdf = image_file_with(
+            "/DeviceGray",
+            8,
+            "",
+            GRAY_EDGE + 1,
+            GRAY_EDGE,
+            &wide,
+            "/Im0 5 0 R",
+        );
+        assert_eq!(page_count(&wide_pdf).unwrap(), 1);
+        assert_eq!(split(&wide_pdf), Err(Error::BadPdf));
     }
 
     #[test]
