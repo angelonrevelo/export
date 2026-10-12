@@ -50,3 +50,15 @@ The 96×64 row is a small fixture. The same generator at 640×480, same 3-3-2 pa
 | bound | holds |
 
 Both sizes divide the byte range evenly, so the means match the small fixture. The bound still holds. Video-to-GIF is not this path.
+
+## Four-frame encode
+
+`cargo bench --manifest-path crates/export-gif/Cargo.toml --bench quantize_anim`. One GIF89a, four generated 256×256 frames, existing 3-3-2 palette and the existing LZW writer. Not a new codec. The 640×480 row and the indexed four-frame 128×96 row were not remeasured.
+
+| | |
+|---|---|
+| output bytes | 45,447 |
+| p50 | 2519.3 µs |
+| p99 | 2817.2 µs |
+
+Video-to-GIF still returns an error. The library does not call ffmpeg.
