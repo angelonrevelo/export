@@ -1,4 +1,4 @@
-//! Write the half-scale 440 Hz frame. The library does not call ffmpeg.
+//! Write two half-scale 440 Hz frames. The library does not call ffmpeg.
 
 fn main() {
     let path = std::env::args()

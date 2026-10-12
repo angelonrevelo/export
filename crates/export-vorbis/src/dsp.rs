@@ -125,6 +125,9 @@ pub(crate) fn overlap_pair(sine: &[f64; BINS]) -> ([f64; BINS], [f64; BINS]) {
     delay[16..].copy_from_slice(&saved);
     let mut tone = [0.0; BINS];
     tone[..16].copy_from_slice(&buf);
+    // The right quarter is the overlap state this frame needs, so the same
+    // frame can follow itself and still reconstruct `sine`.
+    tone[16..].copy_from_slice(&saved);
     (delay, tone)
 }
 
@@ -184,13 +187,17 @@ mod tests {
             let peak = spectrum
                 .iter()
                 .fold(0.0f64, |peak, value| peak.max(value.abs()));
-            assert!(peak < 0.4, "coefficient peak {peak}");
+            assert!(peak < 0.5, "coefficient peak {peak}");
         }
         let delay_time = imdct(&mdct(&delay));
         let tone_time = imdct(&mdct(&tone));
         let (_first, saved) = overlap(&[0.0; 16], &delay_time);
-        let (pcm, _) = overlap(&saved, &tone_time);
+        let (pcm, next) = overlap(&saved, &tone_time);
         for (got, want) in pcm.iter().zip(sine.iter()) {
+            assert!((got - want).abs() < 1.0e-9);
+        }
+        let (second, _) = overlap(&next, &tone_time);
+        for (got, want) in second.iter().zip(sine.iter()) {
             assert!((got - want).abs() < 1.0e-9);
         }
     }

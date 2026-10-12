@@ -24,7 +24,7 @@ pub fn decode_packet(bytes: &[u8]) -> Result<Vec<f32>, Error> {
         let setup = parse_setup(&packets[2], &id)?;
         return decode_audio(&packets[3], &id, &setup);
     }
-    if packets.len() != 5 {
+    if packets.len() != 5 && packets.len() != 6 {
         return Err(Error::BadHeader);
     }
     if id.blocksize_0 != BLOCKSIZE || id.blocksize_1 != BLOCKSIZE {
@@ -33,7 +33,7 @@ pub fn decode_packet(bytes: &[u8]) -> Result<Vec<f32>, Error> {
     let values = parse_tone_setup(&packets[2])?;
     let mut saved = [0.0f64; 16];
     let mut pcm = [0.0f32; dsp::BINS];
-    for packet in [&packets[3], &packets[4]] {
+    for packet in &packets[3..] {
         let (frame, next) = decode_tone_frame(packet, &values, &saved)?;
         saved = next;
         pcm = frame;

@@ -1,12 +1,12 @@
 //! Build one Ogg Vorbis bitstream: mono, 48 kHz, one short frame.
 //!
 //! `encode_packet` uses an unused floor, so that frame is silence.
-//! `encode_half_scale_sine` writes one 440 Hz frame. This is not a song encoder.
+//! `encode_half_scale_sine` writes two 440 Hz frames. This is not a song encoder.
 
 use crate::dsp::{self, pack_vorbis_float, unpack_vorbis_float};
 use crate::{ogg_crc, Error, BLOCKSIZE, BLOCKSIZE_EXP, FRAME_SAMPLES, SAMPLE_RATE_HZ};
 
-const TONE_MIN: f32 = -0.4;
+const TONE_MIN: f32 = -0.5;
 
 const VENDOR: &[u8] = b"export-vorbis";
 const SERIAL: u32 = 0x766F_7262;
@@ -40,35 +40,71 @@ pub fn half_scale_sine() -> [f32; FRAME_SAMPLES] {
     ideal_sine().map(|sample| sample as f32)
 }
 
-/// Encode [`half_scale_sine`] as one short mono frame.
+/// Encode two short frames of [`half_scale_sine`].
 ///
-/// Vorbis overlap needs a leading delay frame in the same bitstream. The audible
-/// result is still that one frame. This is not a song encoder.
+/// Vorbis overlap needs a leading delay frame in the same bitstream. The two
+/// audible frames are that sine. This is not a song encoder.
 pub fn encode_half_scale_sine() -> Result<Vec<u8>, Error> {
-    let (min, step) = tone_grid();
-    let (delay, tone) = dsp::overlap_pair(&ideal_sine());
-    let delay = quantize_time(&delay, min, step)?;
-    let tone = quantize_time(&tone, min, step)?;
-
+    let tone_packets = tone_packets()?;
+    let delay = tone_packets.delay;
+    let tone = tone_packets.tone;
+    let setup = tone_packets.setup;
     let id = identification_packet();
     let comment = comment_packet();
-    let setup = tone_setup_packet(min, step);
-    let delay = tone_audio(&delay);
-    let tone = tone_audio(&tone);
-
     let mut out = Vec::with_capacity(1024);
     out.extend(ogg_page(0x02, 0, SERIAL, 0, &[&id]));
     out.extend(ogg_page(0x00, 0, SERIAL, 1, &[&comment]));
     out.extend(ogg_page(0x00, 0, SERIAL, 2, &[&setup]));
     out.extend(ogg_page(0x00, FRAME_SAMPLES as u64, SERIAL, 3, &[&delay]));
     out.extend(ogg_page(
-        0x04,
+        0x00,
         (FRAME_SAMPLES * 2) as u64,
         SERIAL,
         4,
         &[&tone],
     ));
+    out.extend(ogg_page(
+        0x04,
+        (FRAME_SAMPLES * 3) as u64,
+        SERIAL,
+        5,
+        &[&tone],
+    ));
     Ok(out)
+}
+
+/// The sine frame packet with no audio frame before it.
+///
+/// Overlap history is empty. This is the same audio packet as the second frame
+/// of [`encode_half_scale_sine`], without that preceding frame.
+pub fn encode_half_scale_sine_frame() -> Result<Vec<u8>, Error> {
+    let tone_packets = tone_packets()?;
+    let tone = tone_packets.tone;
+    let setup = tone_packets.setup;
+    let id = identification_packet();
+    let comment = comment_packet();
+    let mut out = Vec::with_capacity(1024);
+    out.extend(ogg_page(0x02, 0, SERIAL, 0, &[&id]));
+    out.extend(ogg_page(0x00, 0, SERIAL, 1, &[&comment]));
+    out.extend(ogg_page(0x00, 0, SERIAL, 2, &[&setup]));
+    out.extend(ogg_page(0x04, FRAME_SAMPLES as u64, SERIAL, 3, &[&tone]));
+    Ok(out)
+}
+
+struct TonePackets {
+    delay: Vec<u8>,
+    tone: Vec<u8>,
+    setup: Vec<u8>,
+}
+
+fn tone_packets() -> Result<TonePackets, Error> {
+    let (min, step) = tone_grid();
+    let (delay, tone) = dsp::overlap_pair(&ideal_sine());
+    Ok(TonePackets {
+        delay: tone_audio(&quantize_time(&delay, min, step)?),
+        tone: tone_audio(&quantize_time(&tone, min, step)?),
+        setup: tone_setup_packet(min, step),
+    })
 }
 
 fn ideal_sine() -> [f64; FRAME_SAMPLES] {
@@ -82,7 +118,7 @@ fn ideal_sine() -> [f64; FRAME_SAMPLES] {
 
 fn tone_grid() -> (f32, f32) {
     let min = unpack_vorbis_float(pack_vorbis_float(TONE_MIN));
-    let step = unpack_vorbis_float(pack_vorbis_float(0.8 / 255.0));
+    let step = unpack_vorbis_float(pack_vorbis_float(1.0 / 255.0));
     (min, step)
 }
 

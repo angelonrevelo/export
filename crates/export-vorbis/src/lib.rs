@@ -1,7 +1,7 @@
 //! One Vorbis audio packet: mono, 48 kHz, one short frame.
 //!
-//! `encode_packet` writes a silent frame. `encode_half_scale_sine` writes one
-//! half-scale 440 Hz frame. `decode_packet` reads either bitstream back to PCM.
+//! `encode_packet` writes a silent frame. `encode_half_scale_sine` writes two
+//! half-scale 440 Hz frames. `decode_packet` reads either bitstream back to PCM.
 //! This crate is not a song encoder.
 
 #![forbid(unsafe_code)]
@@ -11,7 +11,9 @@ mod dsp;
 mod encoder;
 
 pub use decoder::decode_packet;
-pub use encoder::{encode_half_scale_sine, encode_packet, half_scale_sine};
+pub use encoder::{
+    encode_half_scale_sine, encode_half_scale_sine_frame, encode_packet, half_scale_sine,
+};
 
 /// Sample rate of the one packet this crate writes.
 pub const SAMPLE_RATE_HZ: u32 = 48_000;

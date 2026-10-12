@@ -12,8 +12,6 @@ ffmpeg treats the first Vorbis frame as delay and drops it. Decode this packet w
 ffmpeg -flags2 +skip_manual -i frame.ogg -f f32le pcm.raw
 ```
 
-`encode_half_scale_sine` writes one half-scale 440 Hz frame, same rate and length, plus the overlap delay that frame needs. Default ffmpeg drops the delay and returns those 32 samples:
+`encode_half_scale_sine` writes two short frames of one half-scale 440 Hz sine, same rate and length, plus the overlap delay those frames need. Default ffmpeg drops the delay. The second frame is 32 samples, peak 0.50578, error RMS 0.00510 against that sine.
 
-```
-ffmpeg -i sine.ogg -f f32le pcm.raw
-```
+The same audio packet with no frame before it does not match the sine. Default ffmpeg emits 0 samples. With `-flags2 +skip_manual` it emits 32 samples, peak 0.50377, error RMS 0.25002.
