@@ -106,6 +106,15 @@ bytes), release, 31 iterations after 3 warmup passes. Decode of that file
 back to the samples is p50 0.150 ms and p99 0.186 ms (50.72 MB/s on the
 7,601 FLAC bytes), same iteration count.
 
+### 24-bit mono block
+
+Separate from the 16-bit rows above. One mono block of 4,096 samples at
+24-bit, 44.1 kHz. Each sample is the mono fixture formula shifted up 8 bits,
+plus the low byte `i & 255`, so the value does not fit in 16 bits. The
+samples round-trip. The encoded file is 7,293 bytes. Encode p50 is 0.323 ms
+and p99 is 0.391 ms (37.99 MB/s on the 12,288 PCM bytes), release, 31
+iterations after 3 warmup passes.
+
 ### Reader experiment
 
 Rice quotients were timed two ways, interleaved in one process, 31 rounds,

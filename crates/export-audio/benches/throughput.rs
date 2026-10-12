@@ -118,6 +118,25 @@ fn stereo_block() -> Pcm {
     }
 }
 
+fn mono_wide() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let narrow = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        let low = (i as i32) & 255;
+        samples.push((narrow << 8) + low);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 24,
+        samples,
+    }
+}
+
 fn main() {
     if cfg!(debug_assertions) {
         eprintln!("refusing timing verdict: debug_assertions is on");
@@ -185,4 +204,17 @@ fn main() {
         std::hint::black_box(decode(&stereo_flac).expect("decode stereo"));
     });
     report("stereo_decode", "miss", stereo_flac.len() as u64, &stereo_decode);
+
+    let wide = mono_wide();
+    let wide_flac = encode(&wide).expect("encode 24-bit");
+    let wide_back = decode(&wide_flac).expect("decode 24-bit");
+    assert_eq!(wide_back.bits, 24);
+    assert_eq!(wide_back.channels, 1);
+    assert_eq!(wide_back.samples, wide.samples, "24-bit block is not exact");
+    let wide_pcm_len = (wide.samples.len() * 3) as u64;
+    let wide_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&wide).expect("encode 24-bit"));
+    });
+    report("wide_encode", "miss", wide_pcm_len, &wide_encode);
+    println!("wide_flac_bytes {}", wide_flac.len());
 }

@@ -1663,6 +1663,39 @@ mod tests {
         }
     }
 
+    fn mono_wide() -> Pcm {
+        let n = 4096usize;
+        let mut samples = Vec::with_capacity(n);
+        for i in 0..n {
+            let ramp = ((i % 256) as i32) - 128;
+            let slow = ((i / 64) % 512) as i32 - 256;
+            let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+            let narrow = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+            let low = (i as i32) & 255;
+            samples.push((narrow << 8) + low);
+        }
+        Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 24,
+            samples,
+        }
+    }
+
+    #[test]
+    fn mono_wide_block_round_trips() {
+        let pcm = mono_wide();
+        assert_eq!(pcm.samples.len(), 4096);
+        assert!(pcm.samples.iter().any(|s| !sample_fits(*s, 16)));
+        assert!(pcm.samples.iter().all(|s| sample_fits(*s, 24)));
+        let bytes = encode(&pcm).unwrap();
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 1);
+        assert_eq!(back.bits, 24);
+        assert_eq!(back.sample_rate, 44_100);
+        assert_eq!(back.samples, pcm.samples);
+    }
+
     #[test]
     fn stereo_block_round_trips_both_channels() {
         let pcm = stereo_block();
