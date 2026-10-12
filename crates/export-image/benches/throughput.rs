@@ -1342,35 +1342,4 @@ fn main() {
         mb_s(vast_pixels * 3.0, p50),
         allocs as f64 / (vast_pixels / 1_000_000.0),
     );
-
-    // Same gradient as the 640×480 PNG thumbnail, next size 1280×960.
-    // Existing thumbnail_jpeg, long edge 220, quality 72. The 640×480 loop above is unchanged.
-    let wide = gradient(1280, 960);
-    let wide_png = encode_png(&wide).unwrap();
-    for _ in 0..2 {
-        let _ = thumbnail_jpeg(&wide_png).unwrap();
-    }
-    let (p50, p99) = time_n(20, || {
-        let _ = thumbnail_jpeg(&wide_png).unwrap();
-    });
-    ALLOCS.store(0, Ordering::Relaxed);
-    let wide_thumb = thumbnail_jpeg(&wide_png).unwrap();
-    let allocs = ALLOCS.load(Ordering::Relaxed);
-    let jpeg = wide_thumb.jpeg.len() >= 3
-        && wide_thumb.jpeg[0] == 0xff
-        && wide_thumb.jpeg[1] == 0xd8
-        && wide_thumb.jpeg[2] == 0xff;
-    let long_side = wide_thumb.width.max(wide_thumb.height);
-    let wide_pixels = 1280.0 * 960.0;
-    println!(
-        "thumbnail_q72_1280x960 file_bytes={} out_bytes={} width={} height={} long_side={long_side} jpeg={jpeg} quality=72 samples=20 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
-        wide_png.len(),
-        wide_thumb.jpeg.len(),
-        wide_thumb.width,
-        wide_thumb.height,
-        p50 as f64 / 1_000.0,
-        p99 as f64 / 1_000.0,
-        mb_s(wide_pixels * 3.0, p50),
-        allocs as f64 / (wide_pixels / 1_000_000.0),
-    );
 }
