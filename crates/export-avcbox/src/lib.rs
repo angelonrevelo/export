@@ -1,8 +1,8 @@
-//! Box one Annex B H.264 I-frame into a non-fragmented MP4.
+//! Box Annex B H.264 pictures into a non-fragmented MP4.
 //!
-//! The file is `ftyp`, `moov`, and `mdat`, with one `avc1` sample. Threading
-//! is off. This is one boxed frame, not a shrink of a real video. Nothing here
-//! encodes H.264, and nothing here calls ffmpeg.
+//! One I-frame is one `avc1` sample. P-frames that follow that I-frame are
+//! further samples in the same `ftyp` / `moov` / `mdat` file. Threading is
+//! off. Nothing here encodes H.264, and nothing here calls ffmpeg.
 
 #![forbid(unsafe_code)]
 
@@ -15,7 +15,7 @@ mod param;
 mod walk;
 
 pub use error::Error;
-pub use fixture::{IFRAME_160X160, IFRAME_32X32};
+pub use fixture::{IFRAME_160X160, IFRAME_32X32, SEQUENCE_160X160};
 
 /// Encode settings for the boxer. Threading is off: `threads` must be 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +35,8 @@ pub struct Boxed {
     pub mp4: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    /// Pictures written as `avc1` samples. This is not an ffmpeg frame count.
+    pub samples: u32,
 }
 
 /// Wrap one Annex B I-frame. A truncated buffer returns [`Error::Truncated`].
@@ -49,10 +51,22 @@ pub fn box_iframe(annex_b: &[u8], opts: &Options) -> Result<Boxed, Error> {
         return Err(Error::Frame);
     }
     walk::idr(&sps, &pps, access.idr)?;
-    let mp4 = mp4::write(&sps, access.sps, access.pps, access.idr, &access.sei)?;
+    for nal in &access.predicted {
+        walk::predicted(&sps, &pps, nal)?;
+    }
+    let samples = 1 + access.predicted.len();
+    let mp4 = if access.predicted.is_empty() {
+        mp4::write(&sps, access.sps, access.pps, access.idr, &access.sei)?
+    } else {
+        let mut pictures = Vec::with_capacity(samples);
+        pictures.push(access.idr);
+        pictures.extend(access.predicted.iter().copied());
+        mp4::write_pictures(&sps, access.sps, access.pps, &access.sei, &pictures)?
+    };
     Ok(Boxed {
         mp4,
         width: sps.width,
         height: sps.height,
+        samples: samples as u32,
     })
 }

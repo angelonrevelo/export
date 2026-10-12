@@ -29,6 +29,58 @@ pub fn write(
     Ok(out)
 }
 
+/// Same file shape as [`write`], with one sample per picture.
+///
+/// The first picture is the I-frame. Each later picture is one P-slice.
+/// `write` stays the one-sample path so that file does not change.
+pub fn write_pictures(
+    sps: &Sps,
+    sps_nal: &[u8],
+    pps_nal: &[u8],
+    sei: &[&[u8]],
+    pictures: &[&[u8]],
+) -> Result<Vec<u8>, Error> {
+    if pictures.is_empty() || sps_nal.len() < 4 || pps_nal.is_empty() {
+        return Err(Error::Truncated);
+    }
+    if pictures.len() > u32::MAX as usize {
+        return Err(Error::Size);
+    }
+    let mut sizes = Vec::with_capacity(pictures.len());
+    let mut payload = Vec::new();
+    for (i, nal) in pictures.iter().enumerate() {
+        if nal.is_empty() {
+            return Err(Error::Truncated);
+        }
+        let start = payload.len();
+        if i == 0 {
+            for one in sei {
+                push_nal(&mut payload, one)?;
+            }
+        }
+        push_nal(&mut payload, nal)?;
+        let size = payload.len() - start;
+        if size > u32::MAX as usize {
+            return Err(Error::Size);
+        }
+        sizes.push(size as u32);
+    }
+    let ftyp = ftyp();
+    let moov_size = moov_pictures(0, &sizes, sps, sps_nal, pps_nal)?.len();
+    let offset = 8usize
+        .checked_add(ftyp.len())
+        .and_then(|n| n.checked_add(moov_size))
+        .ok_or(Error::Size)?;
+    if offset > u32::MAX as usize {
+        return Err(Error::Size);
+    }
+    let moov = moov_pictures(offset as u32, &sizes, sps, sps_nal, pps_nal)?;
+    let mut out = ftyp;
+    out.extend_from_slice(&moov);
+    out.extend(atom(b"mdat", &payload)?);
+    Ok(out)
+}
+
 fn sample(idr: &[u8], sei: &[&[u8]]) -> Result<Vec<u8>, Error> {
     let mut payload = Vec::new();
     for nal in sei {
@@ -279,6 +331,162 @@ fn stsz(sample_size: u32) -> Vec<u8> {
     body.extend_from_slice(&1u32.to_be_bytes());
     body.extend_from_slice(&sample_size.to_be_bytes());
     atom(b"stsz", &body).expect("stsz fits")
+}
+
+fn moov_pictures(
+    offset: u32,
+    sizes: &[u32],
+    sps: &Sps,
+    sps_nal: &[u8],
+    pps_nal: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let count = sizes.len() as u32;
+    let mvhd = mvhd_n(count);
+    let trak = trak_pictures(offset, sizes, sps, sps_nal, pps_nal)?;
+    let mut body = mvhd;
+    body.extend(trak);
+    atom(b"moov", &body)
+}
+
+fn mvhd_n(duration: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(100);
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&TIMESCALE.to_be_bytes());
+    body.extend_from_slice(&duration.to_be_bytes());
+    body.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+    body.extend_from_slice(&0x0100u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&[0u8; 8]);
+    body.extend_from_slice(&matrix());
+    body.extend_from_slice(&[0u8; 24]);
+    body.extend_from_slice(&2u32.to_be_bytes());
+    atom(b"mvhd", &body).expect("mvhd fits")
+}
+
+fn trak_pictures(
+    offset: u32,
+    sizes: &[u32],
+    sps: &Sps,
+    sps_nal: &[u8],
+    pps_nal: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut body = tkhd_n(sps, sizes.len() as u32);
+    body.extend(mdia_pictures(offset, sizes, sps, sps_nal, pps_nal)?);
+    atom(b"trak", &body)
+}
+
+fn tkhd_n(sps: &Sps, duration: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(84);
+    body.extend_from_slice(&7u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&duration.to_be_bytes());
+    body.extend_from_slice(&[0u8; 8]);
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&matrix());
+    body.extend_from_slice(&(sps.width << 16).to_be_bytes());
+    body.extend_from_slice(&(sps.height << 16).to_be_bytes());
+    atom(b"tkhd", &body).expect("tkhd fits")
+}
+
+fn mdia_pictures(
+    offset: u32,
+    sizes: &[u32],
+    sps: &Sps,
+    sps_nal: &[u8],
+    pps_nal: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut body = mdhd_n(sizes.len() as u32);
+    body.extend(hdlr());
+    body.extend(minf_pictures(offset, sizes, sps, sps_nal, pps_nal)?);
+    atom(b"mdia", &body)
+}
+
+fn mdhd_n(duration: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(24);
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&TIMESCALE.to_be_bytes());
+    body.extend_from_slice(&duration.to_be_bytes());
+    body.extend_from_slice(&0x55c4u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    atom(b"mdhd", &body).expect("mdhd fits")
+}
+
+fn minf_pictures(
+    offset: u32,
+    sizes: &[u32],
+    sps: &Sps,
+    sps_nal: &[u8],
+    pps_nal: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut body = vmhd();
+    body.extend(dinf());
+    body.extend(stbl_pictures(offset, sizes, sps, sps_nal, pps_nal)?);
+    atom(b"minf", &body)
+}
+
+fn stbl_pictures(
+    offset: u32,
+    sizes: &[u32],
+    sps: &Sps,
+    sps_nal: &[u8],
+    pps_nal: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let count = sizes.len() as u32;
+    let mut body = stsd(sps, sps_nal, pps_nal)?;
+    body.extend(stts_n(count));
+    body.extend(stsc_n(count));
+    body.extend(stsz_n(sizes));
+    body.extend(stco(offset));
+    body.extend(stss_first());
+    atom(b"stbl", &body)
+}
+
+fn stts_n(count: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(16);
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(&count.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    atom(b"stts", &body).expect("stts fits")
+}
+
+fn stsc_n(count: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(20);
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(&count.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    atom(b"stsc", &body).expect("stsc fits")
+}
+
+fn stsz_n(sizes: &[u32]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(12 + sizes.len() * 4);
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&(sizes.len() as u32).to_be_bytes());
+    for size in sizes {
+        body.extend_from_slice(&size.to_be_bytes());
+    }
+    atom(b"stsz", &body).expect("stsz fits")
+}
+
+fn stss_first() -> Vec<u8> {
+    let mut body = Vec::with_capacity(12);
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(&1u32.to_be_bytes());
+    atom(b"stss", &body).expect("stss fits")
 }
 
 fn stco(offset: u32) -> Vec<u8> {

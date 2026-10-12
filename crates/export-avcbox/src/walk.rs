@@ -10,6 +10,11 @@ use crate::param::{Pps, Sps};
 const BLK_X: [usize; 16] = [0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3];
 const BLK_Y: [usize; 16] = [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3];
 
+const INTER_CBP: [u8; 48] = [
+    0, 16, 1, 2, 4, 8, 32, 3, 5, 10, 12, 15, 47, 7, 11, 13, 14, 6, 9, 31, 35, 37, 42, 44, 33, 34,
+    36, 40, 39, 43, 45, 46, 17, 18, 20, 24, 19, 21, 26, 28, 23, 27, 29, 30, 22, 25, 38, 41,
+];
+
 const INTRA_CBP: [u8; 48] = [
     47, 31, 15, 0, 23, 27, 29, 30, 7, 11, 13, 14, 39, 43, 45, 46, 16, 3, 5, 10, 12, 19, 21, 26, 28,
     35, 37, 42, 44, 1, 2, 4, 8, 17, 18, 20, 24, 6, 9, 22, 25, 32, 33, 34, 36, 40, 38, 41,
@@ -80,6 +85,110 @@ pub fn idr(sps: &Sps, pps: &Pps, nal: &[u8]) -> Result<(), Error> {
         }
     }
     bits.finish()
+}
+
+/// One P-slice after the I-frame. A cut-off slice returns [`Error::Truncated`].
+pub fn predicted(sps: &Sps, pps: &Pps, nal: &[u8]) -> Result<(), Error> {
+    if pps.entropy_cabac || nal.is_empty() {
+        return Err(Error::Frame);
+    }
+    let ref_idc = nal[0] >> 5;
+    let raw = rbsp(nal)?;
+    let mut bits = Bits::new(&raw);
+    p_header(&mut bits, sps, pps, ref_idc)?;
+    let mb_w = sps.mb_w as usize;
+    let mb_h = sps.mb_h as usize;
+    let mb_count = mb_w * mb_h;
+    let mut luma = vec![0u8; mb_w * 4 * mb_h * 4];
+    let mut addr = 0usize;
+    while addr < mb_count {
+        let skip = bits.ue()? as usize;
+        if skip > mb_count - addr {
+            return Err(Error::Frame);
+        }
+        addr += skip;
+        if addr == mb_count {
+            break;
+        }
+        let mx = addr % mb_w;
+        let my = addr / mb_w;
+        let mb_type = bits.ue()?;
+        if mb_type != 0 {
+            return Err(Error::Frame);
+        }
+        let _mvd_x = bits.se()?;
+        let _mvd_y = bits.se()?;
+        let cbp_code = bits.ue()?;
+        if cbp_code >= 48 {
+            return Err(Error::Frame);
+        }
+        let cbp = u32::from(INTER_CBP[cbp_code as usize]);
+        let cbpl = cbp & 15;
+        let cbpc = cbp >> 4;
+        if cbp != 0 {
+            let _qp_delta = bits.se()?;
+        }
+        if cbpl != 0 {
+            for i8 in 0..4 {
+                if cbpl & (1 << i8) == 0 {
+                    continue;
+                }
+                for k in 0..4 {
+                    let i = i8 * 4 + k;
+                    let bx = mx * 4 + BLK_X[i];
+                    let by = my * 4 + BLK_Y[i];
+                    let nc = nc_at(&luma, mb_w * 4, bx, by);
+                    luma[by * mb_w * 4 + bx] = read_block(&mut bits, nc, 16)? as u8;
+                }
+            }
+        }
+        if cbpc > 0 {
+            let _ = read_block(&mut bits, -1, 4)?;
+            let _ = read_block(&mut bits, -1, 4)?;
+        }
+        addr += 1;
+    }
+    bits.finish()
+}
+
+fn p_header(bits: &mut Bits<'_>, sps: &Sps, pps: &Pps, ref_idc: u8) -> Result<(), Error> {
+    if bits.ue()? != 0 {
+        return Err(Error::Frame);
+    }
+    let slice_type = bits.ue()?;
+    if slice_type != 0 && slice_type != 5 {
+        return Err(Error::Frame);
+    }
+    if bits.ue()? != pps.pps_id {
+        return Err(Error::Frame);
+    }
+    let _frame_num = bits.bits(sps.log2_max_frame_num)?;
+    if sps.poc_type == 0 {
+        let _ = bits.bits(sps.log2_max_poc_lsb)?;
+        if pps.bottom_field_pic_order {
+            let _ = bits.se()?;
+        }
+    } else if sps.poc_type == 1 && !sps.delta_pic_order_always_zero {
+        let _ = bits.se()?;
+    }
+    if bits.bit()? != 0 || bits.bit()? != 0 {
+        return Err(Error::Frame);
+    }
+    if ref_idc != 0 && bits.bit()? != 0 {
+        return Err(Error::Frame);
+    }
+    if pps.redundant_pic_cnt {
+        let _ = bits.ue()?;
+    }
+    let _qp_delta = bits.se()?;
+    if pps.deblocking_control {
+        let disable = bits.ue()?;
+        if disable != 1 {
+            let _ = bits.se()?;
+            let _ = bits.se()?;
+        }
+    }
+    Ok(())
 }
 
 fn header(bits: &mut Bits<'_>, sps: &Sps, pps: &Pps) -> Result<(), Error> {

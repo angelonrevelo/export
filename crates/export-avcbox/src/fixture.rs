@@ -1,3 +1,8 @@
+/// Eight 160×160 Annex B pictures: the I-frame, then seven P-frames. 7,197 bytes.
+///
+/// Copied as bytes. This crate does not link an H.264 encoder.
+pub static SEQUENCE_160X160: &[u8] = include_bytes!("seq_160x160.annexb");
+
 /// The 6,432-byte 160×160 Annex B I-frame.
 ///
 /// Copied as bytes. This crate does not link an H.264 encoder.

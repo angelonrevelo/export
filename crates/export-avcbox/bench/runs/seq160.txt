@@ -1,0 +1,22 @@
+# Release bench, threading off. 160x160 sequence: one I-frame and seven P-frames.
+# opt-level 3, lto thin, codegen-units 1.
+# 200 calls after 20 warmup. One process, no other threads.
+# input_bytes=7197 output_bytes=7819 width=160 height=160 samples=8
+
+# Immediately after linking
+release_p50_ns=761564
+release_p99_ns=943430
+
+# Four later runs on that same binary (p50_ns p99_ns)
+757426 901976
+765461 922625
+757428 902741
+784642 903712
+
+# Same binary, after the wasm32 library build (identify script)
+966042 1360373
+
+# Host identify, after the file was written. ffmpeg reported:
+# Stream #0:0: Video: h264 (Constrained Baseline) (avc1), yuv420p, 160x160
+# frame=8
+# ffprobe nb_read_frames=8

@@ -2,7 +2,7 @@
 
 One Annex B H.264 I-frame, boxed as a non-fragmented MP4. `ftyp`, `moov`, and `mdat`. One `avc1` sample. No dependencies. Threading is off.
 
-This is one boxed frame, not a shrink of a real video. It does not open a movie. It does not encode H.264. A truncated Annex B buffer returns an error. A P-slice, a B-slice, CABAC, an interlaced picture, and more than one slice group return an error. The slice is walked only far enough to reject a cut-off buffer. Pixels are not reconstructed here. The library never calls ffmpeg.
+This is one boxed frame, not a shrink of a real video. It does not open a movie. It does not encode H.264. A truncated Annex B buffer returns an error. A P-slice before the I-frame, a B-slice, CABAC, an interlaced picture, and more than one slice group return an error. P-frames that follow the I-frame are further samples in the same file. The slice is walked only far enough to reject a cut-off buffer. Pixels are not reconstructed here. The library never calls ffmpeg.
 
 The 272-byte input is the 32×32 Constrained Baseline I-frame, copied in as a byte array.
 
@@ -25,3 +25,13 @@ Same release profile and one thread. The input is the 6,432-byte 160×160 I-fram
 - release p50: 611 µs, p99: 774 µs on the run taken immediately after linking. Four later runs on that binary were p50 653–974 µs and p99 727–1,294 µs
 
 `scripts/check-identify-160.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 160×160, one frame.
+
+## 160×160 sequence
+
+Same release profile and one thread. The input is the 7,197-byte Annex B file: the 160×160 I-frame, then seven P-frames, copied in as bytes. Eight `avc1` samples. 200 calls after 20 warmup.
+
+- input: 7,197 bytes
+- output: 7,819 bytes
+- release p50: 762 µs, p99: 944 µs on the run taken immediately after linking. Four later runs on that binary were p50 758–785 µs and p99 902–923 µs. One more run of that binary, after the wasm library build, was p50 967 µs and p99 1,361 µs
+
+`scripts/check-identify-seq160.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 160×160, and decoded 8 frames.

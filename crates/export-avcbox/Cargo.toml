@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.74"
 publish = false
-description = "Box one Annex B H.264 I-frame into a non-fragmented MP4. No dependencies."
+description = "Box Annex B H.264 pictures into a non-fragmented MP4. No dependencies."
 
 # The hot path has no encoder, no C toolchain, and no ffmpeg. Threading is off.
 
@@ -28,3 +28,7 @@ path = "src/bin/avcbox.rs"
 [[bin]]
 name = "avcbox160"
 path = "src/bin/avcbox160.rs"
+
+[[bin]]
+name = "avcbox160seq"
+path = "src/bin/avcbox160seq.rs"

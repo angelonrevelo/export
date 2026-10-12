@@ -1,4 +1,4 @@
-use export_avcbox::{box_iframe, Error, Options, IFRAME_160X160, IFRAME_32X32};
+use export_avcbox::{box_iframe, Error, Options, IFRAME_160X160, IFRAME_32X32, SEQUENCE_160X160};
 
 fn opts() -> Options {
     Options::default()
@@ -57,6 +57,46 @@ fn larger_iframe_is_one_avc1_sample() {
     assert_eq!(again.mp4, boxed.mp4);
     let small = box_iframe(IFRAME_32X32, &opts()).unwrap();
     assert_eq!(small.mp4.len(), 888);
+}
+
+#[test]
+fn sequence_is_160_by_160_and_keeps_the_single_frames() {
+    assert_eq!(SEQUENCE_160X160.len(), 7197);
+    assert!(SEQUENCE_160X160.starts_with(IFRAME_160X160));
+    let boxed = box_iframe(SEQUENCE_160X160, &opts()).unwrap();
+    assert_eq!(boxed.width, 160);
+    assert_eq!(boxed.height, 160);
+    assert_eq!(boxed.samples, 8);
+    assert_eq!(boxed.mp4.len(), 7819);
+    assert!(boxed.mp4.starts_with(b"\x00\x00\x00\x20ftyp"));
+    assert_eq!(top_level(&boxed.mp4), vec!["ftyp", "moov", "mdat"]);
+    assert_eq!(count(&boxed.mp4, b"avcC"), 1);
+    let stsz = find(&boxed.mp4, b"stsz");
+    let default_size = u32::from_be_bytes(boxed.mp4[stsz + 8..stsz + 12].try_into().unwrap());
+    let sample_count = u32::from_be_bytes(boxed.mp4[stsz + 12..stsz + 16].try_into().unwrap());
+    assert_eq!(default_size, 0);
+    assert_eq!(sample_count, boxed.samples);
+    assert!(sample_count > 1);
+    let mut sum = 0u32;
+    for i in 0..sample_count {
+        let at = stsz + 16 + (i as usize) * 4;
+        sum += u32::from_be_bytes(boxed.mp4[at..at + 4].try_into().unwrap());
+    }
+    let mdat = find(&boxed.mp4, b"mdat");
+    let mdat_size = u32::from_be_bytes(boxed.mp4[mdat - 4..mdat].try_into().unwrap());
+    assert_eq!(sum, mdat_size - 8);
+    assert_eq!(
+        box_iframe(&SEQUENCE_160X160[..SEQUENCE_160X160.len() - 1], &opts()).unwrap_err(),
+        Error::Truncated
+    );
+    let prefix = box_iframe(&SEQUENCE_160X160[..IFRAME_160X160.len()], &opts()).unwrap();
+    assert_eq!(prefix.mp4.len(), 7048);
+    assert_eq!(prefix.samples, 1);
+    let small = box_iframe(IFRAME_32X32, &opts()).unwrap();
+    assert_eq!(small.mp4.len(), 888);
+    assert_eq!(small.samples, 1);
+    let again = box_iframe(SEQUENCE_160X160, &opts()).unwrap();
+    assert_eq!(again.mp4, boxed.mp4);
 }
 
 #[test]
