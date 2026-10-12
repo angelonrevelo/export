@@ -57,7 +57,21 @@ Peak buffer held by the assembler: 65,536 bytes. Process VmHWM after that run: 1
 
 Peak write into the sink: 65,536 bytes. VmHWM after that run: 10,632 KiB.
 
+### Two 1 MiB GETs
+
+`pair_bench` times two cleartext GETs, 1 MiB each, on this machine's `std::net` stack. It is not a CDN, and it does not call yt-dlp. The server listens on `127.0.0.1`. Loopback is allowed only in that bench. `https` stays unsupported. One untimed warmup of each mode, then 40 samples, alternating which mode runs first. The 8 MiB row above is a different run and is unchanged.
+
+Shared means both bodies on one keep-alive connection (`ClearConn`). Separate means `download_to` twice, one connection per GET. The shared path stays only when its latency p50 is at least 10% under the separate p50. Log: `bench/runs/2026-10-12-cleartext-pair.txt`.
+
+| Two 1 MiB GETs | Combined bytes | Connections | p50 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Shared, kept | 2,097,152 | 1 | 350,373 ns | 502,708 ns |
+| Separate | 2,097,152 | 2 | 402,202 ns | 563,464 ns |
+
+350,373 is 12.9% under 402,202, which clears the 10% bar, so the shared connection stays.
+
 ```
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin assemble_bench
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin download_bench
+cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin pair_bench
 ```

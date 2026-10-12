@@ -77,6 +77,90 @@ struct Response {
     left: u64,
     chunk_need_line: bool,
     chunk_done: bool,
+    /// Body ended on a content-length and the server did not ask to close.
+    persist_ok: bool,
+}
+
+/// One cleartext socket reused across GETs to the same host and port.
+///
+/// `download_to` still opens a new connection per call.
+pub struct ClearConn {
+    cfg: GetCfg,
+    idle: Option<Idle>,
+    dials: u64,
+}
+
+struct Idle {
+    tcp: TcpStream,
+    host: String,
+    port: u16,
+}
+
+impl ClearConn {
+    pub fn new(cfg: GetCfg) -> Self {
+        Self {
+            cfg,
+            idle: None,
+            dials: 0,
+        }
+    }
+
+    pub fn connections(&self) -> u64 {
+        self.dials
+    }
+
+    pub fn download_to<W: Write>(
+        &mut self,
+        url: &str,
+        writer: &mut W,
+    ) -> Result<DownloadOutcome> {
+        let current = policy::parse_url(url)?;
+        if current.scheme != "http" {
+            return Err(Error::Unsupported(
+                "cleartext http only; this crate has no TLS".into(),
+            ));
+        }
+        enforce(&current, &self.cfg)?;
+        let tcp = match self.idle.take() {
+            Some(idle) if idle.host == current.host && idle.port == current.port => idle.tcp,
+            _ => {
+                self.dials += 1;
+                dial(&current, &self.cfg)?
+            }
+        };
+        let mut resp = match exchange(tcp, &current, None, true) {
+            Ok(resp) => resp,
+            Err(err) => return Err(err),
+        };
+        if resp.head.status != 200 && resp.head.status != 206 {
+            return Err(Error::Http(format!("status {}", resp.head.status)));
+        }
+        if let (Some(max), Some(len)) = (self.cfg.max_bytes, resp.head.content_length) {
+            if len > max {
+                return Err(Error::TooLarge { limit: max, got: len });
+            }
+        }
+        let (bytes_written, peak_write) = copy_body(&mut resp, self.cfg.max_bytes, writer)?;
+        let status = resp.head.status;
+        let final_url = resp.head.final_url.clone();
+        let content_type = resp.head.content_type.clone();
+        if let Some(tcp) = resp.into_idle() {
+            self.idle = Some(Idle {
+                tcp,
+                host: current.host,
+                port: current.port,
+            });
+        }
+        Ok(DownloadOutcome {
+            bytes_written,
+            status,
+            final_url,
+            content_type,
+            restarted: false,
+            peak_write,
+            read_buffer: READ_BUF as u64,
+        })
+    }
 }
 
 pub fn head(cfg: &GetCfg, url: &str) -> Result<Head> {
@@ -337,7 +421,7 @@ fn open(cfg: &GetCfg, method: &str, url: &str, range: Option<RangeSpec>) -> Resu
     for hop in 0..=cfg.max_redirects {
         enforce(&current, cfg)?;
         let mut tcp = dial(&current, cfg)?;
-        let req = build_request(&current, &method, range)?;
+        let req = build_request(&current, &method, range, false)?;
         tcp.write_all(req.as_bytes())?;
         tcp.flush()?;
         let (status, headers, pending) = read_head(&mut tcp)?;
@@ -367,6 +451,7 @@ fn open(cfg: &GetCfg, method: &str, url: &str, range: Option<RangeSpec>) -> Resu
             left,
             chunk_need_line,
             chunk_done: false,
+            persist_ok: false,
         });
     }
     Err(Error::Http("too many redirects".into()))
@@ -435,12 +520,18 @@ impl ToSocketAddrsOwned for (&str, u16) {
     }
 }
 
-fn build_request(url: &Url, method: &str, range: Option<RangeSpec>) -> Result<String> {
+fn build_request(
+    url: &Url,
+    method: &str,
+    range: Option<RangeSpec>,
+    persist: bool,
+) -> Result<String> {
     if method != "GET" && method != "HEAD" {
         return Err(Error::Http("only GET and HEAD".into()));
     }
+    let connection = if persist { "keep-alive" } else { "close" };
     let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: {connection}\r\n",
         path = url.path,
         host = host_header(url),
         ua = USER_AGENT,
@@ -593,7 +684,57 @@ fn is_redirect(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
+fn exchange(
+    mut tcp: TcpStream,
+    url: &Url,
+    range: Option<RangeSpec>,
+    persist: bool,
+) -> Result<Response> {
+    let req = build_request(url, "GET", range, persist)?;
+    tcp.write_all(req.as_bytes())?;
+    tcp.flush()?;
+    let (status, headers, pending) = read_head(&mut tcp)?;
+    if is_redirect(status) {
+        return Err(Error::Http(
+            "shared connection does not follow redirects".into(),
+        ));
+    }
+    let head = make_head(status, url, &headers);
+    let (kind, left, chunk_need_line) = body_kind(false, status, &headers, &pending);
+    let persist_ok = persist && keeps_alive(&headers) && matches!(kind, Kind::Length);
+    Ok(Response {
+        head,
+        tcp,
+        buf: pending,
+        pos: 0,
+        kind,
+        left,
+        chunk_need_line,
+        chunk_done: false,
+        persist_ok,
+    })
+}
+
+fn keeps_alive(headers: &[(String, String)]) -> bool {
+    match header(headers, "connection") {
+        Some(value) => !value
+            .split(',')
+            .any(|part| part.trim().eq_ignore_ascii_case("close")),
+        None => true,
+    }
+}
+
 impl Response {
+    fn into_idle(self) -> Option<TcpStream> {
+        if !self.persist_ok || self.left != 0 || self.pos != self.buf.len() {
+            return None;
+        }
+        match self.kind {
+            Kind::Length => Some(self.tcp),
+            _ => None,
+        }
+    }
+
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         if out.is_empty() {
             return Ok(0);
@@ -872,6 +1013,67 @@ mod tests {
             &mut Vec::new(),
         )
         .unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)), "{err}");
+    }
+
+    #[test]
+    fn two_gets_on_one_cleartext_connection() {
+        use std::io::{Read, Write};
+        use std::net::{Ipv4Addr, TcpListener};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let accepts_t = Arc::clone(&accepts);
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            accepts_t.fetch_add(1, Ordering::SeqCst);
+            let _ = sock.set_nodelay(true);
+            for _ in 0..2 {
+                let mut raw = Vec::new();
+                let mut tmp = [0u8; 512];
+                loop {
+                    let n = sock.read(&mut tmp).unwrap();
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&raw);
+                let body: &[u8] = if text.contains(" /b ") { b"bbb" } else { b"aaa" };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                    body.len()
+                );
+                sock.write_all(head.as_bytes()).unwrap();
+                sock.write_all(body).unwrap();
+            }
+        });
+
+        let mut conn = ClearConn::new(cfg());
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+        conn.download_to(&format!("http://127.0.0.1:{}/a", addr.port()), &mut first)
+            .unwrap();
+        conn.download_to(&format!("http://127.0.0.1:{}/b", addr.port()), &mut second)
+            .unwrap();
+        assert_eq!(first, b"aaa");
+        assert_eq!(second, b"bbb");
+        assert_eq!(conn.connections(), 1);
+        drop(conn);
+        server.join().unwrap();
+        assert_eq!(accepts.load(Ordering::SeqCst), 1);
+
+        let err = ClearConn::new(GetCfg::default())
+            .download_to("http://127.0.0.1:9/x", &mut Vec::new())
+            .unwrap_err();
+        assert!(matches!(err, Error::Ssrf(_)), "{err}");
+        let err = ClearConn::new(cfg())
+            .download_to("https://example.com/a.mp4", &mut Vec::new())
+            .unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)), "{err}");
     }
 }

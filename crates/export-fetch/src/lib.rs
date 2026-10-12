@@ -20,7 +20,7 @@ mod site;
 pub use assemble::{assemble_coalesced, assemble_stream, AssembleStats};
 pub use error::{Error, Result};
 pub use http::{
-    download_file, download_to, head, DownloadOutcome, GetCfg, USER_AGENT, READ_BUF,
+    download_file, download_to, head, ClearConn, DownloadOutcome, GetCfg, USER_AGENT, READ_BUF,
 };
 pub use policy::{extension_of, is_blocked_ip, join_url, parse_url, refuse_ip, refuse_ssrf, Url};
 pub use range::{
