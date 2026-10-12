@@ -64,3 +64,9 @@ row=vp8_460800_opus samples=400 input_bytes=461319 output_bytes=461319 p50_ns=20
 # ffmpeg names `Video: vp8`, `Audio: opus`, and `Audio: vorbis`. None of the payloads is decoded.
 # p50 and p99 are this host, threading off, 400 samples. Not a speedup claim.
 row=vp8_460800_opus_vorbis samples=400 input_bytes=465038 output_bytes=465038 p50_ns=2028178 p99_ns=2284610 mb_s=229.289
+
+# Same three-track payloads with one Cues element after the clusters. Payloads are not decoded.
+# The recorded row above stays 465038 bytes and p50 2028178 ns (2.028 ms).
+# This copy is 465057 bytes. p50 1532721 ns is at most 2.231 ms, so the cues stay.
+# p50 and p99 are this host, threading off, 400 samples. Not a speedup claim.
+row=vp8_460800_opus_vorbis_cues samples=400 input_bytes=465057 output_bytes=465057 p50_ns=1532721 p99_ns=1846095 mb_s=303.419

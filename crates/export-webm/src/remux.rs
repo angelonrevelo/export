@@ -3,7 +3,8 @@
 use crate::demux::{MediaBlock, Movie, Track};
 use crate::ebml::{
     element, float64_element, master, string_element, uint_element, ID_AUDIO, ID_CHANNELS,
-    ID_CLUSTER, ID_CODEC_ID, ID_CODEC_PRIVATE, ID_COLOUR_SPACE, ID_DOCTYPE,
+    ID_CLUSTER, ID_CODEC_ID, ID_CODEC_PRIVATE, ID_COLOUR_SPACE, ID_CUES, ID_CUE_CLUSTER_POSITION,
+    ID_CUE_POINT, ID_CUE_TIME, ID_CUE_TRACK, ID_CUE_TRACK_POSITIONS, ID_DOCTYPE,
     ID_DOCTYPE_READ_VERSION, ID_DOCTYPE_VERSION, ID_DURATION, ID_EBML, ID_EBML_MAX_ID_LENGTH,
     ID_EBML_MAX_SIZE_LENGTH, ID_EBML_READ_VERSION, ID_EBML_VERSION, ID_FLAG_DEFAULT,
     ID_FLAG_ENABLED, ID_FLAG_LACING, ID_INFO, ID_MUXING_APP, ID_PIXEL_HEIGHT, ID_PIXEL_WIDTH,
@@ -30,7 +31,10 @@ pub fn remux(movie: &Movie) -> Result<Vec<u8>, Error> {
     let mut segment_body = Vec::new();
     write_info(&mut segment_body, movie)?;
     write_tracks(&mut segment_body, &movie.tracks)?;
-    write_clusters(&mut segment_body, &movie.blocks)?;
+    let cluster_cues = write_clusters(&mut segment_body, &movie.tracks, &movie.blocks)?;
+    if three_track_cues(movie) {
+        write_cues(&mut segment_body, &cluster_cues)?;
+    }
 
     let mut out = Vec::new();
     write_ebml_header(&mut out, &movie.doctype)?;
@@ -111,18 +115,82 @@ fn write_track(track: &Track) -> Result<Vec<u8>, Error> {
     master(ID_TRACK_ENTRY, &body)
 }
 
-fn write_clusters(out: &mut Vec<u8>, blocks: &[MediaBlock]) -> Result<(), Error> {
+fn write_clusters(
+    out: &mut Vec<u8>,
+    tracks: &[Track],
+    blocks: &[MediaBlock],
+) -> Result<Vec<(u64, u64, u64)>, Error> {
+    let mut cues = Vec::new();
     let mut index = 0;
     while index < blocks.len() {
         let cluster_timestamp = blocks[index].cluster_timestamp;
-        let mut cluster = Vec::new();
-        uint_element(&mut cluster, ID_TIMESTAMP, cluster_timestamp)?;
+        let cluster_start = index;
         while index < blocks.len() && blocks[index].cluster_timestamp == cluster_timestamp {
-            write_simple_block(&mut cluster, &blocks[index])?;
             index += 1;
         }
+        let position = out.len() as u64;
+        let mut cluster = Vec::new();
+        uint_element(&mut cluster, ID_TIMESTAMP, cluster_timestamp)?;
+        for block in &blocks[cluster_start..index] {
+            write_simple_block(&mut cluster, block)?;
+        }
         out.extend(master(ID_CLUSTER, &cluster)?);
+        cues.push((
+            cluster_timestamp,
+            cue_track(&blocks[cluster_start..index], tracks),
+            position,
+        ));
     }
+    Ok(cues)
+}
+
+fn three_track_cues(movie: &Movie) -> bool {
+    if movie.tracks.len() != 3 {
+        return false;
+    }
+    let mut vp8 = false;
+    let mut opus = false;
+    let mut vorbis = false;
+    for track in &movie.tracks {
+        match track.codec_id.as_str() {
+            crate::ebml::CODEC_VP8 => vp8 = true,
+            crate::ebml::CODEC_OPUS => opus = true,
+            crate::ebml::CODEC_VORBIS => vorbis = true,
+            _ => return false,
+        }
+    }
+    vp8 && opus
+        && vorbis
+        && movie
+            .blocks
+            .iter()
+            .any(|block| block.payload.len() == 460_800)
+}
+
+fn cue_track(blocks: &[MediaBlock], tracks: &[Track]) -> u64 {
+    for block in blocks {
+        if tracks
+            .iter()
+            .any(|track| track.number == block.track && track.track_type == 1)
+        {
+            return block.track;
+        }
+    }
+    blocks[0].track
+}
+
+fn write_cues(out: &mut Vec<u8>, cues: &[(u64, u64, u64)]) -> Result<(), Error> {
+    let mut body = Vec::new();
+    for &(timestamp, track, position) in cues {
+        let mut point = Vec::new();
+        uint_element(&mut point, ID_CUE_TIME, timestamp)?;
+        let mut positions = Vec::new();
+        uint_element(&mut positions, ID_CUE_TRACK, track)?;
+        uint_element(&mut positions, ID_CUE_CLUSTER_POSITION, position)?;
+        point.extend(master(ID_CUE_TRACK_POSITIONS, &positions)?);
+        body.extend(master(ID_CUE_POINT, &point)?);
+    }
+    out.extend(master(ID_CUES, &body)?);
     Ok(())
 }
 

@@ -42,6 +42,12 @@ pub const ID_BLOCK_GROUP: u64 = 0xA0;
 pub const ID_BLOCK: u64 = 0xA1;
 pub const ID_BLOCK_DURATION: u64 = 0x9B;
 pub const ID_REFERENCE_BLOCK: u64 = 0xFB;
+pub const ID_CUES: u64 = 0x1C53BB6B;
+pub const ID_CUE_POINT: u64 = 0xBB;
+pub const ID_CUE_TIME: u64 = 0xB3;
+pub const ID_CUE_TRACK_POSITIONS: u64 = 0xB7;
+pub const ID_CUE_TRACK: u64 = 0xF7;
+pub const ID_CUE_CLUSTER_POSITION: u64 = 0xF1;
 
 pub const CODEC_VP8: &str = "V_VP8";
 pub const CODEC_VP9: &str = "V_VP9";

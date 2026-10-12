@@ -679,6 +679,12 @@ mod tests {
         }
     }
 
+    fn has_cues(bytes: &[u8]) -> bool {
+        bytes
+            .windows(4)
+            .any(|window| window == [0x1C, 0x53, 0xBB, 0x6B])
+    }
+
     #[test]
     fn vp8_460800_opus_and_vorbis_are_copied() {
         let vp8 = demux(&vp8_460800_webm()).unwrap();
@@ -690,6 +696,8 @@ mod tests {
         assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_VP8);
         assert_eq!(parsed.tracks[1].codec_id, crate::ebml::CODEC_OPUS);
         assert_eq!(parsed.tracks[2].codec_id, crate::ebml::CODEC_VORBIS);
+        assert!(has_cues(&file));
+        assert!(!has_cues(&vp8_460800_opus_webm()));
         let vp8_blocks: Vec<_> = parsed
             .blocks
             .iter()
@@ -724,6 +732,7 @@ mod tests {
         assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_VP8);
         assert_eq!(again.tracks[1].codec_id, crate::ebml::CODEC_OPUS);
         assert_eq!(again.tracks[2].codec_id, crate::ebml::CODEC_VORBIS);
+        assert!(has_cues(&copied.bytes));
         assert_eq!(again.blocks.len(), parsed.blocks.len());
         for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
             assert_eq!(left.payload, right.payload);
