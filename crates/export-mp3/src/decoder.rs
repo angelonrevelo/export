@@ -606,6 +606,24 @@ mod tests {
     }
 
     #[test]
+    fn half_scale_440hz_is_not_the_sine() {
+        let pcm = crate::half_scale_440hz();
+        assert_eq!(pcm.len(), FRAME_SAMPLES);
+        let decoded = decode_frame(&encode_frame(&pcm).unwrap()).unwrap();
+        assert_eq!(decoded.len(), FRAME_SAMPLES);
+        let max_abs = pcm
+            .iter()
+            .zip(decoded.iter())
+            .fold(0.0f32, |max, (src, out)| max.max((src - out).abs()));
+        // Measured on this pulse frame. Not a waveform match.
+        assert!(
+            (max_abs - 2.956_203).abs() < 1.0e-5,
+            "max abs error {max_abs}"
+        );
+        assert!(decoded.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
     fn round_trip_nonzero_is_finite_pcm() {
         let mut pcm = [0.0f32; FRAME_SAMPLES];
         for (i, sample) in pcm.iter_mut().enumerate() {

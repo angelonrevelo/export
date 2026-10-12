@@ -29,6 +29,19 @@ const SIDE_INFO_BYTES: usize = 17;
 /// Bits for one table-A quadruple `(±1, 0, 0, 0)`, including its sign bit.
 const PULSE_BITS: u32 = 5;
 
+/// 1152 samples of `0.5 * sin(2π * 440 * n / 44100)`.
+///
+/// This is a reference signal for the one-frame path. Encoding it does not
+/// reproduce the sine. See `max_abs_error` against [`crate::decode_frame`].
+pub fn half_scale_440hz() -> [f32; FRAME_SAMPLES] {
+    let mut pcm = [0.0; FRAME_SAMPLES];
+    for (n, sample) in pcm.iter_mut().enumerate() {
+        let t = n as f32 / SAMPLE_RATE_HZ as f32;
+        *sample = 0.5 * (2.0 * std::f32::consts::PI * 440.0 * t).sin();
+    }
+    pcm
+}
+
 /// Encode `pcm` as one MPEG-1 Layer III frame.
 ///
 /// `pcm` must hold exactly [`FRAME_SAMPLES`] finite mono samples at

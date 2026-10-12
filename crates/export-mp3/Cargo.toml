@@ -27,3 +27,7 @@ path = "examples/bench.rs"
 [[example]]
 name = "write-frame"
 path = "examples/write-frame.rs"
+
+[[example]]
+name = "sine-440"
+path = "examples/sine-440.rs"

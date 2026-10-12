@@ -11,5 +11,7 @@ cargo test
 cargo build --release --target wasm32-unknown-unknown
 
 mkdir -p bench/runs
-cargo run --release --example bench | tee bench/runs/release.txt
+# bench/runs/release.txt is the recorded silence (p50 948 ns) and pulse
+# (p50 515 µs) rows. Do not overwrite that file.
+cargo run --release --example bench | tee bench/runs/latest.txt
 ./scripts/ffmpeg-decode.sh | tee bench/runs/ffmpeg.txt

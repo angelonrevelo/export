@@ -1,0 +1,16 @@
+samples=1152
+sample_rate_hz=44100
+tone_hz=440
+scale=0.5
+pcm=0.5*sin(2*pi*440*n/44100)
+frame_bytes=417
+max_abs_error=2.956202984
+matches_sine=false
+waveform_encoder=false
+build=release and debug, same max_abs_error
+ffmpeg_one_frame_rc=234
+ffmpeg_one_frame_err=Invalid frame size (417): Could not seek to 417.
+ffmpeg_repeated_frame_rc=0
+ffmpeg_repeated_frame_pcm_bytes=9216
+ffmpeg_repeated_frame_err=
+note=library does not call ffmpeg; host repeated the one frame so the demuxer could read the next header
