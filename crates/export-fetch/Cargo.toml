@@ -40,3 +40,7 @@ path = "src/bin/sixteen_bench.rs"
 [[bin]]
 name = "thirty_two_bench"
 path = "src/bin/thirty_two_bench.rs"
+
+[[bin]]
+name = "sixty_four_bench"
+path = "src/bin/sixty_four_bench.rs"

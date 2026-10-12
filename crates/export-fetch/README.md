@@ -122,6 +122,19 @@ Shared means all thirty-two bodies on one keep-alive connection (`ClearConn`). S
 
 4,728,766 is 13.9% under 5,494,754, which clears the 10% bar, so the shared connection stays.
 
+### Sixty-four 1 MiB GETs
+
+`sixty_four_bench` times sixty-four cleartext GETs, 1 MiB each, 67,108,864 bytes combined, on the same local `std::net` stack. It is not a CDN, and it does not call yt-dlp. The server listens on `127.0.0.1`. Loopback is allowed only in that bench. `https` stays unsupported. There is no TLS. One untimed warmup of each mode, then 40 samples, alternating which mode runs first. The thirty-two-GET, sixteen-GET, eight-GET, four-GET, and two-GET rows above are different runs and are unchanged.
+
+Shared means all sixty-four bodies on one keep-alive connection (`ClearConn`). Separate means `download_to` sixty-four times, one connection per GET. The shared path stays only when its latency p50 is at least 10% under the sixty-four-connection p50. Log: `bench/runs/2026-10-12-cleartext-sixty-four.txt`.
+
+| Sixty-four 1 MiB GETs | Combined bytes | Connections | p50 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Shared, kept | 67,108,864 | 1 | 10,651,705 ns | 13,143,217 ns |
+| Separate | 67,108,864 | 64 | 12,435,692 ns | 15,602,571 ns |
+
+10,651,705 is 14.3% under 12,435,692, which clears the 10% bar, so the shared connection stays.
+
 ```
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin assemble_bench
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin download_bench
@@ -130,4 +143,5 @@ cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin quad_be
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin octet_bench
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin sixteen_bench
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin thirty_two_bench
+cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin sixty_four_bench
 ```
