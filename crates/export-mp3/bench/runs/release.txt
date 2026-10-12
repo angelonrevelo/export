@@ -1,0 +1,7 @@
+iterations=1000
+warmup=50
+percentile=nearest-rank index=floor(p*(n-1))
+profile=release opt-level=3 lto=thin codegen-units=1
+decode_silence_ns n=1000 min=928 p50=948 p99=1490 max=3074
+decode_tone_ns n=1000 min=459974 p50=514755 p99=819588 max=1517834
+decode_truncated_ns n=1000 min=31 p50=33 p99=37 max=355
