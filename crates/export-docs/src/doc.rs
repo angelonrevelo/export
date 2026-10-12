@@ -1,4 +1,4 @@
-//! Word 97 to HTML when `WordDocument` holds one 8-bit paragraph.
+//! Word 97 to HTML when `WordDocument` holds plain 8-bit paragraphs.
 //! Any other file stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -30,7 +30,7 @@ pub fn doc_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
         Err(err) => return Err(miss(0, &err.to_string())),
     };
     if input_bytes > MAX_INPUT {
-        return Err(miss(input_bytes, "file is not one paragraph"));
+        return Err(miss(input_bytes, "file is not paragraphs"));
     }
     if let Err(err) = src.seek(SeekFrom::Start(0)) {
         return Err(miss(input_bytes, &err.to_string()));
@@ -39,14 +39,14 @@ pub fn doc_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
     if let Err(err) = src.read_to_end(&mut bytes) {
         return Err(miss(input_bytes, &err.to_string()));
     }
-    let text = parse_doc(&bytes).map_err(|err| {
+    let paras = parse_doc(&bytes).map_err(|err| {
         if err.message.starts_with("MISS:") {
             err
         } else {
             miss(input_bytes, &err.message)
         }
     })?;
-    let html = html_of(&text);
+    let html = html_of(&paras);
     let mut counted = CountWrite::new(out);
     counted
         .write_all(html.as_bytes())
@@ -59,7 +59,7 @@ pub fn doc_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
 }
 
 /// Compound file whose `WordDocument` text is `paragraphs`, each ended by a paragraph mark.
-/// The converter accepts only a single plain paragraph.
+/// The converter accepts those plain paragraphs and misses any other file.
 pub fn word97_document(paragraphs: &[&str]) -> Result<Vec<u8>> {
     if paragraphs.is_empty() {
         return Err(Error::new("need a paragraph"));
@@ -84,26 +84,29 @@ fn miss(input_bytes: u64, why: &str) -> Error {
 }
 
 fn shape() -> Error {
-    Error::new("file is not one paragraph")
+    Error::new("file is not paragraphs")
 }
 
 fn allowed_text(b: u8) -> bool {
     b == 0x09 || (0x20..=0x7E).contains(&b)
 }
 
-fn html_of(text: &str) -> String {
-    let mut out =
-        String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><p>");
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(c),
+fn html_of(paras: &[String]) -> String {
+    let mut out = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
+    for text in paras {
+        out.push_str("<p>");
+        for c in text.chars() {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                _ => out.push(c),
+            }
         }
+        out.push_str("</p>");
     }
-    out.push_str("</p></body></html>");
+    out.push_str("</body></html>");
     out
 }
 
@@ -292,7 +295,7 @@ struct StreamLoc {
     size: u32,
 }
 
-fn parse_doc(file: &[u8]) -> Result<String> {
+fn parse_doc(file: &[u8]) -> Result<Vec<String>> {
     if file.len() < SECTOR || file[..8] != SIG {
         return Err(shape());
     }
@@ -342,7 +345,7 @@ fn parse_doc(file: &[u8]) -> Result<String> {
     } else {
         read_chain(file, &fat, word.start, Some(word.size as usize))?
     };
-    one_paragraph(&bytes)
+    paragraphs(&bytes)
 }
 
 fn load_fat(file: &[u8], csect_fat: u32) -> Result<Vec<u32>> {
@@ -492,7 +495,7 @@ fn sector(file: &[u8], sid: u32) -> Result<&[u8]> {
     Ok(&file[off..off + SECTOR])
 }
 
-fn one_paragraph(word: &[u8]) -> Result<String> {
+fn paragraphs(word: &[u8]) -> Result<Vec<String>> {
     if word.len() < 0x20 {
         return Err(shape());
     }
@@ -511,15 +514,30 @@ fn one_paragraph(word: &[u8]) -> Result<String> {
     if span.len() < 2 || span.len() > MAX_PARA || span[span.len() - 1] != 0x0D {
         return Err(shape());
     }
-    let body = &span[..span.len() - 1];
-    if body.is_empty() || !body.iter().copied().all(allowed_text) {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (i, &b) in span.iter().enumerate() {
+        if b != 0x0D {
+            continue;
+        }
+        if i == start {
+            return Err(shape());
+        }
+        let body = &span[start..i];
+        if !body.iter().copied().all(allowed_text) {
+            return Err(shape());
+        }
+        let mut text = String::with_capacity(body.len());
+        for &c in body {
+            text.push(char::from(c));
+        }
+        out.push(text);
+        start = i + 1;
+    }
+    if start != span.len() || out.is_empty() {
         return Err(shape());
     }
-    let mut text = String::with_capacity(body.len());
-    for &b in body {
-        text.push(char::from(b));
-    }
-    Ok(text)
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -560,16 +578,10 @@ mod tests {
     }
 
     #[test]
-    fn two_paragraphs_stay_a_miss() {
-        let doc = word97_document(&["One", "Two"]).unwrap();
-        let err = run(&doc).unwrap_err();
-        assert!(err.message.starts_with("MISS:"), "{}", err.message);
-        assert!(err.message.contains("not"), "{}", err.message);
-        assert!(
-            err.message.contains(&format!("input_b={}", doc.len())),
-            "{}",
-            err.message
-        );
+    fn two_paragraphs_become_html() {
+        let doc = word97_document(&["One", "Two & three"]).unwrap();
+        let html = String::from_utf8(run(&doc).unwrap()).unwrap();
+        assert!(html.contains("<p>One</p><p>Two &amp; three</p>"), "{html}");
     }
 
     #[test]

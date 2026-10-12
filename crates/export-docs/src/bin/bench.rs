@@ -452,24 +452,7 @@ fn report_doc() {
             sample.output_bytes,
         );
     }
-    let two = word97_document(&["One", "Two"]).unwrap_or_else(|err| {
-        eprintln!("word97 two-paragraph fixture failed: {err}");
-        std::process::exit(1);
-    });
-    match convert("doc", "html", &two) {
-        Ok(_) => {
-            eprintln!("two-paragraph doc produced html");
-            std::process::exit(1);
-        }
-        Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", two.len()))
-            {
-                eprintln!("doc miss hid the input size: {err}");
-                std::process::exit(1);
-            }
-            emit_untimed("doc→html two", two.len() as u64, None, &err.message);
-        }
-    }
+    report_doc_two();
 }
 
 fn doc_paragraph() -> String {
@@ -478,6 +461,65 @@ fn doc_paragraph() -> String {
         s.push_str(&format!("Sentence {i} of the generated Word 97 paragraph. "));
     }
     s
+}
+
+fn report_doc_two() {
+    let doc = doc_two_paragraphs();
+    let sample = measure(|| ready_bytes("doc", "html", &doc));
+    emit_ready("doc→html two", doc.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "doc→html two p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(doc.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            doc.len(),
+            sample.output_bytes,
+        );
+    }
+    let enc = doc_encrypted();
+    match convert("doc", "html", &enc) {
+        Ok(_) => {
+            eprintln!("encrypted doc produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", enc.len()))
+            {
+                eprintln!("doc miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("doc→html enc", enc.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn doc_two_paragraphs() -> Vec<u8> {
+    let mut first = String::new();
+    let mut second = String::new();
+    for i in 0..200 {
+        first.push_str(&format!("Alpha {i} of the first generated paragraph. "));
+        second.push_str(&format!("Beta {i} of the second generated paragraph. "));
+    }
+    word97_document(&[&first, &second]).unwrap_or_else(|err| {
+        eprintln!("word97 two-paragraph fixture failed: {err}");
+        std::process::exit(1);
+    })
+}
+
+fn doc_encrypted() -> Vec<u8> {
+    let mut doc = word97_document(&["Hi"]).unwrap_or_else(|err| {
+        eprintln!("word97 encrypted fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let pos = doc.windows(2).position(|w| w == [0xEC, 0xA5]).unwrap_or_else(|| {
+        eprintln!("word97 fixture has no fib");
+        std::process::exit(1);
+    });
+    doc[pos + 0x0B] = 0x01;
+    doc
 }
 
 fn shrink_pdf_fixture() -> Vec<u8> {
@@ -562,6 +604,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_doc();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--doc-two") {
+        println!("export-docs doc two-paragraph byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_doc_two();
         return;
     }
     let xml = docx_xml(2500);
