@@ -1,0 +1,29 @@
+[package]
+name = "export-media"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Zero-copy ISO BMFF remux and WAV/PCM. No ffmpeg in the product path."
+
+[dependencies]
+
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[example]]
+name = "oracle_fixture"
