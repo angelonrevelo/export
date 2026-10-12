@@ -1,4 +1,4 @@
-//! Decode one generated 8×8, 16×16, 32×32, 64×64, 128×128, 256×256, or 512×512 VP9 keyframe.
+//! Decode one generated 8×8, 16×16, 32×32, 64×64, 128×128, 256×256, 512×512, or 1024×1024 VP9 keyframe.
 //!
 //! This is not a video decoder. Inter frames, extra frames, and VP8 are unsupported.
 

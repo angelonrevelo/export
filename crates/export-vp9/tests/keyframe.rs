@@ -14,6 +14,8 @@ const IVF256: &[u8] = include_bytes!("../testdata/keyframe-256.ivf");
 const YUV256: &[u8] = include_bytes!("../testdata/ffmpeg-256.yuv");
 const IVF512: &[u8] = include_bytes!("../testdata/keyframe-512.ivf");
 const YUV512: &[u8] = include_bytes!("../testdata/ffmpeg-512.yuv");
+const IVF1024: &[u8] = include_bytes!("../testdata/keyframe-1024.ivf");
+const YUV1024: &[u8] = include_bytes!("../testdata/ffmpeg-1024.yuv");
 
 fn payload() -> &'static [u8] {
     &IVF[44..]
@@ -206,6 +208,34 @@ fn pixels_512_match_ffmpeg_within_bound() {
         "max abs error {max_abs} exceeds bound {error_bound}"
     );
     assert_eq!(got.as_slice(), YUV512);
+}
+
+#[test]
+fn pixels_1024_match_ffmpeg_within_bound() {
+    let frame = decode_ivf(IVF1024).expect("1024x1024 keyframe");
+    assert_eq!((frame.width, frame.height), (1024, 1024));
+    let mut got = Vec::new();
+    got.extend_from_slice(&frame.y);
+    got.extend_from_slice(&frame.u);
+    got.extend_from_slice(&frame.v);
+    assert_eq!(got.len(), YUV1024.len());
+    let mut max_abs = 0i32;
+    for (decoded, ffmpeg) in got.iter().zip(YUV1024.iter()) {
+        let diff = (i32::from(*decoded) - i32::from(*ffmpeg)).abs();
+        max_abs = max_abs.max(diff);
+    }
+    let error_bound = 0;
+    assert!(
+        max_abs <= error_bound,
+        "max abs error {max_abs} exceeds bound {error_bound}"
+    );
+    assert_eq!(got.as_slice(), YUV1024);
+}
+
+#[test]
+fn truncated_1024_errors() {
+    assert_eq!(decode_ivf(&IVF1024[..10]), Err(Error::Truncated));
+    assert_eq!(decode_keyframe(&IVF1024[44..52]), Err(Error::Truncated));
 }
 
 #[test]
