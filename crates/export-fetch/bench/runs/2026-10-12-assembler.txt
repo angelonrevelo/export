@@ -1,0 +1,22 @@
+toolchain: rustc 1.83.0 (90b35a623 2024-11-26)
+profile: release opt-level=3 lto=thin codegen-units=1
+command: cargo run --release --manifest-path crates/export-fetch/Cargo.toml --offline --bin assemble_bench
+note: in-process copy of an 8 MiB buffer. Not a CDN round trip. Debug builds print NOT JUDGED and exit 2.
+
+release=1
+payload_bytes=8388608
+chunk_bytes=65536
+samples=40
+bytes_per_sec_p50=29090243268
+bytes_per_sec_p99=15828517948
+latency_ns_p50=288365
+latency_ns_p99=529968
+cpu_ns_per_mb_p50=36156
+cpu_ns_per_mb_p99=66380
+peak_buffered_bytes=65536
+vm_hwm_kib=12204
+coalesce_gap=4096
+sparse_ranges=63550
+sparse_reads=1
+sparse_bytes=2033600
+sink_check=460800
