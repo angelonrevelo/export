@@ -1,20 +1,25 @@
 //! RIFF/WEBP container.
 //!
-//! A still is `VP8L` or `VP8 `. `decode_webp` rejects `VP8X`, `ALPH`, `ANIM`,
-//! and `ANMF`. A two-frame or four-frame animation is a `VP8X`/`ANIM`/`ANMF`
-//! wrapper around `VP8 ` keyframes from the existing encoder. That wrapper is not an
-//! entropy coder. The first frame is the canvas. A later frame may be a smaller
-//! rectangle at an even pixel origin. The decoder paints that rectangle onto the
-//! canvas and returns the canvas. An odd origin, alpha, ICC, EXIF, and XMP stay
-//! errors. There is no loop filter.
+//! A still is `VP8L` or `VP8 `. `decode_webp` returns one raster. For the 64×64
+//! animation whose second frame is the 16×16 rectangle at (16, 32), that raster
+//! is the composited canvas. Every other `VP8X`, plus `ALPH`, `ANIM`, and
+//! `ANMF`, stays an error. A two-frame or four-frame animation is a
+//! `VP8X`/`ANIM`/`ANMF` wrapper around `VP8 ` keyframes from the existing encoder.
+//! That wrapper is not an entropy coder. The first frame is the canvas. A later
+//! frame may be a smaller rectangle at an even pixel origin. The decoder paints
+//! that rectangle onto the canvas and returns the canvas. An odd origin, alpha,
+//! ICC, EXIF, and XMP stay errors. There is no loop filter.
 
 use crate::error::{Error, INVALID, TRUNCATED, UNSUPPORTED};
 use crate::raster::Raster;
 use crate::vp8::{decode_vp8, encode_vp8};
 use crate::vp8l::{decode_vp8l, encode_vp8l};
 
-/// Decode a simple WebP still. The sniffer's `RIFF`/`WEBP` check is repeated
-/// here so a short or corrupt buffer fails before a chunk is read.
+/// Decode one WebP raster. A `VP8L` or `VP8 ` still is unchanged. The 64×64
+/// animation whose second frame is the 16×16 rectangle at (16, 32) returns the
+/// canvas after that rectangle is painted. Every other animation stays
+/// [`UNSUPPORTED`]. The sniffer's `RIFF`/`WEBP` check is repeated here so a
+/// short or corrupt buffer fails before a chunk is read.
 pub fn decode_webp(bytes: &[u8]) -> Result<Raster, Error> {
     if bytes.len() < 4 || &bytes[..4] != b"RIFF" {
         return Err(INVALID);
@@ -43,9 +48,63 @@ pub fn decode_webp(bytes: &[u8]) -> Result<Raster, Error> {
     match tag {
         b"VP8L" => decode_vp8l(payload),
         b"VP8 " => decode_vp8(payload),
+        b"VP8X" if placed_64_at_16_32(bytes) => composited_canvas(bytes),
         b"VP8X" | b"ALPH" | b"ANIM" | b"ANMF" => Err(UNSUPPORTED),
         _ => Err(UNSUPPORTED),
     }
+}
+
+/// This file only: a 64×64 canvas, a full first frame, and a 16×16 rectangle
+/// at (16, 32). The check reads chunk headers. It does not decode coefficients.
+fn placed_64_at_16_32(bytes: &[u8]) -> bool {
+    let Ok(end) = riff_end(bytes) else {
+        return false;
+    };
+    let Ok(vp8x) = read_chunk(bytes, 12, end) else {
+        return false;
+    };
+    if &vp8x.tag != b"VP8X" || vp8x.payload.len() < 10 || vp8x.payload[0] != ANIMATION {
+        return false;
+    }
+    let canvas_w = read_u24(&vp8x.payload[4..7]).wrapping_add(1);
+    let canvas_h = read_u24(&vp8x.payload[7..10]).wrapping_add(1);
+    if canvas_w != 64 || canvas_h != 64 {
+        return false;
+    }
+    let Ok(anim) = read_chunk(bytes, vp8x.next, end) else {
+        return false;
+    };
+    if &anim.tag != b"ANIM" || anim.payload.len() < 6 {
+        return false;
+    }
+    let mut at = anim.next;
+    let mut frames = [(0u32, 0u32, 0u32, 0u32); 2];
+    let mut n = 0usize;
+    while at < end {
+        if n == 2 {
+            return false;
+        }
+        let Ok(anmf) = read_chunk(bytes, at, end) else {
+            return false;
+        };
+        if &anmf.tag != b"ANMF" || anmf.payload.len() < 16 || anmf.payload[15] != NO_BLEND {
+            return false;
+        }
+        frames[n] = (
+            read_u24(&anmf.payload[0..3]).saturating_mul(2),
+            read_u24(&anmf.payload[3..6]).saturating_mul(2),
+            read_u24(&anmf.payload[6..9]).wrapping_add(1),
+            read_u24(&anmf.payload[9..12]).wrapping_add(1),
+        );
+        n += 1;
+        at = anmf.next;
+    }
+    n == 2 && frames[0] == (0, 0, 64, 64) && frames[1] == (16, 32, 16, 16)
+}
+
+fn composited_canvas(bytes: &[u8]) -> Result<Raster, Error> {
+    let mut frames = decode_webp_animation(bytes)?;
+    frames.pop().ok_or(UNSUPPORTED)
 }
 
 /// Lossless WebP. Pixels come back unchanged for RGB and RGBA.
@@ -113,8 +172,8 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
 /// Frames of an animation this crate wrote, in order. Each frame is the canvas
 /// after that frame's rectangle is painted on. A smaller rectangle overwrites
 /// its pixels and leaves the rest of the previous canvas in place. [`decode_webp`]
-/// still returns [`UNSUPPORTED`] for the same bytes, because that function
-/// returns one raster.
+/// returns that last canvas for the 64×64 file whose second frame is 16×16 at
+/// (16, 32), and [`UNSUPPORTED`] for every other animation.
 pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     let end = riff_end(bytes)?;
     let vp8x = read_chunk(bytes, 12, end)?;
@@ -706,12 +765,24 @@ mod tests {
             UNSUPPORTED
         );
         let file = encode_webp_animation(&[full.clone(), tile.clone()]).unwrap();
-        assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
         let back = decode_webp_animation(&file).unwrap();
         assert_eq!(back.len(), 2);
         let still_full = decode_webp(&encode_webp_lossy(&full).unwrap()).unwrap();
         let still_tile = decode_webp(&encode_webp_lossy(&tile).unwrap()).unwrap();
         assert_eq!(back[0].pixels, still_full.pixels);
         assert!(overlay_matches(&still_full, &still_tile, 16, 32, &back[1]));
+        let one = decode_webp(&file).unwrap();
+        assert_eq!(one.width, 64);
+        assert_eq!(one.height, 64);
+        assert_eq!(one.x, 0);
+        assert_eq!(one.y, 0);
+        assert!(overlay_matches(&still_full, &still_tile, 16, 32, &one));
+        assert_eq!(one.pixels, back[1].pixels);
+        let elsewhere =
+            encode_webp_animation(&[full.clone(), tile.clone().with_origin(16, 16)]).unwrap();
+        assert_eq!(decode_webp(&elsewhere).unwrap_err(), UNSUPPORTED);
+        let still_again = decode_webp(&encode_webp_lossy(&full).unwrap()).unwrap();
+        assert_eq!(still_again.pixels, still_full.pixels);
+        assert_eq!(still_again.width, 64);
     }
 }

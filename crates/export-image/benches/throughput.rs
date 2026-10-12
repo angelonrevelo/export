@@ -823,4 +823,31 @@ fn main() {
         mb_s(anim_placed.len() as f64, p50),
         allocs as f64 / (composited_pixels / 1_000_000.0),
     );
+
+    // decode_webp of this animation file only. The paint row above is unchanged.
+    for _ in 0..2 {
+        let _ = decode_webp(&anim_placed).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(decode_webp(black_box(&anim_placed)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let one = decode_webp(&anim_placed).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let one_pixels = 64.0 * 64.0;
+    let overlay = overlay_matches(&still_placed_canvas, &still_placed, 16, 32, &one);
+    let still_file = encode_webp_lossy(&placed[0]).unwrap();
+    let still_pixels = decode_webp(&still_file).unwrap().pixels;
+    let still_ok = still_pixels == still_placed_canvas.pixels
+        && decode_webp(&anim_part).is_err()
+        && one.pixels == composited[1].pixels;
+    println!(
+        "webp_anim64_still_decode canvas=64x64 origin=16,32 tile=16x16 samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2} overlay={overlay} still_unchanged={still_ok}",
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(one_pixels * 3.0, p50),
+        mb_s(one_pixels * 3.0, p99),
+        mb_s(anim_placed.len() as f64, p50),
+        allocs as f64 / (one_pixels / 1_000_000.0),
+    );
 }
