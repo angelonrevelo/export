@@ -701,4 +701,71 @@ mod tests {
         expect.extend_from_slice(sixth);
         assert_eq!(html_of(&bytes).unwrap(), expect);
     }
+
+    fn part(label: &str) -> String {
+        let mut body = String::from(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
+        );
+        for i in 0..120 {
+            body.push_str(&format!(
+                "<p>{label} paragraph {i} of the generated epub spine.</p>\n"
+            ));
+        }
+        body.push_str("</body></html>\n");
+        body
+    }
+
+    #[test]
+    fn six_item_book_stays_42653_in_and_40524_out() {
+        let first = part("First");
+        let second = part("Second");
+        let third = part("Third");
+        let fourth = part("Fourth");
+        let fifth = part("Fifth");
+        let sixth = part("Sixth");
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Notes</dc:title></metadata>
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+  </spine>
+</package>
+"#;
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/chapter.xhtml", first.as_bytes()),
+            ("OEBPS/next.xhtml", second.as_bytes()),
+            ("OEBPS/more.xhtml", third.as_bytes()),
+            ("OEBPS/tail.xhtml", fourth.as_bytes()),
+            ("OEBPS/end.xhtml", fifth.as_bytes()),
+            ("OEBPS/last.xhtml", sixth.as_bytes()),
+        ]);
+        assert_eq!(bytes.len(), 42653);
+        let html = html_of(&bytes).unwrap();
+        assert_eq!(html.len(), 40524);
+        let text = std::str::from_utf8(&html).unwrap();
+        let first_at = text.find("First paragraph 0").unwrap();
+        let second_at = text.find("Second paragraph 0").unwrap();
+        let third_at = text.find("Third paragraph 0").unwrap();
+        let fourth_at = text.find("Fourth paragraph 0").unwrap();
+        let fifth_at = text.find("Fifth paragraph 0").unwrap();
+        let sixth_at = text.find("Sixth paragraph 0").unwrap();
+        assert!(first_at < second_at && second_at < third_at && third_at < fourth_at);
+        assert!(fourth_at < fifth_at && fifth_at < sixth_at);
+    }
 }
