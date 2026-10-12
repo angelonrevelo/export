@@ -5,9 +5,9 @@ pub enum Error {
     Truncated,
     /// An element id was empty, reserved, overlong, or wider than 4 bytes.
     BadElementId,
-    /// The stream is EBML, and its codec is Opus or Vorbis.
-    /// Those codecs are sniffed and refused. They are not decoded.
-    /// VP8 and VP9 block payloads are copied and are not decoded.
+    /// The stream is EBML, and its codec is Vorbis.
+    /// Vorbis is sniffed and refused. It is not decoded.
+    /// VP8, VP9, and Opus block payloads are copied and are not decoded.
     Unsupported,
     /// The bytes are not a usable WebM or Matroska stream.
     Invalid,

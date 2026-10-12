@@ -145,7 +145,7 @@ fn write_track_vint(out: &mut Vec<u8>, track: u64) -> Result<(), Error> {
 
 /// One video track and three SimpleBlocks, using an uncompressed codec id.
 ///
-/// The id is not VP8, VP9, Opus, or Vorbis, so the stream can be copied.
+/// The codec id is `V_UNCOMPRESSED`.
 pub fn sample_movie() -> Movie {
     Movie {
         doctype: "matroska".to_owned(),
@@ -195,7 +195,7 @@ pub fn sample_file() -> Vec<u8> {
 /// One uncompressed track and four SimpleBlocks.
 ///
 /// The payload is 320×240 I420 frames, 460800 bytes in total. The codec id
-/// is not VP8, VP9, Opus, or Vorbis.
+/// is `V_UNCOMPRESSED`.
 pub fn large_sample_movie() -> Movie {
     const WIDTH: usize = 320;
     const HEIGHT: usize = 240;

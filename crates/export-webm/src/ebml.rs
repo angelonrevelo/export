@@ -273,12 +273,13 @@ pub fn master(id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// Codec ids that this crate sniffs and refuses. No decoder is called.
 ///
-/// [`CODEC_VP8`] and [`CODEC_VP9`] are copied as block bytes and are not decoded.
+/// [`CODEC_VP8`], [`CODEC_VP9`], and [`CODEC_OPUS`] are copied as block bytes
+/// and are not decoded.
 pub fn unsupported_codec(codec_id: &str) -> bool {
-    if codec_id == CODEC_VP8 || codec_id == CODEC_VP9 {
+    if codec_id == CODEC_VP8 || codec_id == CODEC_VP9 || codec_id == CODEC_OPUS {
         return false;
     }
-    matches!(codec_id, CODEC_OPUS | CODEC_VORBIS)
+    codec_id == CODEC_VORBIS
 }
 
 #[cfg(test)]

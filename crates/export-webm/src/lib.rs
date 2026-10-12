@@ -3,8 +3,8 @@
 //! This is a stream copy, not a transcode, and not a video shrink.
 //! The pipeline hashes each input once (SHA-256), dedupes by that hash,
 //! sniffs EBML, then copies block payloads and timestamps.
-//! Opus and Vorbis are sniffed and return [`Error::Unsupported`].
-//! They are not decoded. VP8 and VP9 block payloads are copied and are not decoded.
+//! Vorbis is sniffed and returns [`Error::Unsupported`].
+//! It is not decoded. VP8, VP9, and Opus block payloads are copied and are not decoded.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +22,11 @@ pub use sha256::sha256;
 /// WebM file whose block payload is VP8. The bytes are copied, not decoded.
 pub fn vp8_webm() -> &'static [u8] {
     include_bytes!("../fixtures/vp8.webm")
+}
+
+/// WebM file whose audio payload is Opus. The bytes are copied, not decoded.
+pub fn opus_webm() -> &'static [u8] {
+    include_bytes!("../fixtures/opus.webm")
 }
 
 /// WebM file whose video payload is VP9. The bytes are copied, not decoded.
@@ -359,21 +364,38 @@ mod tests {
     }
 
     #[test]
-    fn opus_vorbis_are_unsupported() {
-        for codec in ["A_OPUS", "A_VORBIS"] {
-            let mut movie = sample_movie();
-            movie.tracks[0].codec_id = codec.to_owned();
-            if codec.starts_with('A') {
-                movie.tracks[0].track_type = 2;
-                movie.tracks[0].pixel_width = None;
-                movie.tracks[0].pixel_height = None;
-                movie.tracks[0].channels = Some(1);
-                movie.tracks[0].sampling_frequency = Some(48_000.0);
-            }
-            let bytes = remux(&movie).unwrap();
-            assert_eq!(stream_copy(&bytes).unwrap_err(), Error::Unsupported);
-            assert_eq!(demux(&bytes).unwrap_err(), Error::Unsupported);
+    fn opus_payload_is_copied() {
+        let original = opus_webm();
+        let parsed = demux(original).unwrap();
+        assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_OPUS);
+        assert_eq!(parsed.tracks[0].track_type, 2);
+        assert!(!parsed.blocks.is_empty());
+        let copied = stream_copy(original).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_OPUS);
+        assert_eq!(
+            again.tracks[0].codec_private,
+            parsed.tracks[0].codec_private
+        );
+        assert_eq!(again.blocks.len(), parsed.blocks.len());
+        for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
         }
+    }
+
+    #[test]
+    fn vorbis_is_unsupported() {
+        let mut movie = sample_movie();
+        movie.tracks[0].codec_id = "A_VORBIS".to_owned();
+        movie.tracks[0].track_type = 2;
+        movie.tracks[0].pixel_width = None;
+        movie.tracks[0].pixel_height = None;
+        movie.tracks[0].channels = Some(1);
+        movie.tracks[0].sampling_frequency = Some(48_000.0);
+        let bytes = remux(&movie).unwrap();
+        assert_eq!(stream_copy(&bytes).unwrap_err(), Error::Unsupported);
+        assert_eq!(demux(&bytes).unwrap_err(), Error::Unsupported);
     }
 
     #[test]

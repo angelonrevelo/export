@@ -12,7 +12,8 @@ vp8_4096=$(mktemp "${TMPDIR:-/tmp}/export-webm-copy4k.XXXXXX.webm")
 vp8_460800=$(mktemp "${TMPDIR:-/tmp}/export-webm-copy460k.XXXXXX.webm")
 vp9=$(mktemp "${TMPDIR:-/tmp}/export-webm-copy9.XXXXXX.webm")
 vp9_4096=$(mktemp "${TMPDIR:-/tmp}/export-webm-copy9k.XXXXXX.webm")
-trap 'rm -f "$small" "$large" "$vp8" "$vp8_two" "$vp8_4096" "$vp8_460800" "$vp9" "$vp9_4096"' EXIT INT TERM
+audio=$(mktemp "${TMPDIR:-/tmp}/export-webm-copya.XXXXXX.webm")
+trap 'rm -f "$small" "$large" "$vp8" "$vp8_two" "$vp8_4096" "$vp8_460800" "$vp9" "$vp9_4096" "$audio"' EXIT INT TERM
 
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$small" 2x2
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$large" large
@@ -22,6 +23,7 @@ cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_s
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$vp8_460800" vp8-460800
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example copy_file -- "$root/fixtures/vp9.webm" "$vp9"
 cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$vp9_4096" vp9-4096
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example copy_file -- "$root/fixtures/opus.webm" "$audio"
 
 # `ffmpeg -i` exits 1 when no output is requested. Rejection is a missing
 # container line, not that exit code.
@@ -60,3 +62,8 @@ vp9_4096_log=$(ffmpeg -hide_banner -i "$vp9_4096" 2>&1 || true)
 printf '%s\n' "$vp9_4096_log"
 printf '%s\n' "$vp9_4096_log" | grep -E 'Video: vp9[, ]' >/dev/null
 echo "codec vp9_4096 $(printf '%s\n' "$vp9_4096_log" | grep -E 'Video: vp9[, ]' | head -n 1)"
+
+audio_log=$(ffmpeg -hide_banner -i "$audio" 2>&1 || true)
+printf '%s\n' "$audio_log"
+printf '%s\n' "$audio_log" | grep -E 'Audio: opus[, ]' >/dev/null
+echo "codec audio $(printf '%s\n' "$audio_log" | grep -E 'Audio: opus[, ]' | head -n 1)"
