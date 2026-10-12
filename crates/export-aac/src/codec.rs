@@ -1,4 +1,8 @@
-//! ADTS header plus one mono AAC-LC raw data block.
+//! ADTS header plus one AAC-LC raw data block.
+//!
+//! Mono frames are one SCE. The one stereo frame is one CPE: left and right
+//! share the long sine window, with mid-side stereo off. That is AAC-LC, not
+//! HE-AAC, SBR, or parametric stereo.
 
 use crate::bits::{BitReader, BitWriter};
 use crate::huff;
@@ -16,6 +20,7 @@ const NUM_SWB: usize = 49;
 const ZERO_HCB: u32 = 0;
 const ESC_HCB: u32 = 11;
 const ID_SCE: u32 = 0;
+const ID_CPE: u32 = 1;
 const ID_FIL: u32 = 6;
 const ID_END: u32 = 7;
 const EXT_SBR_DATA: u32 = 13;
@@ -29,7 +34,7 @@ pub enum Error {
     BadHeader,
     /// HE-AAC, spectral band replication, or parametric stereo.
     Unsupported,
-    /// The frame is not one mono AAC-LC long-window block at 44.1 kHz.
+    /// The frame is not one AAC-LC long-window block at 44.1 kHz.
     Invalid,
 }
 
@@ -110,6 +115,67 @@ pub fn encode_fourth_frame() -> Result<Vec<u8>, Error> {
 /// fourth frame itself still delays.
 pub fn encode_flush_frame() -> Result<Vec<u8>, Error> {
     encode_frame_following(&crate::fourth_frame_pcm(), &[0.0; FRAME_SAMPLES])
+}
+
+/// One stereo AAC-LC frame. Left and right are 1024 samples each.
+///
+/// Both channels use the same long sine window as [`encode_frame`], with a
+/// zero left half. This is not a song encoder, and it does not use SBR,
+/// parametric stereo, or a second window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StereoPcm {
+    pub left: [f32; FRAME_SAMPLES],
+    pub right: [f32; FRAME_SAMPLES],
+}
+
+/// Encode one stereo AAC-LC ADTS frame at 44.1 kHz.
+///
+/// `left` and `right` are the right halves of two long windows. The left
+/// halves are silence. Mid-side stereo is off.
+pub fn encode_stereo_frame(left: &[f32], right: &[f32]) -> Result<Vec<u8>, Error> {
+    if left.len() != FRAME_SAMPLES || right.len() != FRAME_SAMPLES {
+        return Err(Error::Invalid);
+    }
+    if left
+        .iter()
+        .chain(right.iter())
+        .any(|sample| !sample.is_finite())
+    {
+        return Err(Error::Invalid);
+    }
+    let left_spec = first_window_spectrum(left);
+    let right_spec = first_window_spectrum(right);
+    let (left_gain, left_q) = quantize(&left_spec);
+    let (right_gain, right_q) = quantize(&right_spec);
+    let payload = write_cpe(left_gain, &left_q, right_gain, &right_q)?;
+    wrap_adts_stereo(&payload)
+}
+
+/// Decode one stereo AAC-LC ADTS frame.
+///
+/// Overlap history is zero, so a lone frame does not reconstruct its input.
+/// A mono frame is [`Error::Invalid`].
+pub fn decode_stereo_frame(bytes: &[u8]) -> Result<StereoPcm, Error> {
+    let adts = parse_adts(bytes)?;
+    if adts.channel != 2 {
+        return Err(Error::Invalid);
+    }
+    let (left, right) = read_stereo_block(adts.payload)?;
+    Ok(StereoPcm {
+        left: pcm_f32(&mdct::synthesis_one_frame(&left)),
+        right: pcm_f32(&mdct::synthesis_one_frame(&right)),
+    })
+}
+
+fn first_window_spectrum(samples: &[f32]) -> [f64; FRAME_SAMPLES] {
+    if samples.iter().all(|sample| *sample == 0.0) {
+        return [0.0; FRAME_SAMPLES];
+    }
+    let mut block = [0.0f64; 2048];
+    for i in 0..FRAME_SAMPLES {
+        block[FRAME_SAMPLES + i] = f64::from(samples[i]);
+    }
+    mdct::analysis(&block)
 }
 
 /// Decode one AAC-LC ADTS frame to 1024 mono PCM samples.
@@ -228,6 +294,9 @@ pub fn decode_flush_frame(
 
 fn spectrum(bytes: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
     let adts = parse_adts(bytes)?;
+    if adts.channel != 1 {
+        return Err(Error::Invalid);
+    }
     read_raw_data_block(adts.payload)
 }
 
@@ -246,6 +315,17 @@ fn wrap_adts(payload: &[u8]) -> Result<Vec<u8>, Error> {
     }
     let mut out = Vec::with_capacity(frame_len);
     out.extend_from_slice(&adts_header(frame_len)?);
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
+fn wrap_adts_stereo(payload: &[u8]) -> Result<Vec<u8>, Error> {
+    let frame_len = 7 + payload.len();
+    if frame_len > 0x1FFF {
+        return Err(Error::Invalid);
+    }
+    let mut out = Vec::with_capacity(frame_len);
+    out.extend_from_slice(&adts_header_stereo(frame_len)?);
     out.extend_from_slice(payload);
     Ok(out)
 }
@@ -270,8 +350,25 @@ fn adts_header(frame_len: usize) -> Result<[u8; 7], Error> {
     Ok(h)
 }
 
+fn adts_header_stereo(frame_len: usize) -> Result<[u8; 7], Error> {
+    if !(7..=0x1FFF).contains(&frame_len) {
+        return Err(Error::BadHeader);
+    }
+    let mut h = [0u8; 7];
+    h[0] = 0xFF;
+    h[1] = 0xF1;
+    // profile AAC-LC, 44100 Hz, channel config 2 (the top bit is 0).
+    h[2] = 0x50;
+    h[3] = 0b1000_0000 | ((frame_len >> 11) as u8 & 0x03);
+    h[4] = (frame_len >> 3) as u8;
+    h[5] = ((frame_len as u8 & 0x07) << 5) | 0x1F;
+    h[6] = 0xFC;
+    Ok(h)
+}
+
 struct Adts<'a> {
     payload: &'a [u8],
+    channel: u8,
 }
 
 fn parse_adts(data: &[u8]) -> Result<Adts<'_>, Error> {
@@ -305,12 +402,13 @@ fn parse_adts(data: &[u8]) -> Result<Adts<'_>, Error> {
     }
     // Profile is audioObjectType - 1. HE-AAC (AOT 5 / 29) does not fit in
     // these two bits; SBR and PS are detected in the fill element. Other
-    // profiles are not this frame.
-    if profile != 1 || sample_rate_index != 4 || channel != 1 || blocks != 0 {
+    // profiles are not this frame. Channel 1 is mono, channel 2 is one CPE.
+    if profile != 1 || sample_rate_index != 4 || blocks != 0 || (channel != 1 && channel != 2) {
         return Err(Error::Invalid);
     }
     Ok(Adts {
         payload: &data[header_len..frame_len],
+        channel,
     })
 }
 
@@ -355,6 +453,69 @@ fn write_raw_data_block(global_gain: u8, quant: &[i32; FRAME_SAMPLES]) -> Result
     Ok(w.finish())
 }
 
+fn write_cpe(
+    left_gain: u8,
+    left_q: &[i32; FRAME_SAMPLES],
+    right_gain: u8,
+    right_q: &[i32; FRAME_SAMPLES],
+) -> Result<Vec<u8>, Error> {
+    let max_sfb = sections(left_q)
+        .iter()
+        .map(|section| section.sfb0 + section.len)
+        .max()
+        .unwrap_or(0);
+    let mut w = BitWriter::new();
+    w.put(ID_CPE, 3);
+    w.put(0, 4); // element_instance_tag
+    w.put(1, 1); // common_window
+    write_ics_info(&mut w, max_sfb as u32);
+    w.put(0, 2); // ms_mask_present = 0
+    write_channel_body(&mut w, left_gain, left_q, max_sfb)?;
+    write_channel_body(&mut w, right_gain, right_q, max_sfb)?;
+    w.put(ID_END, 3);
+    Ok(w.finish())
+}
+
+fn write_channel_body(
+    w: &mut BitWriter,
+    global_gain: u8,
+    quant: &[i32; FRAME_SAMPLES],
+    max_sfb: usize,
+) -> Result<(), Error> {
+    let bands = sections_covering(quant, max_sfb);
+    w.put(u32::from(global_gain), 8);
+    for section in &bands {
+        w.put(section.cb, 4);
+        write_section_length(w, section.len);
+    }
+    for section in &bands {
+        if section.cb == ZERO_HCB {
+            continue;
+        }
+        for _ in 0..section.len {
+            huff::write_sf_delta_zero(w)?;
+        }
+    }
+    w.put(0, 1); // pulse_data_present
+    w.put(0, 1); // tns_data_present
+    w.put(0, 1); // gain_control_data_present
+    for section in &bands {
+        if section.cb == ZERO_HCB {
+            continue;
+        }
+        for sfb in section.sfb0..section.sfb0 + section.len {
+            let start = usize::from(SWB[sfb]);
+            let end = usize::from(SWB[sfb + 1]);
+            let mut i = start;
+            while i < end {
+                huff::write_cb11_pair(w, quant[i], quant[i + 1])?;
+                i += 2;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn write_ics_info(w: &mut BitWriter, max_sfb: u32) {
     w.put(0, 1); // ics_reserved_bit
     w.put(0, 2); // ONLY_LONG_SEQUENCE
@@ -377,6 +538,21 @@ struct Section {
     cb: u32,
     sfb0: usize,
     len: usize,
+}
+
+fn sections_covering(quant: &[i32; FRAME_SAMPLES], max_sfb: usize) -> Vec<Section> {
+    let mut out = Vec::new();
+    let mut sfb = 0;
+    while sfb < max_sfb {
+        let cb = band_cb(quant, sfb);
+        let mut len = 1;
+        while sfb + len < max_sfb && band_cb(quant, sfb + len) == cb {
+            len += 1;
+        }
+        out.push(Section { cb, sfb0: sfb, len });
+        sfb += len;
+    }
+    out
 }
 
 fn sections(quant: &[i32; FRAME_SAMPLES]) -> Vec<Section> {
@@ -443,6 +619,11 @@ fn read_raw_data_block(payload: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
 fn read_sce(r: &mut BitReader<'_>) -> Result<[f64; FRAME_SAMPLES], Error> {
     let _tag = r.read(4)?;
     let global_gain = r.read(8)? as i32;
+    let max_sfb = read_ics_info(r)?;
+    read_channel_body(r, global_gain, max_sfb)
+}
+
+fn read_ics_info(r: &mut BitReader<'_>) -> Result<usize, Error> {
     let reserved = r.read(1)?;
     let window_sequence = r.read(2)?;
     let window_shape = r.read(1)?;
@@ -454,6 +635,30 @@ fn read_sce(r: &mut BitReader<'_>) -> Result<[f64; FRAME_SAMPLES], Error> {
     if predictor != 0 || max_sfb > NUM_SWB {
         return Err(Error::Invalid);
     }
+    Ok(max_sfb)
+}
+
+fn read_cpe(r: &mut BitReader<'_>) -> Result<([f64; FRAME_SAMPLES], [f64; FRAME_SAMPLES]), Error> {
+    let _tag = r.read(4)?;
+    if r.read(1)? != 1 {
+        return Err(Error::Invalid);
+    }
+    let max_sfb = read_ics_info(r)?;
+    if r.read(2)? != 0 {
+        return Err(Error::Invalid);
+    }
+    let left_gain = r.read(8)? as i32;
+    let left = read_channel_body(r, left_gain, max_sfb)?;
+    let right_gain = r.read(8)? as i32;
+    let right = read_channel_body(r, right_gain, max_sfb)?;
+    Ok((left, right))
+}
+
+fn read_channel_body(
+    r: &mut BitReader<'_>,
+    global_gain: i32,
+    max_sfb: usize,
+) -> Result<[f64; FRAME_SAMPLES], Error> {
     let mut cb = [ZERO_HCB as u8; NUM_SWB];
     let mut sfb = 0usize;
     while sfb < max_sfb {
@@ -519,6 +724,31 @@ fn read_sce(r: &mut BitReader<'_>) -> Result<[f64; FRAME_SAMPLES], Error> {
         }
     }
     Ok(spec)
+}
+
+fn read_stereo_block(
+    payload: &[u8],
+) -> Result<([f64; FRAME_SAMPLES], [f64; FRAME_SAMPLES]), Error> {
+    let mut r = BitReader::new(payload);
+    let mut channels = None;
+    loop {
+        let id = r.read(3)?;
+        match id {
+            ID_CPE => {
+                if channels.is_some() {
+                    return Err(Error::Invalid);
+                }
+                channels = Some(read_cpe(&mut r)?);
+            }
+            ID_FIL => read_fill(&mut r)?,
+            ID_END => {
+                r.byte_align()?;
+                break;
+            }
+            _ => return Err(Error::Invalid),
+        }
+    }
+    channels.ok_or(Error::Invalid)
 }
 
 fn read_fill(r: &mut BitReader<'_>) -> Result<(), Error> {
@@ -879,6 +1109,30 @@ mod tests {
             decode_flush_frame(&first, &second, &third, &fourth, &sbr).unwrap_err(),
             Error::Unsupported
         );
+    }
+
+    #[test]
+    fn stereo_frame_keeps_the_long_window() {
+        let left_pcm = crate::one_frame_pcm();
+        let frame = encode_stereo_frame(&left_pcm, &[0.0; FRAME_SAMPLES]).unwrap();
+        let pcm = decode_stereo_frame(&frame).unwrap();
+        let mut left_err = 0.0f32;
+        let mut left_peak = 0.0f32;
+        let mut right_peak = 0.0f32;
+        for ((left, src), right) in pcm.left.iter().zip(left_pcm.iter()).zip(pcm.right.iter()) {
+            left_err = left_err.max((left - src).abs());
+            left_peak = left_peak.max(left.abs());
+            right_peak = right_peak.max(right.abs());
+        }
+        assert!(
+            left_peak <= 0.51 || left_err <= 0.01,
+            "left peak {left_peak} err {left_err}"
+        );
+        assert!(right_peak <= 0.01, "right peak {right_peak}");
+        assert_eq!(decode_frame(&frame).unwrap_err(), Error::Invalid);
+        assert_eq!(encode_frame(&left_pcm).unwrap().len(), 513);
+        assert_eq!(encode_second_frame().unwrap().len(), 68);
+        assert_eq!(encode_third_frame().unwrap().len(), 94);
     }
 
     #[test]

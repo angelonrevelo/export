@@ -131,6 +131,24 @@ timer. 200 calls, same profile.
 | --- | --- | --- |
 | decode, tail ready | 5.073 ms (5073023 ns) | 5.327 ms (5326863 ns) |
 
+## Stereo frame, release
+
+One AAC-LC channel pair. 44.1 kHz. 1024 samples per channel. Left is the
+half-scale 440 Hz sine. Right is silence. Both channels use the same long
+sine window as the mono frame. Mid-side stereo is off. This is not SBR or
+parametric stereo, and it is not a song encoder.
+
+The left channel is the first-frame delay. Max abs error versus that sine is
+0.5003551. The samples are within 0.51 of silence (peak 0.0035939883). Right
+peak is 0. Host FFmpeg 6.1.1 decodes the frame as AAC-LC, 44100 Hz, stereo,
+1024 samples per channel, with the same left error and a right peak of 0.
+
+Same profile, 200 calls. Not a throughput number for a song.
+
+| | p50 | p99 | output bytes |
+| --- | --- | --- | --- |
+| encode | 5.690 ms (5690457 ns) | 7.035 ms (7035148 ns) | 517 |
+
 ## Build
 
 ```
