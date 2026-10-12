@@ -2,17 +2,19 @@
 //! Copy rows are copy-only. The truncated error is its own row.
 //! This process does not spawn threads.
 
-use export_webm::{large_sample_file, sample_file, stream_copy, Error};
+use export_webm::{large_sample_file, sample_file, stream_copy, vp8_webm, Error};
 use std::time::Instant;
 
 fn main() {
     let small = sample_file();
     let large = large_sample_file();
+    let vp8 = vp8_webm();
     let mut truncated = small.clone();
     truncated.truncate(truncated.len() / 2);
 
     let small_out = stream_copy(&small).expect("2x2 copies").bytes;
     let large_out = stream_copy(&large).expect("large copies").bytes;
+    let vp8_out = stream_copy(vp8).expect("vp8 copies").bytes;
     assert_eq!(
         stream_copy(&truncated).expect_err("truncated fails"),
         Error::Truncated
@@ -24,16 +26,19 @@ fn main() {
     for _ in 0..16 {
         let _ = stream_copy(&small);
         let _ = stream_copy(&large);
+        let _ = stream_copy(vp8);
         let _ = stream_copy(&truncated);
     }
 
     let small_ns = time_copy(&small, small_out.len(), N_SMALL);
     let large_ns = time_copy(&large, large_out.len(), N_LARGE);
+    let vp8_ns = time_copy(vp8, vp8_out.len(), N_SMALL);
     let truncated_ns = time_truncated(&truncated, N_SMALL);
 
     println!("threading=off");
     print_copy_row("2x2", &small, &small_out, &small_ns);
     print_copy_row("large", &large, &large_out, &large_ns);
+    print_copy_row("vp8", vp8, &vp8_out, &vp8_ns);
     print_truncated_row(&truncated, &truncated_ns);
 }
 

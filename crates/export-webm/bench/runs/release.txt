@@ -7,3 +7,7 @@ threading=off
 row=2x2 samples=2000 input_bytes=208 output_bytes=208 p50_ns=2702 p99_ns=3882 mb_s=76.980
 row=large samples=400 input_bytes=460999 output_bytes=460999 p50_ns=1968232 p99_ns=2233795 mb_s=234.220
 row=truncated samples=2000 input_bytes=104 p50_ns=562 p99_ns=736
+
+# VP8 copy. ffmpeg names the remux `Video: vp8`. Payload bytes are copied, not decoded.
+# p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
+row=vp8 samples=2000 input_bytes=530 output_bytes=186 p50_ns=3350 p99_ns=5291 mb_s=158.209
