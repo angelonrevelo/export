@@ -9,3 +9,11 @@
 threading=off
 row=copy samples=200 input_bytes=1049435 output_bytes=1049435 p50_ns=4039766 p99_ns=6801094 mb_s=259.776
 row=truncated samples=400 input_bytes=524717 p50_ns=1618473 p99_ns=1810456
+
+# 16×16 fragmented H.264 copy only. Not a re-run of the PCM row above.
+# `cargo bench --manifest-path crates/export-fmp4/Cargo.toml --bench h264 -j 1`
+# Threading off. The bitstream is not decoded.
+# Repeat of the same binary: input_bytes=1404 output_bytes=1404 p50_ns=7020 p99_ns=8570.
+
+threading=off
+row=h264 samples=2000 input_bytes=1404 output_bytes=1404 p50_ns=6989 p99_ns=8303

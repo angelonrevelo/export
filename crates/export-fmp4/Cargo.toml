@@ -25,3 +25,7 @@ codegen-units = 1
 [[bench]]
 name = "copy"
 harness = false
+
+[[bench]]
+name = "h264"
+harness = false
