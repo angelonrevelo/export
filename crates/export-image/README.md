@@ -220,6 +220,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | thumbnail q=72, four-frame 1280×720 WebP first frame → 220×124 (output 3,118 bytes) | 20 | 16,374.0 µs | 16,473.7 µs | 168.85 (p99 167.83) | JPEG; long side 220; 19 allocs; 20.62 allocs/MP |
 
+`shrink_png` of the same gradient at 192×144, a later release run. The source PNG is 87,853 bytes. The cap is 8,000 bytes, the same cap as the 96×72 row. The output is 8,000 bytes, smaller than the source, and not a copy. p50 is 21,117.0 µs, under the 25.6 ms cap, so this edge stays. The 96×72 shrink row stays 5,827.4 µs. The 640×480 shrink stays reverted: 728,763 bytes in, 8,000 bytes out, p50 198,157.4 µs. Shrink does not take WebP. The WebP thumbnail rows stay 3,024 bytes at 9,243.2 µs and 3,118 bytes at 16,374.0 µs. The PNG thumbnail row stays 3,703 bytes, p50 20,402.9 µs, p99 21,764.4 µs.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| shrink 192×144 PNG to 8,000 bytes, fresh cache (file 87,853 bytes, output 8,000 bytes) | 12 | 21,117.0 µs | 24,968.5 µs | 3.93 | 112 allocs; 4,050.93 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
