@@ -66,3 +66,15 @@ Chrome (headless) fired `loadeddata` with duration 1 and a video size of 0×0. I
 | concat_copies | 2 | 653,824 | 0.642 ms | 0.808 ms |
 
 p50 is under 2 ms. `scripts/concat_copies.sh` is a host ffprobe only. It reported `codec_name=rawvideo`, 640×120, `nb_frames=2`. The library does not call ffmpeg.
+
+## Picture bytes
+
+`cargo bench --bench picture_bytes`. Same release profile, 31 iterations, 3 warmup. The one-frame row and the two-sample row above were not remeasured. The sample-count ladder stays stopped at two.
+
+`elementary` copies the one video sample out of the one-frame audiogram this crate already writes. It does not decode the pixels and it does not write a new file. The bytes are the `raw ` sample: 640×120×3.
+
+| path | bytes | p50 | p99 |
+|---|---:|---:|---:|
+| picture_bytes | 230,400 | 5.559 µs | 5.999 µs |
+
+p50 is under 0.30 ms.

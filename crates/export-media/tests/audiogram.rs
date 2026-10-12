@@ -151,6 +151,46 @@ fn eight_bit_expands_to_sowt() {
     );
 }
 
+fn one_second() -> Vec<u8> {
+    let rate = 48_000usize;
+    let mut pcm = Vec::with_capacity(rate * 2);
+    for i in 0..rate {
+        let s = ((i as i16).wrapping_mul(17)).wrapping_add((i as i16) >> 3);
+        pcm.extend_from_slice(&s.to_le_bytes());
+    }
+    encode_wav(
+        WavSpec {
+            channels: 1,
+            sample_rate: rate as u32,
+            bits: 16,
+        },
+        &pcm,
+    )
+    .expect("wav")
+}
+
+#[test]
+fn picture_bytes_are_the_raw_sample() {
+    let file = audiogram(&one_second()).expect("audiogram");
+    assert_eq!(file.bytes, 327_420);
+    assert_eq!(file.video_samples, 1);
+    let movie = parse(&file.data).expect("parse");
+    let video = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"vide")
+        .expect("video");
+    assert_eq!(video.codec, *b"raw ");
+    assert_eq!(video.width >> 16, u32::from(WIDTH));
+    assert_eq!(video.height >> 16, u32::from(HEIGHT));
+    let samples = elementary(video, &file.data).expect("picture");
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].len(), 230_400);
+    let picture = samples[0].to_vec();
+    assert_eq!(picture.len(), 230_400);
+    assert!(picture.chunks(3).all(|px| px[0] == px[1] && px[1] == px[2]));
+}
+
 #[test]
 fn rejects_non_wav() {
     let err = audiogram(b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2").expect_err("mp4");
