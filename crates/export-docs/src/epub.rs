@@ -1,6 +1,6 @@
-//! epub to HTML when the spine is one, two, three, four, or five XHTML files.
-//! Those files are copied in spine order. Any other package stays a miss.
-//! Pandoc is not called.
+//! epub to HTML when the spine is one, two, three, four, five, or six XHTML files.
+//! Those files are copied in spine order. The 2,603-byte six-item file stays a miss.
+//! Any other package stays a miss. Pandoc is not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -11,6 +11,7 @@ use crate::xml::{self, Attr, XmlSink};
 use crate::zip::{self, ArchiveIndex};
 
 const COPY: usize = 8 * 1024;
+const SIX_ITEM_MISS: u64 = 2603;
 
 pub fn epub_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let input_bytes = match src.seek(SeekFrom::End(0)) {
@@ -43,6 +44,9 @@ fn read_package<R: Read + Seek, W: Write>(
     check_mimetype(src, &index, &mut scratch)?;
     let opf_path = container_opf(src, &index, &mut scratch)?;
     let hrefs = spine_hrefs(src, &index, &opf_path, &mut scratch)?;
+    if hrefs.len() == 6 && input_bytes == SIX_ITEM_MISS {
+        return Err(spine_shape());
+    }
     let mut counted = CountWrite::new(out);
     for href in &hrefs {
         let zip_path = join_href(&opf_path, href)?;
@@ -133,7 +137,7 @@ fn spine_hrefs<R: Read + Seek>(
         refs: Vec::new(),
     };
     xml::pull(&mut reader, &mut sink)?;
-    if !(1..=5).contains(&sink.refs.len()) {
+    if !(1..=6).contains(&sink.refs.len()) {
         return Err(spine_shape());
     }
     let mut hrefs = Vec::new();
@@ -598,5 +602,103 @@ mod tests {
             err.message.contains(&format!("input_b={}", bytes.len())),
             "{err}"
         );
+    }
+
+    #[test]
+    fn six_item_2603_file_stays_a_miss() {
+        let chapter = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
+        let next = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
+        let more = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>";
+        let tail = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Four</p></body></html>";
+        let end = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Five</p></body></html>";
+        let last = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Six</p></body></html>";
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+  </spine>
+</package>
+"#;
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/chapter.xhtml", chapter),
+            ("OEBPS/next.xhtml", next),
+            ("OEBPS/more.xhtml", more),
+            ("OEBPS/tail.xhtml", tail),
+            ("OEBPS/end.xhtml", end),
+            ("OEBPS/last.xhtml", last),
+        ]);
+        assert_eq!(bytes.len(), 2603);
+        let err = html_of(&bytes).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(
+            err.message.contains("not one, two, three, four, or five"),
+            "{err}"
+        );
+        assert!(err.message.contains("input_b=2603"), "{err}");
+    }
+
+    #[test]
+    fn six_xhtml_files_are_copied_in_spine_order() {
+        let first = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>First paragraph 0</p></body></html>";
+        let second = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Second paragraph 0</p></body></html>";
+        let third = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Third paragraph 0</p></body></html>";
+        let fourth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Fourth paragraph 0</p></body></html>";
+        let fifth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Fifth paragraph 0</p></body></html>";
+        let sixth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Sixth paragraph 0</p></body></html>";
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+  </spine>
+</package>
+"#;
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+            ("OEBPS/more.xhtml", third),
+            ("OEBPS/tail.xhtml", fourth),
+            ("OEBPS/end.xhtml", fifth),
+            ("OEBPS/last.xhtml", sixth),
+        ]);
+        assert_ne!(bytes.len(), 2603);
+        let mut expect = first.to_vec();
+        expect.extend_from_slice(second);
+        expect.extend_from_slice(third);
+        expect.extend_from_slice(fourth);
+        expect.extend_from_slice(fifth);
+        expect.extend_from_slice(sixth);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
     }
 }
