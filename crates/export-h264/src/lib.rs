@@ -105,8 +105,8 @@ impl Yuv420 {
         if self.width == 0 || self.height == 0 || self.width % 16 != 0 || self.height % 16 != 0 {
             return Err(Error::Size);
         }
-        // 640×480 is 1200 macroblocks, level 3.0. 320×240 stays inside level 1.1.
-        if self.width > 640 || self.height > 480 {
+        // 1280×720 is 3600 macroblocks, level 3.1. 640×480 stays on level 3.0.
+        if self.width > 1280 || self.height > 720 {
             return Err(Error::TooLarge);
         }
         let y = (self.width as usize) * (self.height as usize);
@@ -442,6 +442,11 @@ pub fn fixture_640x480() -> Yuv420 {
     fixture_pattern(640, 480)
 }
 
+/// Deterministic 1280×720 4:2:0 pattern. Same formula as [`fixture_32x32`].
+pub fn fixture_1280x720() -> Yuv420 {
+    fixture_pattern(1280, 720)
+}
+
 fn fixture_pattern(width: u32, height: u32) -> Yuv420 {
     let w = width as usize;
     let h = height as usize;
@@ -560,6 +565,11 @@ pub fn fixture_320x240_split() -> Yuv420 {
 /// 640×480 fixture with the same left/right shift as [`fixture_320x240_split`].
 pub fn fixture_640x480_split() -> Yuv420 {
     shift_halves(&fixture_640x480())
+}
+
+/// 1280×720 fixture with the same left/right shift as [`fixture_640x480_split`].
+pub fn fixture_1280x720_split() -> Yuv420 {
+    shift_halves(&fixture_1280x720())
 }
 
 /// Four 320×240 pictures. The I-frame is the plain fixture. Each P-frame applies
