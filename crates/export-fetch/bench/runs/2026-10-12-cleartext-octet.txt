@@ -1,0 +1,34 @@
+bench=cleartext_octet
+toolchain: rustc 1.83.0 (90b35a623 2024-11-26)
+profile: release opt-level=3 lto=thin codegen-units=1
+command: cargo run --release --manifest-path crates/export-fetch/Cargo.toml --offline --bin octet_bench
+note: eight cleartext 1 MiB GETs on a std::net server bound to 127.0.0.1. Local stack, not a CDN. yt-dlp is not used. Loopback is allowed only in this bench. https is not used and stays unsupported. One untimed warmup of each mode, then 40 samples, alternating order. The recorded four-GET row and the recorded two-GET row are different runs and are not restated here.
+rule: keep the shared connection only when its latency p50 is at least 10% under the separate-connection p50. 1221592 * 10 <= 1468142 * 9, so shared stays.
+
+bench=cleartext_octet
+release=1
+scheme=http
+host=127.0.0.1
+permit_loopback=bench_only
+https=unsupported
+stack=local
+cdn=0
+samples=40
+warmup=1
+each_bytes=1048576
+gets=8
+mode=shared
+combined_bytes=8388608
+connections=1
+latency_ns_p50=1221592
+latency_ns_p99=1590166
+mode=separate
+combined_bytes=8388608
+connections=8
+latency_ns_p50=1468142
+latency_ns_p99=1969406
+rule=keep_shared_when_p50_at_least_10_percent_under_separate
+shared_p50_ns=1221592
+separate_p50_ns=1468142
+kept=shared
+server_accepts=369

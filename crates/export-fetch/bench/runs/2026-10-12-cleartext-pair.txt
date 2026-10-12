@@ -1,0 +1,33 @@
+bench=cleartext_pair
+toolchain: rustc 1.83.0 (90b35a623 2024-11-26)
+profile: release opt-level=3 lto=thin codegen-units=1
+command: cargo run --release --manifest-path crates/export-fetch/Cargo.toml --offline --bin pair_bench
+note: two cleartext 1 MiB GETs on a std::net server bound to 127.0.0.1. Local stack, not a CDN. yt-dlp is not used. Loopback is allowed only in this bench. https is not used and stays unsupported. One untimed warmup of each mode, then 40 samples, alternating order. The recorded 8 MiB loopback row is a different run and is not restated here.
+rule: keep the shared connection only when its latency p50 is at least 10% under the separate-connection p50. 350373 * 10 <= 402202 * 9, so shared stays.
+
+bench=cleartext_pair
+release=1
+scheme=http
+host=127.0.0.1
+permit_loopback=bench_only
+https=unsupported
+stack=local
+cdn=0
+samples=40
+warmup=1
+each_bytes=1048576
+mode=shared
+combined_bytes=2097152
+connections=1
+latency_ns_p50=350373
+latency_ns_p99=502708
+mode=separate
+combined_bytes=2097152
+connections=2
+latency_ns_p50=402202
+latency_ns_p99=563464
+rule=keep_shared_when_p50_at_least_10_percent_under_separate
+shared_p50_ns=350373
+separate_p50_ns=402202
+kept=shared
+server_accepts=123
