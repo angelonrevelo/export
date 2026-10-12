@@ -1,7 +1,8 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_32x32,
-    fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error,
-    EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
+    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160,
+    fixture_160x160_predicted, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
+    fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
+    PredictedFrame, Yuv420, SHIFTED_MV,
 };
 
 #[test]
@@ -242,7 +243,7 @@ fn larger_iframe_is_constrained_baseline() {
     let encoded = encode(&frame, &opts).unwrap();
     assert_eq!(encoded.qp, 26);
     assert_eq!(encoded.reconstructed.width, 160);
-    assert!(encoded.annex_b.len() > 272);
+    assert_eq!(encoded.annex_b.len(), 6432);
     assert!(encoded
         .annex_b
         .windows(4)
@@ -268,6 +269,25 @@ fn larger_iframe_is_constrained_baseline() {
         vec![0; 88 * 88]
     )
     .is_err());
+    let predicted = fixture_160x160_predicted();
+    let pair = encode_ip(&frame, &predicted, &opts).unwrap();
+    assert_eq!(pair.annex_b.len(), 9689);
+    assert!(pair.annex_b.starts_with(&encoded.annex_b));
+    assert_eq!(&pair.annex_b[..6432], &encoded.annex_b[..]);
+    let zero = encode_ip_motion(&frame, &predicted, &opts, Motion { mvx: 0, mvy: 0 }).unwrap();
+    assert_eq!(zero.annex_b, pair.annex_b);
+    assert_eq!(
+        encode_ip(
+            &frame,
+            &predicted,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            }
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
 }
 
 #[test]

@@ -34,6 +34,10 @@ name = "ipframe"
 path = "src/bin/ipframe.rs"
 
 [[bin]]
+name = "ipframe160"
+path = "src/bin/ipframe160.rs"
+
+[[bin]]
 name = "mvframe"
 path = "src/bin/mvframe.rs"
 
