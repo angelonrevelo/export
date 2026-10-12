@@ -60,7 +60,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "pptx", target: "pdf", ready: false, note: "MISS: text-shape decks convert, and one generated PNG slide converts only when the image XObject PDF is smaller than the stored pixels; other decks stay a miss" },
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one, two, or three paragraphs converts; other files stay a miss" },
-    Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: a generated one-shape legacy ppt converts when the PDF text contains that string, four text shapes convert when the PDF text contains all four, and one text shape plus one 24-bit or 8-bit DIB picture converts when the PDF text contains the string and the picture is an image; other bit depths stay a miss" },
+    Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: a generated one-shape legacy ppt converts when the PDF text contains that string, four text shapes convert when the PDF text contains all four, and one text shape plus one 24-bit, 8-bit, or 4-bit DIB picture converts when the PDF text contains the string and the picture is an image; other bit depths stay a miss" },
     Pair { source: "ppt", target: "html", ready: false, note: "MISS: only a generated legacy ppt with one, two, three, or four text shapes converts; other files stay a miss" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
 ];
@@ -276,6 +276,10 @@ pub fn pdf_page_count(input: &[u8]) -> Result<usize> {
 
 pub fn pdf_text(input: &[u8]) -> Result<String> {
     pdf::plain_text(input)
+}
+
+pub fn pdf_image_matches(input: &[u8], width: u32, height: u32, rgb: &[u8]) -> Result<bool> {
+    pdf::contains_image(input, width, height, rgb)
 }
 
 pub fn pdf_shrink(input: &[u8]) -> Result<Vec<u8>> {
