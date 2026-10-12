@@ -1,16 +1,23 @@
 //! Compact English ↔ Spanish transfer.
 //!
 //! This is not NLLB. There is no downloaded model and no 1.2 GB resident set.
-//! The hot path is a byte scanner, a binary search over a closed lexicon, and a
-//! shallow clause transfer — all in this crate, with zero dependencies.
+//! The hot path is a byte scanner, a binary search over a frequent lexicon, and
+//! morphology — all in this crate, with zero dependencies.
 //!
 //! [`PAIR_LIMIT`] is the language coverage. Anything outside en ↔ es fails.
 
 #![forbid(unsafe_code)]
 
+mod esconj;
 mod fold;
+mod frequent;
+#[allow(dead_code)]
+mod kind;
 mod lexicon;
+mod lexwalk;
+mod morph;
 mod scan;
+mod tok;
 mod transfer;
 
 use std::fmt;
@@ -19,10 +26,11 @@ use std::fmt;
 pub const PAIR_LIMIT: &str = "\
 Only en → es and es → en are translated. en → en and es → es return the input \
 unchanged (same language, not a translation). Every other code — including tl, \
-fil, zh, ja, fr, pt, and de — returns an error. Coverage is a closed lexicon and \
-one clause shape (subject, copula or one verb, one object, estar+gerund, \
-tú-imperative, trailing adjuncts). It is not NLLB-200 and it does not echo an \
-unsupported pair as if it had been translated.";
+fil, zh, ja, fr, pt, and de — returns an error. Coverage is an open frequent-word \
+lexicon plus regular and irregular morphology, on top of a small closed grammar. \
+An unknown token is copied and counted when some content word translates. If no \
+content word translates, the call errors and does not echo the source. It is not \
+NLLB-200 and it does not echo an unsupported pair as if it had been translated.";
 
 /// Pairs this crate actually translates. Same-language passthrough is not listed.
 pub fn supported_pairs() -> &'static [(&'static str, &'static str)] {
@@ -30,6 +38,11 @@ pub fn supported_pairs() -> &'static [(&'static str, &'static str)] {
 }
 
 pub use lexicon::lexicon_static_bytes;
+
+/// English lemmas in the frequent table. Closed fixture entries are not included.
+pub fn frequent_lemma_count() -> usize {
+    frequent::lemma_count()
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -73,6 +86,41 @@ pub fn translate(text: &str, source: &str, target: &str) -> Result<String, Error
         (Some(a), Some(b)) if a == b => Ok(text.to_string()),
         (Some(Lang::En), Some(Lang::Es)) => convert(text, source, target, transfer::en_to_es),
         (Some(Lang::Es), Some(Lang::En)) => convert(text, source, target, transfer::es_to_en),
+        _ => Err(Error::Unsupported {
+            source: norm_code(source),
+            target: norm_code(target),
+        }),
+    }
+}
+
+/// How many content words were translated, and how many unknown tokens were copied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Counts {
+    pub content_words: u32,
+    pub unknown_copied: u32,
+}
+
+/// Translate `text`, and report content hits versus unknown tokens that were copied.
+///
+/// Same language returns the input with zero counts. A sentence with no translated
+/// content word is [`Error::NothingTranslated`].
+pub fn translate_counts(text: &str, source: &str, target: &str) -> Result<(String, Counts), Error> {
+    let src = canon(source);
+    let tgt = canon(target);
+    match (src, tgt) {
+        (Some(a), Some(b)) if a == b => Ok((
+            text.to_string(),
+            Counts {
+                content_words: 0,
+                unknown_copied: 0,
+            },
+        )),
+        (Some(Lang::En), Some(Lang::Es)) => {
+            convert_counts(text, source, target, transfer::en_to_es_meta)
+        }
+        (Some(Lang::Es), Some(Lang::En)) => {
+            convert_counts(text, source, target, transfer::es_to_en_meta)
+        }
         _ => Err(Error::Unsupported {
             source: norm_code(source),
             target: norm_code(target),
@@ -139,6 +187,68 @@ fn convert(
         });
     }
     Ok(out)
+}
+
+fn convert_counts(
+    text: &str,
+    source: &str,
+    target: &str,
+    one: fn(&str) -> Result<(String, transfer::Meta), &'static str>,
+) -> Result<(String, Counts), Error> {
+    if text.is_empty() || !has_letter(text) {
+        return Ok((
+            text.to_string(),
+            Counts {
+                content_words: 0,
+                unknown_copied: 0,
+            },
+        ));
+    }
+    let pieces = split_pieces(text);
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut counts = Counts {
+        content_words: 0,
+        unknown_copied: 0,
+    };
+    let mut any = false;
+    let mut i = 0;
+    while i < pieces.len() {
+        let piece = pieces[i];
+        if !has_letter(piece) {
+            out.push_str(piece);
+            i += 1;
+            continue;
+        }
+        let lead = piece.len() - piece.trim_start().len();
+        let trail = piece.len() - piece.trim_end().len();
+        let core = piece.trim();
+        out.push_str(&piece[..lead]);
+        match one(core) {
+            Ok((body, meta)) => {
+                any = true;
+                counts.content_words += meta.content;
+                counts.unknown_copied += meta.unknown;
+                out.push_str(&finish(&body, core));
+            }
+            Err(_) => {
+                return Err(Error::NothingTranslated {
+                    source: norm_code(source),
+                    target: norm_code(target),
+                });
+            }
+        }
+        if trail > 0 {
+            out.push_str(&piece[piece.len() - trail..]);
+        }
+        i += 1;
+    }
+    if !any && has_letter(text) {
+        return Err(Error::NothingTranslated {
+            source: norm_code(source),
+            target: norm_code(target),
+        });
+    }
+    Ok((out, counts))
 }
 
 fn finish(body: &str, src: &str) -> String {

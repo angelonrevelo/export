@@ -11,6 +11,10 @@ description = "Zero-dependency en↔es transfer translator. Not NLLB."
 name = "export-translate-bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "export-translate-paragraph"
+path = "src/bin/paragraph-bench.rs"
+
 [dependencies]
 
 [profile.release]

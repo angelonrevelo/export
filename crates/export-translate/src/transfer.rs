@@ -6,22 +6,13 @@
 
 use crate::fold::fold_into;
 use crate::lexicon::*;
+use crate::morph;
 use crate::scan::{tokenize, Raw};
+use crate::tok::{content_en, content_es, needs_lex_en, needs_lex_es, TokE, TokS};
 
-#[derive(Clone, Copy)]
-enum TokE<'a> {
-    Mwe(&'static str),
-    Punct(&'a str),
-    Unknown(&'a str),
-    G(Eg),
-}
-
-#[derive(Clone, Copy)]
-enum TokS<'a> {
-    Mwe(&'static str),
-    Punct(&'a str),
-    Unknown(&'a str),
-    G(Sg),
+pub(crate) struct Meta {
+    pub content: u32,
+    pub unknown: u32,
 }
 
 struct Np {
@@ -36,47 +27,65 @@ struct Np {
 }
 
 pub(crate) fn en_to_es(text: &str) -> Result<String, &'static str> {
+    en_to_es_meta(text).map(|(s, _)| s)
+}
+
+pub(crate) fn es_to_en(text: &str) -> Result<String, &'static str> {
+    es_to_en_meta(text).map(|(s, _)| s)
+}
+
+pub(crate) fn en_to_es_meta(text: &str) -> Result<(String, Meta), &'static str> {
     let toks = analyze_en(text);
-    if !any_en(&toks) {
+    let meta = tally_en(&toks);
+    if meta.content == 0 {
         return Err("nothing");
     }
     let mut out = String::new();
     render_en(&toks, &mut out);
-    Ok(out)
+    Ok((out, meta))
 }
 
-pub(crate) fn es_to_en(text: &str) -> Result<String, &'static str> {
+pub(crate) fn es_to_en_meta(text: &str) -> Result<(String, Meta), &'static str> {
     let toks = analyze_es(text);
-    if !any_es(&toks) {
+    let meta = tally_es(&toks);
+    if meta.content == 0 {
         return Err("nothing");
     }
     let mut out = String::new();
     render_es(&toks, &mut out);
-    Ok(out)
+    Ok((out, meta))
 }
 
-fn any_en(toks: &[TokE<'_>]) -> bool {
+fn tally_en(toks: &[TokE<'_>]) -> Meta {
+    let mut content = 0;
+    let mut unknown = 0;
     let mut i = 0;
     while i < toks.len() {
-        match toks[i] {
-            TokE::Mwe(_) | TokE::G(_) => return true,
-            _ => {}
+        if content_en(&toks[i]) {
+            content += 1;
+        }
+        if matches!(toks[i], TokE::Unknown(_)) {
+            unknown += 1;
         }
         i += 1;
     }
-    false
+    Meta { content, unknown }
 }
 
-fn any_es(toks: &[TokS<'_>]) -> bool {
+fn tally_es(toks: &[TokS<'_>]) -> Meta {
+    let mut content = 0;
+    let mut unknown = 0;
     let mut i = 0;
     while i < toks.len() {
-        match toks[i] {
-            TokS::Mwe(_) | TokS::G(_) => return true,
-            _ => {}
+        if content_es(&toks[i]) {
+            content += 1;
+        }
+        if matches!(toks[i], TokS::Unknown(_)) {
+            unknown += 1;
         }
         i += 1;
     }
-    false
+    Meta { content, unknown }
 }
 
 struct Item<'a> {
@@ -162,7 +171,7 @@ fn analyze_en(text: &str) -> Vec<TokE<'_>> {
                 let key = &buf[items[i].k0 as usize..items[i].k1 as usize];
                 match find_en(key) {
                     Some(e) => out.push(TokE::G(e.g)),
-                    None => out.push(TokE::Unknown(w)),
+                    None => out.push(morph_en(w, key)),
                 }
             }
         }
@@ -188,7 +197,7 @@ fn analyze_es(text: &str) -> Vec<TokS<'_>> {
                 let key = &buf[items[i].k0 as usize..items[i].k1 as usize];
                 match find_es(key) {
                     Some(e) => out.push(TokS::G(e.g)),
-                    None => out.push(TokS::Unknown(w)),
+                    None => out.push(morph_es(w, key)),
                 }
             }
         }
@@ -322,7 +331,26 @@ fn conj_es(t: &TokS<'_>) -> Option<&'static str> {
     }
 }
 
+fn morph_en<'a>(raw: &'a str, key: &str) -> TokE<'a> {
+    match morph::lookup(key) {
+        Some(morph::Hit::F(f)) => TokE::F(f),
+        Some(morph::Hit::Cv(p, ten)) => TokE::Cv(p, ten),
+        Some(morph::Hit::Be { were }) => TokE::BePast { were },
+        None => TokE::Unknown(raw),
+    }
+}
+
+fn morph_es<'a>(raw: &'a str, key: &str) -> TokS<'a> {
+    match crate::frequent::find_surf(key) {
+        Some(s) => TokS::S(s),
+        None => TokS::Unknown(raw),
+    }
+}
+
 fn clause_en(toks: &[TokE<'_>]) -> String {
+    if needs_lex_en(toks) {
+        return crate::lexwalk::clause_en(toks);
+    }
     if !verbal_en(toks) {
         return linear_en(toks);
     }
@@ -445,6 +473,9 @@ fn clause_en(toks: &[TokE<'_>]) -> String {
 }
 
 fn clause_es(toks: &[TokS<'_>]) -> String {
+    if needs_lex_es(toks) {
+        return crate::lexwalk::clause_es(toks);
+    }
     if !verbal_es(toks) {
         return linear_es(toks);
     }
@@ -921,6 +952,9 @@ fn push_tok_en(out: &mut String, t: &TokE<'_>) {
         TokE::Mwe(s) => push_word(out, s),
         TokE::Unknown(w) => push_word(out, w),
         TokE::Punct(p) => push_word(out, p),
+        TokE::F(f) => push_word(out, f.es),
+        TokE::Cv(p, _) => push_word(out, p.inf),
+        TokE::BePast { .. } => push_word(out, "estaba"),
         TokE::G(g) => {
             let w = match *g {
                 Eg::Conj(s) | Eg::Prep(s) | Eg::Adv(s) | Eg::Interj(s) | Eg::Pron(s, _) => s,
@@ -953,6 +987,7 @@ fn push_tok_es(out: &mut String, t: &TokS<'_>) {
         TokS::Mwe(s) => push_word(out, s),
         TokS::Unknown(w) => push_word(out, w),
         TokS::Punct(p) => push_word(out, p),
+        TokS::S(s) => push_word(out, s.en),
         TokS::G(g) => {
             let w = match *g {
                 Sg::Conj(s)
