@@ -51,6 +51,20 @@ A second paragraph, also not a stored fixture, uses only lemmas and clause shape
 
 A second release run of that binary was p50 1,508 ns and p99 2,255 ns. Both medians are within 1.88 µs.
 
+A six-sentence paragraph, also not a stored fixture, uses only lemmas and clause shapes already in the crate. Both directions, 2,000 iterations. Each sample is that iteration's time divided by sentences × 2. Nearest-rank percentiles, `cargo run --release --bin export-translate-tl-six`:
+
+> The mother cooked rice today. The children drank milk at home. She opened the letter from the teacher. We can walk to school tomorrow. The dog ran outside, but the cat is sleeping at home. I think the weather is good.
+
+> Nagluto ang ina ng kanin ngayon. Uminom ang mga bata ng gatas sa tahanan. Binuksan niya ang liham mula sa guro. Maaari tayong maglakad sa paaralan bukas. Tumakbo ang aso sa labas, pero natutulog ang pusa sa tahanan. Sa palagay ko na mabuti ang panahon.
+
+| | |
+|---|---|
+| sentences | **6** |
+| p50 per sentence | **1,051 ns** (1.051 µs) |
+| p99 per sentence | **1,334 ns** (1.334 µs) |
+
+A second release run of that binary was p50 1,047 ns and p99 1,334 ns. Both medians are within 1.66 µs.
+
 The English ↔ Spanish paragraph harness is still `export-translate-paragraph` and was not rewritten. Its paragraph still translates to:
 
 > Ayer yo hablé con mi amigo sobre la reunión. Ella dijo que nosotros necesitamos terminar el informe antes del viernes, pero el tren estaba tarde y nosotros lo perdimos. Yo creo que nosotros podemos enviar las notas mañana.
@@ -61,6 +75,7 @@ A re-run on this build, after the Filipino tables were added to `lexicon_static_
 cargo test --manifest-path crates/export-translate/Cargo.toml
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-pctl
+cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-six
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-paragraph
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-bench
 cargo build --release --manifest-path crates/export-translate/Cargo.toml --target wasm32-unknown-unknown --lib
