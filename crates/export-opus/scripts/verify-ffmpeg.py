@@ -260,6 +260,112 @@ def check_two_frames(tmp_path: Path) -> int:
     return 0
 
 
+def check_three_frames(tmp_path: Path) -> int:
+    paths = [tmp_path / f"sine-three-{index}.opus" for index in (1, 2, 3)]
+    expected_path = tmp_path / "sine-three.pcm"
+    alone_path = tmp_path / "sine-three-alone.pcm"
+    decoded_path = tmp_path / "sine-three-ffmpeg.pcm"
+    subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "--example",
+            "dump-packet",
+            "--",
+            "sine-three",
+            *(str(path) for path in paths),
+            str(expected_path),
+            str(alone_path),
+        ],
+        cwd=CRATE,
+        check=True,
+    )
+    packets = [path.read_bytes() for path in paths]
+    ogg_path = tmp_path / "sine-three.ogg"
+    ogg_path.write_bytes(opus_ogg_frames(packets))
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(ogg_path),
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "1",
+            str(decoded_path),
+        ],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr.decode("utf-8", "replace"))
+        print("ffmpeg could not decode the three-frame file", file=sys.stderr)
+        return 1
+    expected = pcm_samples(expected_path.read_bytes())
+    got = pcm_samples(decoded_path.read_bytes())
+    if got != expected:
+        print(
+            f"sine-three sample mismatch: ffmpeg={len(got)} crate={len(expected)}",
+            file=sys.stderr,
+        )
+        return 1
+    if len(got) < 2880:
+        print(f"sine-three short decode: {len(got)} samples", file=sys.stderr)
+        return 1
+    rms, peak, onset = frame_stats(got[1920:2880])
+    print(
+        f"sine-three ffmpeg matched {len(got)} samples "
+        f"frame3 rms={rms:.1f} peak={peak} onset_peak={onset}"
+    )
+    alone_ogg = tmp_path / "sine-three-alone.ogg"
+    alone_decoded = tmp_path / "sine-three-alone-ffmpeg.pcm"
+    alone_ogg.write_bytes(opus_ogg(packets[2]))
+    alone_result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(alone_ogg),
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "1",
+            str(alone_decoded),
+        ],
+        capture_output=True,
+    )
+    if alone_result.returncode != 0:
+        sys.stderr.write(alone_result.stderr.decode("utf-8", "replace"))
+        print("ffmpeg could not decode the third packet alone", file=sys.stderr)
+        return 1
+    alone_expected = pcm_samples(alone_path.read_bytes())
+    alone_got = pcm_samples(alone_decoded.read_bytes())
+    if alone_got != alone_expected:
+        print("lone third packet sample mismatch", file=sys.stderr)
+        return 1
+    alone_rms, alone_peak, alone_onset = frame_stats(alone_got)
+    diffs = sum(left != right for left, right in zip(got[1920:2880], alone_got))
+    print(
+        f"sine-three-alone ffmpeg matched {len(alone_got)} samples "
+        f"rms={alone_rms:.1f} peak={alone_peak} onset_peak={alone_onset} "
+        f"differs_from_frame3={diffs}"
+    )
+    return 0
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="export-opus-") as tmp:
         tmp_path = Path(tmp)
@@ -267,6 +373,7 @@ def main() -> int:
         for kind in ("silence", "sine"):
             status |= check_frame(tmp_path, kind)
         status |= check_two_frames(tmp_path)
+        status |= check_three_frames(tmp_path)
         return status
 
 

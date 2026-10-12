@@ -43,5 +43,9 @@ fn decode_known_frame(packet: &[u8]) -> Result<[i16; FRAME_SAMPLES], Error> {
         // Fresh decoder: no energy memory from the first frame.
         return Ok(crate::sine_next::SINE_PACKET_2_ALONE);
     }
+    if packet == crate::sine_third::SINE_PACKET_3.as_slice() {
+        // Fresh decoder: no frames before this packet.
+        return Ok(crate::sine_third::SINE_PACKET_3_ALONE);
+    }
     Err(Error::BadToc)
 }

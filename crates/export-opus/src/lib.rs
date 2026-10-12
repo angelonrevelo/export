@@ -1,8 +1,8 @@
 //! One Opus packet: mono, 48 kHz, one 20 ms frame.
 //!
 //! The frames this crate will encode are digital silence, one half-scale
-//! 440 Hz sine, and a second 20 ms frame of that same sine. It is not a
-//! song encoder and it does not replace yt-dlp.
+//! 440 Hz sine, and a second and third 20 ms frame of that same sine.
+//! It is not a song encoder and it does not replace yt-dlp.
 //! The library never calls ffmpeg.
 
 #![forbid(unsafe_code)]
@@ -12,10 +12,11 @@ mod encoder;
 mod error;
 mod sine_frame;
 mod sine_next;
+mod sine_third;
 mod toc;
 
 pub use decoder::decode;
-pub use encoder::{encode, encode_second_sine_frame};
+pub use encoder::{encode, encode_second_sine_frame, encode_third_sine_frame};
 pub use error::Error;
 
 /// PCM samples of the half-scale 440 Hz frame this crate can encode.
@@ -29,6 +30,14 @@ pub fn sine_source() -> [i16; FRAME_SAMPLES] {
 /// alone. A fresh decoder has no prior frame, so that packet is quieter.
 pub fn sine_followed_frame() -> [i16; FRAME_SAMPLES] {
     sine_next::SINE_FOLLOWED
+}
+
+/// Third frame of the three-frame sine file, after the first two packets.
+///
+/// This is not what [`decode`] returns for [`encode_third_sine_frame`]
+/// alone. Those two buffers differ.
+pub fn sine_third_frame() -> [i16; FRAME_SAMPLES] {
+    sine_third::SINE_FRAME_3
 }
 
 /// PCM sample rate for the one frame this crate handles.
@@ -143,6 +152,27 @@ mod tests {
         assert!(alone > 1_000 * 1_000);
         assert!(followed > 8_000 * 8_000);
         assert!(followed > alone * 4);
+    }
+
+    #[test]
+    fn third_sine_frame_differs_when_decoded_alone() {
+        let third = encode_third_sine_frame();
+        assert_ne!(third, encode_second_sine_frame());
+        assert_eq!(third[0], TOC_MONO_20MS);
+        let alone = decode(&third, 1, false).unwrap();
+        assert_eq!(alone, sine_third::SINE_PACKET_3_ALONE);
+        let in_file = sine_third_frame();
+        let diffs = in_file
+            .iter()
+            .zip(alone.iter())
+            .filter(|(left, right)| left != right)
+            .count();
+        assert_eq!(diffs, FRAME_SAMPLES);
+        assert_eq!(decode(&third, 2, false), Err(Error::Unsupported));
+        assert_eq!(decode(&third, 1, true), Err(Error::Unsupported));
+        assert!(mean_square(&in_file) > 8_000 * 8_000);
+        assert!(mean_square(&alone) > 1_000 * 1_000);
+        assert!(mean_square(&in_file) > mean_square(&alone) * 4);
     }
 
     #[test]

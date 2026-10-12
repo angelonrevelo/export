@@ -35,3 +35,10 @@ pub fn encode(pcm: &[i16; FRAME_SAMPLES]) -> Result<Vec<u8>, Error> {
 pub fn encode_second_sine_frame() -> Vec<u8> {
     crate::sine_next::SINE_PACKET_2.to_vec()
 }
+
+/// Third 20 ms packet of the same half-scale 440 Hz sine.
+///
+/// This packet follows [`encode_second_sine_frame`]. It is not a song encoder.
+pub fn encode_third_sine_frame() -> Vec<u8> {
+    crate::sine_third::SINE_PACKET_3.to_vec()
+}
