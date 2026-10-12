@@ -17,14 +17,19 @@ impl<'a> BitReader<'a> {
     pub fn f(&mut self, n: u32) -> Result<u32, Error> {
         let mut value = 0u32;
         for _ in 0..n {
-            if self.bit >= self.data.len().saturating_mul(8) {
-                return Err(Error::Truncated);
-            }
-            let byte = self.data[self.bit >> 3];
-            let shift = 7 - (self.bit & 7);
-            value = (value << 1) | u32::from((byte >> shift) & 1);
-            self.bit += 1;
+            value = (value << 1) | self.bit()?;
         }
         Ok(value)
+    }
+
+    #[inline]
+    pub fn bit(&mut self) -> Result<u32, Error> {
+        if self.bit >= self.data.len().saturating_mul(8) {
+            return Err(Error::Truncated);
+        }
+        let byte = self.data[self.bit >> 3];
+        let shift = 7 - (self.bit & 7);
+        self.bit += 1;
+        Ok(u32::from((byte >> shift) & 1))
     }
 }

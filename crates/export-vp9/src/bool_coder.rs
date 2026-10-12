@@ -26,6 +26,7 @@ impl<'a, 'b> BoolDecoder<'a, 'b> {
         Ok(decoder)
     }
 
+    #[inline]
     pub fn read(&mut self, prob: u8) -> Result<u8, Error> {
         let split = 1 + (((self.range - 1) * u32::from(prob)) >> 8);
         let bit = if self.value < split {
@@ -38,7 +39,7 @@ impl<'a, 'b> BoolDecoder<'a, 'b> {
         };
         while self.range < 128 {
             let new_bit = if self.max_bits > 0 {
-                let bit = self.br.f(1)?;
+                let bit = self.br.bit()?;
                 self.max_bits -= 1;
                 bit
             } else {

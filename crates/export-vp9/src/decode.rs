@@ -34,9 +34,9 @@ struct Pic {
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
-    above_nz: [[u8; 4]; 3],
-    left_nz: [[u8; 4]; 3],
-    skips: [u8; 4],
+    above_nz: [[u8; 8]; 3],
+    left_nz: [[u8; 8]; 3],
+    skips: [u8; 16],
     above_part: [u8; 8],
     left_part: [u8; 8],
 }
@@ -85,7 +85,7 @@ pub fn decode_keyframe(bytes: &[u8]) -> Result<Frame, Error> {
     if br.f(1)? != 0 {
         return Err(Error::Unsupported);
     }
-    if !matches!((width, height), (8, 8) | (16, 16)) {
+    if !matches!((width, height), (8, 8) | (16, 16) | (32, 32)) {
         return Err(Error::Unsupported);
     }
     if error_resilient == 0 {
@@ -160,9 +160,9 @@ fn decode_tile(
         y: vec![0; width * height],
         u: vec![0; chroma],
         v: vec![0; chroma],
-        above_nz: [[0; 4]; 3],
-        left_nz: [[0; 4]; 3],
-        skips: [0; 4],
+        above_nz: [[0; 8]; 3],
+        left_nz: [[0; 8]; 3],
+        skips: [0; 16],
         above_part: [0; 8],
         left_part: [0; 8],
     };
@@ -353,7 +353,7 @@ fn transform(
     }
     let x4 = x >> 2;
     let y4 = y >> 2;
-    if plane >= 3 || x4 >= 4 || y4 >= 4 {
+    if plane >= 3 || x4 >= 8 || y4 >= 8 {
         return Err(Error::Unsupported);
     }
     pic.above_nz[plane][x4] = nonzero;
@@ -361,6 +361,7 @@ fn transform(
     Ok(())
 }
 
+#[inline]
 fn predict_dc(pic: &mut Pic, plane: usize, x: usize, y: usize) {
     let have_left = x > 0;
     let have_above = y > 0;
@@ -369,19 +370,19 @@ fn predict_dc(pic: &mut Pic, plane: usize, x: usize, y: usize) {
     } else {
         (pic.width / 2, pic.width / 2 - 1, pic.height / 2 - 1)
     };
-    let size = 4usize;
+    let samples = plane_samples(pic, plane);
     let mut above = [0i32; 4];
     let mut left = [0i32; 4];
-    for i in 0..size {
+    for i in 0..4 {
         let above_x = (x + i).min(max_x);
         let left_y = (y + i).min(max_y);
         above[i] = if have_above {
-            i32::from(px(pic, plane, y - 1, above_x))
+            i32::from(samples[(y - 1) * stride + above_x])
         } else {
             127
         };
         left[i] = if have_left {
-            i32::from(px(pic, plane, left_y, x - 1))
+            i32::from(samples[left_y * stride + (x - 1)])
         } else {
             129
         };
@@ -389,10 +390,10 @@ fn predict_dc(pic: &mut Pic, plane: usize, x: usize, y: usize) {
     let log2 = 2i32;
     let pred = if have_left && have_above {
         let mut sum = 0i32;
-        for k in 0..size {
+        for k in 0..4 {
             sum += left[k] + above[k];
         }
-        (sum + size as i32) >> (log2 + 1)
+        (sum + 4) >> (log2 + 1)
     } else if have_left {
         let sum: i32 = left.iter().sum();
         (sum + (1 << (log2 - 1))) >> log2
@@ -403,30 +404,27 @@ fn predict_dc(pic: &mut Pic, plane: usize, x: usize, y: usize) {
         128
     };
     let value = pred.clamp(0, 255) as u8;
-    for row in 0..size {
-        for col in 0..size {
-            set_px(pic, plane, y + row, x + col, stride, value);
-        }
+    let samples = plane_samples_mut(pic, plane);
+    for row in 0..4 {
+        let start = (y + row) * stride + x;
+        samples[start..start + 4].fill(value);
     }
 }
 
-fn px(pic: &Pic, plane: usize, y: usize, x: usize) -> u8 {
-    let stride = if plane == 0 { pic.width } else { pic.width / 2 };
-    let samples = match plane {
+fn plane_samples(pic: &Pic, plane: usize) -> &[u8] {
+    match plane {
         0 => pic.y.as_slice(),
         1 => pic.u.as_slice(),
         _ => pic.v.as_slice(),
-    };
-    samples[y * stride + x]
+    }
 }
 
-fn set_px(pic: &mut Pic, plane: usize, y: usize, x: usize, stride: usize, value: u8) {
-    let samples = match plane {
+fn plane_samples_mut(pic: &mut Pic, plane: usize) -> &mut [u8] {
+    match plane {
         0 => pic.y.as_mut_slice(),
         1 => pic.u.as_mut_slice(),
         _ => pic.v.as_mut_slice(),
-    };
-    samples[y * stride + x] = value;
+    }
 }
 
 fn read_tokens(

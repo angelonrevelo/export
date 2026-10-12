@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Write one IVF keyframe this crate decodes.
 
-The picture is 8x8 or 16x16, profile 0, 8-bit 4:2:0, lossless, DC predicted.
-Each 8x8 block's first luma 4x4 carries a positive FOUR token. Every other
-transform ends immediately. The 16x16 frame is one keyframe: the 64 and 32
-superblock partitions are implied splits, and the 16x16 partition is an
-explicit split into four 8x8 blocks. Loop filter, segmentation, and
-probability updates are off. Default size 8 keeps the original file bytes.
+The picture is 8x8, 16x16, or 32x32, profile 0, 8-bit 4:2:0, lossless, DC predicted.
+On the 8x8 and 16x16 frames, each 8x8 block's first luma 4x4 carries a
+positive FOUR token. The 32x32 frame is one keyframe as well: four of its
+8x8 blocks carry that token and the other twelve are skipped. Loop filter,
+segmentation, and probability updates are off. Default size 8 keeps the
+original file bytes.
 """
 
 from __future__ import annotations
@@ -97,18 +97,13 @@ def compressed_header() -> bytes:
     return encoder.flush()
 
 
-def write_block(encoder: BoolEncoder) -> None:
-    # 8x8 partition none uses context 0. Skip, DC luma, and DC chroma have no
-    # neighbors that change the probability on this frame. Band 0, context 0
-    # luma probabilities, and the Pareto values for node >= 2 at probability
-    # 183. Later end-of-block contexts are 1, 1, 0. Chroma ends at context 0.
+def write_dc_tokens(encoder: BoolEncoder) -> None:
+    # Band 0, context 0 luma probabilities, and the Pareto values for node >= 2
+    # at probability 183. Later end-of-block contexts are 1, 1, 0.
+    # Chroma ends at context 0.
     y0 = (195, 29, 183)
     y_eob = {0: 195, 1: 84, 3: 8}
     uv0 = 214
-    encoder.write(158, 0)
-    encoder.write(192, 0)
-    encoder.write(137, 0)
-    encoder.write(144, 0)
     encoder.write(y0[0], 1)
     encoder.write(y0[1], 1)
     encoder.write(y0[2], 1)
@@ -123,10 +118,59 @@ def write_block(encoder: BoolEncoder) -> None:
     encoder.write(uv0, 0)
 
 
+def write_block(encoder: BoolEncoder) -> None:
+    # 8x8 partition none uses context 0. Skip and DC modes use the no-neighbor
+    # probabilities on the 8x8 and 16x16 frames.
+    encoder.write(158, 0)
+    encoder.write(192, 0)
+    encoder.write(137, 0)
+    encoder.write(144, 0)
+    write_dc_tokens(encoder)
+
+
+def write_coded(encoder: BoolEncoder, skip_prob: int) -> None:
+    encoder.write(158, 0)
+    encoder.write(skip_prob, 0)
+    encoder.write(137, 0)
+    encoder.write(144, 0)
+    write_dc_tokens(encoder)
+
+
+def write_skipped(encoder: BoolEncoder, skip_prob: int) -> None:
+    encoder.write(158, 0)
+    encoder.write(skip_prob, 1)
+    encoder.write(137, 0)
+    encoder.write(144, 0)
+
+
+def write_split(encoder: BoolEncoder, probs: tuple[int, int, int]) -> None:
+    for prob in probs:
+        encoder.write(prob, 1)
+
+
 def tile(size: int) -> bytes:
     encoder = BoolEncoder()
     encoder.write(128, 0)
-    if size == 16:
+    if size == 32:
+        # The 64x64 split is implied. Context 8 splits the 32x32. The four
+        # 16x16 splits then use contexts 4, 6, 5, and 7.
+        # One coded 8x8 in each quadrant. The other twelve blocks are skipped.
+        # Skip probabilities follow the neighbor skip flags.
+        write_split(encoder, (150, 40, 39))
+        quadrants = (
+            ((149, 53, 53), ((0, 192), (1, 192), (1, 192), (1, 64))),
+            ((83, 53, 24), ((0, 128), (1, 192), (1, 128), (1, 64))),
+            ((94, 20, 48), ((0, 128), (1, 128), (1, 192), (1, 64))),
+            ((52, 18, 18), ((0, 64), (1, 128), (1, 128), (1, 64))),
+        )
+        for probs, blocks in quadrants:
+            write_split(encoder, probs)
+            for skipped, skip_prob in blocks:
+                if skipped:
+                    write_skipped(encoder, skip_prob)
+                else:
+                    write_coded(encoder, skip_prob)
+    elif size == 16:
         # Keyframe partition context 4, split: three 1-bits.
         encoder.write(149, 1)
         encoder.write(53, 1)
@@ -192,8 +236,8 @@ def main() -> None:
     args = sys.argv[1:]
     size = 8
     if args and args[0] == "--size":
-        if len(args) < 2 or args[1] not in ("8", "16"):
-            raise SystemExit("usage: gen-keyframe.py [--size 8|16] [path]")
+        if len(args) < 2 or args[1] not in ("8", "16", "32"):
+            raise SystemExit("usage: gen-keyframe.py [--size 8|16|32] [path]")
         size = int(args[1])
         args = args[2:]
     destination = pathlib.Path(args[0]) if args else None
