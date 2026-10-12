@@ -4,7 +4,7 @@
 
 use export_webm::{
     large_sample_file, sample_file, stream_copy, vp8_4096_webm, vp8_460800_webm, vp8_two_webm,
-    vp8_webm, Error,
+    vp8_webm, vp9_webm, Error,
 };
 use std::time::Instant;
 
@@ -15,6 +15,7 @@ fn main() {
     let vp8_two = vp8_two_webm();
     let vp8_4096 = vp8_4096_webm();
     let vp8_460800 = vp8_460800_webm();
+    let vp9 = vp9_webm();
     let mut truncated = small.clone();
     truncated.truncate(truncated.len() / 2);
 
@@ -26,6 +27,7 @@ fn main() {
     let vp8_460800_out = stream_copy(&vp8_460800)
         .expect("460800-byte vp8 copies")
         .bytes;
+    let vp9_out = stream_copy(vp9).expect("vp9 copies").bytes;
     assert_eq!(
         stream_copy(&truncated).expect_err("truncated fails"),
         Error::Truncated
@@ -41,6 +43,7 @@ fn main() {
         let _ = stream_copy(vp8_two);
         let _ = stream_copy(&vp8_4096);
         let _ = stream_copy(&vp8_460800);
+        let _ = stream_copy(vp9);
         let _ = stream_copy(&truncated);
     }
 
@@ -50,6 +53,7 @@ fn main() {
     let vp8_two_ns = time_copy(vp8_two, vp8_two_out.len(), N_SMALL);
     let vp8_4096_ns = time_copy(&vp8_4096, vp8_4096_out.len(), N_SMALL);
     let vp8_460800_ns = time_copy(&vp8_460800, vp8_460800_out.len(), N_LARGE);
+    let vp9_ns = time_copy(vp9, vp9_out.len(), N_SMALL);
     let truncated_ns = time_truncated(&truncated, N_SMALL);
 
     println!("threading=off");
@@ -59,6 +63,7 @@ fn main() {
     print_copy_row("vp8_two", vp8_two, &vp8_two_out, &vp8_two_ns);
     print_copy_row("vp8_4096", &vp8_4096, &vp8_4096_out, &vp8_4096_ns);
     print_copy_row("vp8_460800", &vp8_460800, &vp8_460800_out, &vp8_460800_ns);
+    print_copy_row("vp9", vp9, &vp9_out, &vp9_ns);
     print_truncated_row(&truncated, &truncated_ns);
 }
 

@@ -53,8 +53,8 @@ pub struct Movie {
 
 /// Sniff the EBML header and codec ids.
 ///
-/// VP9, Opus, and Vorbis return [`Error::Unsupported`]. Their payloads are
-/// not decoded. A VP8 payload is copied as block bytes and is not decoded.
+/// Opus and Vorbis return [`Error::Unsupported`]. Their payloads are not
+/// decoded. VP8 and VP9 payloads are copied as block bytes and are not decoded.
 pub fn sniff(input: &[u8]) -> Result<(), Error> {
     let movie = parse(input, true)?;
     let _ = movie;

@@ -26,3 +26,7 @@ row=vp8_4096 samples=2000 input_bytes=4253 output_bytes=4253 p50_ns=16531 p99_ns
 # p50, p99, and mb_s are this host, threading off, 400 samples. Not a speedup claim.
 # mb_s is input bytes / p50 seconds / 1_000_000.
 row=vp8_460800 samples=400 input_bytes=460960 output_bytes=460960 p50_ns=2084673 p99_ns=2267524 mb_s=221.119
+
+# VP9 copy. ffmpeg names the remux `Video: vp9`. The payload is copied and is not decoded.
+# p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
+row=vp9 samples=2000 input_bytes=533 output_bytes=184 p50_ns=5557 p99_ns=7607 mb_s=95.915

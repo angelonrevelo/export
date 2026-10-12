@@ -3,8 +3,8 @@
 //! This is a stream copy, not a transcode, and not a video shrink.
 //! The pipeline hashes each input once (SHA-256), dedupes by that hash,
 //! sniffs EBML, then copies block payloads and timestamps.
-//! VP9, Opus, and Vorbis are sniffed and return [`Error::Unsupported`].
-//! They are not decoded. VP8 block payloads are copied and are not decoded.
+//! Opus and Vorbis are sniffed and return [`Error::Unsupported`].
+//! They are not decoded. VP8 and VP9 block payloads are copied and are not decoded.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +22,11 @@ pub use sha256::sha256;
 /// WebM file whose block payload is VP8. The bytes are copied, not decoded.
 pub fn vp8_webm() -> &'static [u8] {
     include_bytes!("../fixtures/vp8.webm")
+}
+
+/// WebM file whose video payload is VP9. The bytes are copied, not decoded.
+pub fn vp9_webm() -> &'static [u8] {
+    include_bytes!("../fixtures/vp9.webm")
 }
 
 /// WebM file with two VP8 blocks. Both payloads are copied and neither is decoded.
@@ -283,8 +288,24 @@ mod tests {
     }
 
     #[test]
-    fn vp9_opus_vorbis_are_unsupported() {
-        for codec in ["V_VP9", "A_OPUS", "A_VORBIS"] {
+    fn vp9_payload_is_copied() {
+        let original = vp9_webm();
+        let parsed = demux(original).unwrap();
+        assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_VP9);
+        assert!(!parsed.blocks.is_empty());
+        let copied = stream_copy(original).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_VP9);
+        assert_eq!(again.blocks.len(), parsed.blocks.len());
+        for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
+            assert_eq!(left.payload, right.payload);
+            assert_eq!(left.timestamp(), right.timestamp());
+        }
+    }
+
+    #[test]
+    fn opus_vorbis_are_unsupported() {
+        for codec in ["A_OPUS", "A_VORBIS"] {
             let mut movie = sample_movie();
             movie.tracks[0].codec_id = codec.to_owned();
             if codec.starts_with('A') {
