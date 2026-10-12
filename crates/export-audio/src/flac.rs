@@ -1,9 +1,10 @@
 //! FLAC subset decode and encode.
 //!
 //! The encoder writes STREAMINFO, then fixed-blocksize frames. Each subframe
-//! is constant, verbatim, or fixed LPC (order 0..=4) with a single Rice
-//! partition or an unencoded residual. The decoder also accepts LPC
-//! coefficients, stereo decorrelation, wasted bits, and Rice partitions.
+//! is constant, verbatim, or fixed order 0..=4, with a single Rice partition
+//! or an unencoded residual. An LPC coefficient subframe replaces that fixed
+//! predictor only when the written subframe is strictly shorter. The decoder
+//! also accepts stereo decorrelation, wasted bits, and Rice partitions.
 
 use crate::crc::{crc8, crc16};
 use crate::error::{Error, Result};
@@ -193,6 +194,10 @@ impl BitWriter {
     fn finish(mut self) -> Vec<u8> {
         self.align();
         self.buf
+    }
+
+    fn bit_len(&self) -> usize {
+        self.buf.len() * 8 + self.nbit as usize
     }
 }
 
@@ -1030,7 +1035,7 @@ fn write_frame(pcm: &Pcm, start: usize, block: usize, frame_number: u64) -> Resu
         for i in 0..block {
             samples.push(pcm.samples[(start + i) * channels + ch]);
         }
-        write_subframe(&mut body, &samples, u32::from(pcm.bits));
+        write_subframe(&mut body, &samples, u32::from(pcm.bits), pcm.sample_rate);
     }
     let mut frame = hdr;
     frame.extend_from_slice(&body.finish());
@@ -1123,13 +1128,30 @@ enum Coded {
     Constant(i32),
     Verbatim,
     Fixed { order: usize, escape: Option<u32>, param: u32 },
+    Lpc {
+        precision: u32,
+        shift: i32,
+        coeff: Vec<i32>,
+        escape: Option<u32>,
+        param: u32,
+    },
 }
 
-fn write_subframe(w: &mut BitWriter, samples: &[i32], bps: u32) {
-    match choose(samples, bps) {
+fn write_subframe(w: &mut BitWriter, samples: &[i32], bps: u32, rate: u32) {
+    let mut coded = choose(samples, bps);
+    if matches!(coded, Coded::Fixed { .. }) {
+        if let Some(lpc) = smaller_lpc(samples, bps, rate, &coded) {
+            coded = lpc;
+        }
+    }
+    write_coded(w, samples, bps, &coded);
+}
+
+fn write_coded(w: &mut BitWriter, samples: &[i32], bps: u32, coded: &Coded) {
+    match coded {
         Coded::Constant(s) => {
             write_sub_header(w, 0);
-            w.write_signed(s, bps);
+            w.write_signed(*s, bps);
         }
         Coded::Verbatim => {
             write_sub_header(w, 1);
@@ -1142,20 +1164,52 @@ fn write_subframe(w: &mut BitWriter, samples: &[i32], bps: u32) {
             escape,
             param,
         } => {
-            let Some(residual) = fixed_residual(samples, order) else {
-                write_sub_header(w, 1);
-                for &s in samples {
-                    w.write_signed(s, bps);
-                }
+            let Some(residual) = fixed_residual(samples, *order) else {
+                write_verbatim(w, samples, bps);
                 return;
             };
-            write_sub_header(w, 8 + order as u32);
-            for &s in &samples[..order] {
+            write_sub_header(w, 8 + *order as u32);
+            for &s in &samples[..*order] {
                 w.write_signed(s, bps);
             }
-            write_residual(w, &residual, param, escape);
+            write_residual(w, &residual, *param, *escape);
+        }
+        Coded::Lpc {
+            precision,
+            shift,
+            coeff,
+            escape,
+            param,
+        } => {
+            let Some(residual) = lpc_residual(samples, coeff, *shift) else {
+                write_verbatim(w, samples, bps);
+                return;
+            };
+            write_sub_header(w, 31 + coeff.len() as u32);
+            for &s in &samples[..coeff.len()] {
+                w.write_signed(s, bps);
+            }
+            w.write_bits(precision.saturating_sub(1), 4);
+            w.write_bits((*shift as u32) & 31, 5);
+            for &c in coeff {
+                w.write_signed(c, *precision);
+            }
+            write_residual(w, &residual, *param, *escape);
         }
     }
+}
+
+fn write_verbatim(w: &mut BitWriter, samples: &[i32], bps: u32) {
+    write_sub_header(w, 1);
+    for &s in samples {
+        w.write_signed(s, bps);
+    }
+}
+
+fn coded_bit_len(samples: &[i32], bps: u32, coded: &Coded) -> usize {
+    let mut w = BitWriter::new();
+    write_coded(&mut w, samples, bps, coded);
+    w.bit_len()
 }
 
 fn write_sub_header(w: &mut BitWriter, kind: u32) {
@@ -1197,6 +1251,222 @@ fn choose(samples: &[i32], bps: u32) -> Coded {
         }
     }
     best
+}
+
+fn lpc_order_cap(rate: u32, len: usize) -> usize {
+    let cap = if rate <= 48_000 { 12 } else { 32 };
+    cap.min(len.saturating_sub(1))
+}
+
+/// LPC replaces an already chosen fixed subframe only when the written
+/// subframe is strictly shorter. Constant and verbatim are left alone.
+fn smaller_lpc(samples: &[i32], bps: u32, rate: u32, fixed: &Coded) -> Option<Coded> {
+    let fixed_bits = coded_bit_len(samples, bps, fixed);
+    let max_order = lpc_order_cap(rate, samples.len());
+    if max_order == 0 || fixed_bits <= min_lpc_bits(bps) {
+        return None;
+    }
+    let r = hann_autocorr(samples, max_order);
+    if !r[0].is_finite() || r[0] <= 0.0 {
+        return None;
+    }
+    let mut prev = vec![0.0f64; max_order + 1];
+    let mut next = vec![0.0f64; max_order + 1];
+    let mut err = r[0];
+    let mut coeff_buf = Vec::new();
+    let mut residual = Vec::new();
+    let mut best_bits = fixed_bits;
+    let mut best = None;
+    for order in 1..=max_order {
+        if !err.is_finite() || err <= 0.0 {
+            break;
+        }
+        let mut acc = r[order];
+        for j in 1..order {
+            acc -= prev[j] * r[order - j];
+        }
+        let k = acc / err;
+        if !k.is_finite() || k.abs() >= 1.0 {
+            break;
+        }
+        next[order] = k;
+        for j in 1..order {
+            next[j] = prev[j] - k * prev[order - j];
+        }
+        prev[1..=order].copy_from_slice(&next[1..=order]);
+        err *= 1.0 - k * k;
+        let model = &prev[1..=order];
+        for precision in [8u32, 12, 15] {
+            let prefix = 17 + order as u64 * (u64::from(bps) + u64::from(precision));
+            let res_len = samples.len() - order;
+            let floor = prefix + (10 + res_len as u64).min(15);
+            if floor >= best_bits as u64 {
+                continue;
+            }
+            let Some(shift) = quantize_into(model, precision, &mut coeff_buf) else {
+                continue;
+            };
+            if !lpc_residual_into(samples, &coeff_buf, shift, &mut residual) {
+                continue;
+            }
+            let (param, rice) = best_rice(&residual);
+            let width = signed_width(&residual);
+            let rice_total = prefix + 10 + rice;
+            let esc_total = prefix + 15 + u64::from(width) * residual.len() as u64;
+            let (total, escape, param) = if esc_total < rice_total {
+                (esc_total, Some(width), 0)
+            } else {
+                (rice_total, None, param)
+            };
+            if total >= best_bits as u64 {
+                continue;
+            }
+            let coded = Coded::Lpc {
+                precision,
+                shift,
+                coeff: coeff_buf.clone(),
+                escape,
+                param,
+            };
+            let actual = coded_bit_len(samples, bps, &coded);
+            debug_assert_eq!(actual as u64, total, "lpc bit estimate drifted");
+            if actual < best_bits {
+                best_bits = actual;
+                best = Some(coded);
+            }
+        }
+    }
+    best
+}
+
+fn min_lpc_bits(bps: u32) -> usize {
+    // Order 1, precision 8, zero residual stored as an escape: the shortest
+    // LPC subframe this search can emit.
+    (17 + u64::from(bps) + 8 + 15) as usize
+}
+
+fn hann_autocorr(samples: &[i32], max_order: usize) -> Vec<f64> {
+    let n = samples.len();
+    let mut windowed = vec![0.0f64; n];
+    let denom = (n - 1) as f64;
+    for (i, slot) in windowed.iter_mut().enumerate() {
+        let hann = 0.5 * (1.0 - (2.0 * std::f64::consts::PI * (i as f64) / denom).cos());
+        *slot = f64::from(samples[i]) * hann;
+    }
+    let mut r = vec![0.0; max_order + 1];
+    for (lag, slot) in r.iter_mut().enumerate() {
+        let mut sum = 0.0;
+        for i in lag..n {
+            sum += windowed[i] * windowed[i - lag];
+        }
+        *slot = sum;
+    }
+    r
+}
+
+fn quantize_into(lpc: &[f64], precision: u32, out: &mut Vec<i32>) -> Option<i32> {
+    out.clear();
+    if precision == 0 || precision > 15 || lpc.is_empty() {
+        return None;
+    }
+    let max_q = (1i32 << (precision - 1)) - 1;
+    let mut max_abs = 0.0f64;
+    for &c in lpc {
+        if !c.is_finite() {
+            return None;
+        }
+        max_abs = max_abs.max(c.abs());
+    }
+    if max_abs == 0.0 {
+        return None;
+    }
+    let ratio = f64::from(max_q) / max_abs;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return None;
+    }
+    let shift_f = ratio.log2().floor();
+    if shift_f < -16.0 {
+        return None;
+    }
+    let mut shift = if shift_f > 15.0 { 15 } else { shift_f as i32 };
+    while shift >= -16 {
+        match scale_coeffs(lpc, shift, max_q, out) {
+            Scale::Ok => return Some(shift),
+            Scale::Shrink => shift -= 1,
+            Scale::Stop => return None,
+        }
+    }
+    None
+}
+
+enum Scale {
+    Ok,
+    Shrink,
+    Stop,
+}
+
+fn scale_coeffs(lpc: &[f64], shift: i32, max_q: i32, out: &mut Vec<i32>) -> Scale {
+    out.clear();
+    let scale = if shift >= 0 {
+        f64::from(1u32 << (shift as u32))
+    } else {
+        let sh = (-shift) as u32;
+        if sh >= 31 {
+            return Scale::Stop;
+        }
+        1.0 / f64::from(1u32 << sh)
+    };
+    let lo = f64::from(-max_q);
+    let hi = f64::from(max_q);
+    for &c in lpc {
+        let q = (c * scale).round();
+        if !q.is_finite() || q < lo || q > hi {
+            out.clear();
+            return Scale::Shrink;
+        }
+        out.push(q as i32);
+    }
+    if out.iter().all(|c| *c == 0) {
+        out.clear();
+        Scale::Stop
+    } else {
+        Scale::Ok
+    }
+}
+
+fn lpc_residual(samples: &[i32], coeff: &[i32], shift: i32) -> Option<Vec<i32>> {
+    let mut out = Vec::new();
+    if lpc_residual_into(samples, coeff, shift, &mut out) {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+fn lpc_residual_into(samples: &[i32], coeff: &[i32], shift: i32, out: &mut Vec<i32>) -> bool {
+    out.clear();
+    let order = coeff.len();
+    if order == 0 || order >= samples.len() || !(-16..=15).contains(&shift) {
+        return false;
+    }
+    out.reserve(samples.len() - order);
+    for i in order..samples.len() {
+        let mut sum = 0i64;
+        for (j, &c) in coeff.iter().enumerate() {
+            sum += i64::from(c) * i64::from(samples[i - 1 - j]);
+        }
+        let pred = if shift >= 0 {
+            sum >> shift
+        } else {
+            sum << (-shift)
+        };
+        let Ok(sample) = fit_i32(i64::from(samples[i]) - pred) else {
+            out.clear();
+            return false;
+        };
+        out.push(sample);
+    }
+    true
 }
 
 fn fixed_residual(samples: &[i32], order: usize) -> Option<Vec<i32>> {
@@ -1299,6 +1569,28 @@ mod tests {
         assert_eq!(back.sample_rate, pcm.sample_rate);
         assert_eq!(back.channels, pcm.channels);
         assert_eq!(back.bits, pcm.bits);
+    }
+
+    #[test]
+    fn sine_round_trip_exact() {
+        let samples: Vec<i32> = (0..2048)
+            .map(|i| {
+                let t = f64::from(i);
+                ((t * 0.17).sin() * 9000.0 + (t * 0.04).sin() * 2500.0).round() as i32
+            })
+            .collect();
+        let picked = choose(&samples, 16);
+        let lpc = smaller_lpc(&samples, 16, 44_100, &picked);
+        assert!(
+            lpc.is_some(),
+            "a two-tone sine should beat the fixed predictor"
+        );
+        round_trip(&Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples,
+        });
     }
 
     #[test]
