@@ -476,4 +476,45 @@ fn main() {
         decoded64.len(),
         decode_webp(&anim64).is_err(),
     );
+
+    // Appended 256×256 two-frame animation. The rows above are unchanged.
+    let mut large = Vec::with_capacity(2);
+    for rgb in [[220u8, 40, 60], [20, 180, 90]] {
+        let mut pixels = vec![0u8; 256 * 256 * 3];
+        for px in pixels.chunks_exact_mut(3) {
+            px.copy_from_slice(&rgb);
+        }
+        large.push(Raster::new(256, 256, 3, pixels).unwrap());
+    }
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&large).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&large)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim256 = encode_webp_animation(&large).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim256_pixels = 256.0 * 256.0 * 2.0;
+    println!(
+        "webp_anim256_encode 256x256 frames=2 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim256.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim256_pixels * 3.0, p50),
+        mb_s(anim256_pixels * 3.0, p99),
+        mb_s(anim256.len() as f64, p50),
+        allocs as f64 / (anim256_pixels / 1_000_000.0),
+    );
+    let decoded256 = decode_webp_animation(&anim256).unwrap();
+    let still256_a = decode_webp(&encode_webp_lossy(&large[0]).unwrap()).unwrap();
+    let still256_b = decode_webp(&encode_webp_lossy(&large[1]).unwrap()).unwrap();
+    let both256 = decoded256.len() == 2
+        && decoded256[0].pixels == still256_a.pixels
+        && decoded256[1].pixels == still256_b.pixels;
+    println!(
+        "webp_anim256_decode frames={} both_frames={both256} single_raster_errors={}",
+        decoded256.len(),
+        decode_webp(&anim256).is_err(),
+    );
 }

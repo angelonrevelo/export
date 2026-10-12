@@ -423,4 +423,27 @@ mod tests {
         }
         assert_ne!(back[0].pixels, back[1].pixels);
     }
+
+    #[test]
+    fn two_frame_256_animation_returns_both_frames() {
+        let mut frames = Vec::new();
+        for rgb in [[90u8, 140, 20], [200, 20, 80]] {
+            let mut pixels = vec![0u8; 256 * 256 * 3];
+            for px in pixels.chunks_exact_mut(3) {
+                px.copy_from_slice(&rgb);
+            }
+            frames.push(Raster::new(256, 256, 3, pixels).unwrap());
+        }
+        let file = encode_webp_animation(&frames).unwrap();
+        assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
+        let back = decode_webp_animation(&file).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].width, 256);
+        assert_eq!(back[1].height, 256);
+        for (got, src) in back.iter().zip(&frames) {
+            let still = decode_webp(&encode_webp_lossy(src).unwrap()).unwrap();
+            assert_eq!(got.pixels, still.pixels);
+        }
+        assert_ne!(back[0].pixels, back[1].pixels);
+    }
 }
