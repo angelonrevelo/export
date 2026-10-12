@@ -70,3 +70,11 @@ row=vp8_460800_opus_vorbis samples=400 input_bytes=465038 output_bytes=465038 p5
 # This copy is 465057 bytes. p50 1532721 ns is at most 2.231 ms, so the cues stay.
 # p50 and p99 are this host, threading off, 400 samples. Not a speedup claim.
 row=vp8_460800_opus_vorbis_cues samples=400 input_bytes=465057 output_bytes=465057 p50_ns=1532721 p99_ns=1846095 mb_s=303.419
+
+# Same three-track payloads split into two clusters, with one cue point on each cluster.
+# Payloads are copied and are not decoded.
+# The one-cluster cues row above stays 465057 bytes and p50 1532721 ns (1.533 ms).
+# The 465038-byte row stays p50 2028178 ns (2.028 ms).
+# This copy is 465081 bytes. Both cue points are present. p50 1536342 ns is 1.536 ms, at most 3.1 ms, so the second cluster stays.
+# p50 and p99 are this host, threading off, 400 samples. Not a speedup claim.
+row=vp8_460800_opus_vorbis_two_clusters samples=400 input_bytes=465081 output_bytes=465081 p50_ns=1536342 p99_ns=2087161 mb_s=302.720

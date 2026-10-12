@@ -142,6 +142,7 @@ pub fn vp8_460800_opus_vorbis_webm() -> Vec<u8> {
     take_fresh(&mut opus_track.uid, &mut uids);
     take_fresh(&mut vorbis_track.number, &mut numbers);
     take_fresh(&mut vorbis_track.uid, &mut uids);
+    let video_blocks = vp8.blocks.len();
     let mut blocks = vp8.blocks;
     for mut block in opus.blocks {
         if block.track == opus_src {
@@ -155,6 +156,9 @@ pub fn vp8_460800_opus_vorbis_webm() -> Vec<u8> {
         }
         blocks.push(block);
     }
+    // Video stays in the first cluster. Audio opens a second cluster.
+    // Absolute timestamps stay the same. Payloads are not changed.
+    open_second_cluster(&mut blocks, video_blocks);
     let movie = Movie {
         doctype: "webm".to_owned(),
         timestamp_scale: vp8.timestamp_scale,
@@ -162,6 +166,23 @@ pub fn vp8_460800_opus_vorbis_webm() -> Vec<u8> {
         blocks,
     };
     remux(&movie).expect("460800-byte vp8, opus, and vorbis webm")
+}
+
+fn open_second_cluster(blocks: &mut [MediaBlock], video_blocks: usize) {
+    if video_blocks == 0 || blocks.len() <= video_blocks {
+        return;
+    }
+    let first = blocks[0].cluster_timestamp;
+    if blocks[video_blocks].cluster_timestamp != first {
+        return;
+    }
+    let second = first.saturating_add(1);
+    let second_i64 = i64::try_from(second).expect("cluster timestamp");
+    for block in &mut blocks[video_blocks..] {
+        let rel = block.timestamp() - second_i64;
+        block.cluster_timestamp = second;
+        block.rel_timestamp = i16::try_from(rel).expect("audio relative timestamp");
+    }
 }
 
 fn take_fresh(value: &mut u64, used: &mut Vec<u64>) {
@@ -685,6 +706,118 @@ mod tests {
             .any(|window| window == [0x1C, 0x53, 0xBB, 0x6B])
     }
 
+    fn clusters_and_cues(bytes: &[u8]) -> (Vec<u64>, Vec<(u64, u64)>) {
+        let top = children(bytes);
+        let (_, seg_start, seg_end) = top
+            .iter()
+            .find(|element| element.0 == 0x1853_8067)
+            .copied()
+            .expect("segment");
+        let segment = &bytes[seg_start..seg_end];
+        let mut clusters = Vec::new();
+        let mut cues = Vec::new();
+        let mut cursor = 0;
+        while cursor < segment.len() {
+            let element_start = cursor as u64;
+            let (id, after_id) = read_id(segment, cursor);
+            let (len, body_start) = read_size(segment, after_id);
+            let body = &segment[body_start..body_start + len];
+            if id == crate::ebml::ID_CLUSTER {
+                clusters.push(element_start);
+            }
+            if id == crate::ebml::ID_CUES {
+                for (point_id, point_start, point_end) in children(body) {
+                    if point_id != crate::ebml::ID_CUE_POINT {
+                        continue;
+                    }
+                    let point = &body[point_start..point_end];
+                    let mut time = None;
+                    let mut position = None;
+                    for (child_id, child_start, child_end) in children(point) {
+                        if child_id == crate::ebml::ID_CUE_TIME {
+                            time = Some(read_uint(&point[child_start..child_end]));
+                        }
+                        if child_id == crate::ebml::ID_CUE_TRACK_POSITIONS {
+                            let positions = &point[child_start..child_end];
+                            for (slot_id, slot_start, slot_end) in children(positions) {
+                                if slot_id == crate::ebml::ID_CUE_CLUSTER_POSITION {
+                                    position = Some(read_uint(&positions[slot_start..slot_end]));
+                                }
+                            }
+                        }
+                    }
+                    cues.push((time.expect("cue time"), position.expect("cue position")));
+                }
+            }
+            cursor = body_start + len;
+        }
+        (clusters, cues)
+    }
+
+    fn children(body: &[u8]) -> Vec<(u64, usize, usize)> {
+        let mut out = Vec::new();
+        let mut cursor = 0;
+        while cursor < body.len() {
+            let (id, after_id) = read_id(body, cursor);
+            let (len, start) = read_size(body, after_id);
+            let end = start + len;
+            out.push((id, start, end));
+            cursor = end;
+        }
+        out
+    }
+
+    fn read_id(bytes: &[u8], index: usize) -> (u64, usize) {
+        let first = bytes[index];
+        let mut width = 1usize;
+        let mut mask = 0x80u8;
+        while width < 4 && first & mask == 0 {
+            width += 1;
+            mask >>= 1;
+        }
+        let mut raw = 0u64;
+        for byte in &bytes[index..index + width] {
+            raw = (raw << 8) | u64::from(*byte);
+        }
+        (raw, index + width)
+    }
+
+    fn read_size(bytes: &[u8], index: usize) -> (usize, usize) {
+        let first = bytes[index];
+        let mut width = 1usize;
+        let mut mask = 0x80u8;
+        while width < 8 && first & mask == 0 {
+            width += 1;
+            mask >>= 1;
+        }
+        let mut raw = 0u64;
+        for byte in &bytes[index..index + width] {
+            raw = (raw << 8) | u64::from(*byte);
+        }
+        let value = raw & ((1u64 << (7 * width)) - 1);
+        (value as usize, index + width)
+    }
+
+    fn read_uint(body: &[u8]) -> u64 {
+        let mut value = 0u64;
+        for byte in body {
+            value = (value << 8) | u64::from(*byte);
+        }
+        value
+    }
+
+    fn cluster_count(blocks: &[crate::MediaBlock]) -> usize {
+        let mut count = 0;
+        let mut previous = None;
+        for block in blocks {
+            if previous != Some(block.cluster_timestamp) {
+                count += 1;
+                previous = Some(block.cluster_timestamp);
+            }
+        }
+        count
+    }
+
     #[test]
     fn vp8_460800_opus_and_vorbis_are_copied() {
         let vp8 = demux(&vp8_460800_webm()).unwrap();
@@ -696,7 +829,13 @@ mod tests {
         assert_eq!(parsed.tracks[0].codec_id, crate::ebml::CODEC_VP8);
         assert_eq!(parsed.tracks[1].codec_id, crate::ebml::CODEC_OPUS);
         assert_eq!(parsed.tracks[2].codec_id, crate::ebml::CODEC_VORBIS);
-        assert!(has_cues(&file));
+        let (clusters, cues) = clusters_and_cues(&file);
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].1, clusters[0]);
+        assert_eq!(cues[1].1, clusters[1]);
+        assert_ne!(clusters[0], clusters[1]);
+        assert_eq!(cluster_count(&parsed.blocks), 2);
         assert!(!has_cues(&vp8_460800_opus_webm()));
         let vp8_blocks: Vec<_> = parsed
             .blocks
@@ -732,7 +871,12 @@ mod tests {
         assert_eq!(again.tracks[0].codec_id, crate::ebml::CODEC_VP8);
         assert_eq!(again.tracks[1].codec_id, crate::ebml::CODEC_OPUS);
         assert_eq!(again.tracks[2].codec_id, crate::ebml::CODEC_VORBIS);
-        assert!(has_cues(&copied.bytes));
+        let (copied_clusters, copied_cues) = clusters_and_cues(&copied.bytes);
+        assert_eq!(copied_clusters.len(), 2);
+        assert_eq!(copied_cues.len(), 2);
+        assert_eq!(copied_cues[0].1, copied_clusters[0]);
+        assert_eq!(copied_cues[1].1, copied_clusters[1]);
+        assert_eq!(cluster_count(&again.blocks), 2);
         assert_eq!(again.blocks.len(), parsed.blocks.len());
         for (left, right) in parsed.blocks.iter().zip(again.blocks.iter()) {
             assert_eq!(left.payload, right.payload);
