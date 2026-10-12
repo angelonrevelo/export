@@ -1,13 +1,13 @@
 //! Fixed-pitch 5×7 printed Latin classifier.
 //!
-//! Thirty-eight glyphs: `A`–`Z`, `0`–`9`, and lowercase `a` and `b`. Each
-//! glyph is five columns, then one blank column. The score is Hamming
+//! Thirty-nine glyphs: `A`–`Z`, `0`–`9`, and lowercase `a`, `b`, and `c`.
+//! Each glyph is five columns, then one blank column. The score is Hamming
 //! distance to one stored prototype. A glyph farther than half the cell from
 //! every template is `?`.
 //!
 //! This is not Tesseract. It does not do page layout, any lowercase letter
-//! other than `a` and `b`, rotation, noise beyond a one-bit edit, or any
-//! size other than this font.
+//! other than `a`, `b`, and `c`, rotation, noise beyond a one-bit edit, or
+//! any size other than this font.
 
 /// Rows per glyph.
 pub const GLYPH_H: usize = 7;
@@ -43,7 +43,7 @@ impl std::fmt::Display for OcrError {
 impl std::error::Error for OcrError {}
 
 /// `(char, 7 row masks, low 5 bits, bit 4 = leftmost column)`.
-const GLYPHS: [(char, [u8; GLYPH_H]); 38] = [
+const GLYPHS: [(char, [u8; GLYPH_H]); 39] = [
     (
         'A',
         [
@@ -275,6 +275,13 @@ const GLYPHS: [(char, [u8; GLYPH_H]); 38] = [
             0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110,
         ],
     ),
+    // X-height bowl, open on the right. Same Hamming prototype match.
+    (
+        'c',
+        [
+            0b00000, 0b00000, 0b01110, 0b10001, 0b10000, 0b10001, 0b01110,
+        ],
+    ),
 ];
 
 fn popcount_rows(rows: &[u8; GLYPH_H]) -> i32 {
@@ -424,7 +431,7 @@ mod tests {
         assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), mixed);
 
         assert_eq!(render_line("Hi"), Err(OcrError::Glyph('i')));
-        assert_eq!(render_line("c"), Err(OcrError::Glyph('c')));
+        assert_eq!(render_line("d"), Err(OcrError::Glyph('d')));
     }
 
     #[test]
@@ -436,6 +443,19 @@ mod tests {
 
         let line = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab";
         assert_eq!(line.chars().count(), 38);
+        let (pixels, w, h) = render_line(line).unwrap();
+        assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), line);
+    }
+
+    #[test]
+    fn lowercase_c_reads_back() {
+        let alone = "c";
+        let (pixels, w, h) = render_line(alone).unwrap();
+        assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), "c");
+        assert_eq!(alone.chars().count(), 1);
+
+        let line = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abc";
+        assert_eq!(line.chars().count(), 39);
         let (pixels, w, h) = render_line(line).unwrap();
         assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), line);
     }
