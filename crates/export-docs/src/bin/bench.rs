@@ -296,19 +296,19 @@ fn report_epub() {
             sample.output_bytes,
         );
     }
-    let two = epub_two_spine();
-    match convert("epub", "html", &two) {
+    let three = epub_three_spine();
+    match convert("epub", "html", &three) {
         Ok(_) => {
-            eprintln!("two-item spine produced html");
+            eprintln!("three-item spine produced html");
             std::process::exit(1);
         }
         Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", two.len()))
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", three.len()))
             {
                 eprintln!("epub miss hid the input size: {err}");
                 std::process::exit(1);
             }
-            emit_untimed("epub→html two", two.len() as u64, None, &err.message);
+            emit_untimed("epub→html three", three.len() as u64, None, &err.message);
         }
     }
 }
@@ -366,12 +366,83 @@ fn epub_one_spine() -> Vec<u8> {
     ])
 }
 
-fn epub_two_spine() -> Vec<u8> {
+fn report_epub_two() {
+    let book = epub_two_book();
+    let sample = measure(|| ready_bytes("epub", "html", &book));
+    emit_ready("epub→html two", book.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "epub→html two p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(book.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            book.len(),
+            sample.output_bytes,
+        );
+    }
+    let three = epub_three_spine();
+    match convert("epub", "html", &three) {
+        Ok(_) => {
+            eprintln!("three-item spine produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", three.len()))
+            {
+                eprintln!("epub miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html three", three.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn epub_part(label: &str) -> String {
+    let mut body = String::from(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
+    );
+    for i in 0..120 {
+        body.push_str(&format!("<p>{label} paragraph {i} of the generated epub spine.</p>\n"));
+    }
+    body.push_str("</body></html>\n");
+    body
+}
+
+fn epub_two_book() -> Vec<u8> {
+    let first = epub_part("First");
+    let second = epub_part("Second");
+    let opf = epub_opf("<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>");
+    let container = epub_container();
+    pack_stored(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/chapter.xhtml", first.as_bytes()),
+        ("OEBPS/next.xhtml", second.as_bytes()),
+    ])
+}
+
+fn epub_three_spine() -> Vec<u8> {
     let chapter = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
     let next = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
-    let opf = epub_opf(
-        "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>",
-    );
+    let more = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>";
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+  </spine>
+</package>
+"#
+    .to_string();
     let container = epub_container();
     pack_stored(&[
         ("mimetype", b"application/epub+zip"),
@@ -379,6 +450,7 @@ fn epub_two_spine() -> Vec<u8> {
         ("OEBPS/content.opf", opf.as_bytes()),
         ("OEBPS/chapter.xhtml", chapter),
         ("OEBPS/next.xhtml", next),
+        ("OEBPS/more.xhtml", more),
     ])
 }
 
@@ -586,6 +658,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_epub();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--epub-two") {
+        println!("export-docs epub two-item byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_epub_two();
         return;
     }
     if std::env::args().any(|arg| arg == "--rtf") {

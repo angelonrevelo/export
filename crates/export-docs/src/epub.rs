@@ -1,5 +1,6 @@
-//! epub to HTML when the spine is one XHTML file.
-//! Any other package stays a miss. Pandoc is not called.
+//! epub to HTML when the spine is one or two XHTML files.
+//! Those files are copied in spine order. Any other package stays a miss.
+//! Pandoc is not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -41,25 +42,27 @@ fn read_package<R: Read + Seek, W: Write>(
     let mut scratch = 0usize;
     check_mimetype(src, &index, &mut scratch)?;
     let opf_path = container_opf(src, &index, &mut scratch)?;
-    let href = spine_href(src, &index, &opf_path, &mut scratch)?;
-    let zip_path = join_href(&opf_path, &href)?;
-    if index.by_name(&zip_path).is_none() {
-        return Err(Error::new("spine is not one xhtml file"));
-    }
-    let mut reader = zip::open_entry(src, &index, &zip_path)?;
-    scratch = scratch.max(reader.scratch_peak().saturating_add(COPY));
+    let hrefs = spine_hrefs(src, &index, &opf_path, &mut scratch)?;
     let mut counted = CountWrite::new(out);
-    let mut buf = [0u8; COPY];
-    loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|err| Error::new(err.to_string()))?;
-        if n == 0 {
-            break;
+    for href in &hrefs {
+        let zip_path = join_href(&opf_path, href)?;
+        if index.by_name(&zip_path).is_none() {
+            return Err(spine_shape());
         }
-        counted
-            .write_all(&buf[..n])
-            .map_err(|err| Error::new(err.to_string()))?;
+        let mut reader = zip::open_entry(src, &index, &zip_path)?;
+        scratch = scratch.max(reader.scratch_peak().saturating_add(COPY));
+        let mut buf = [0u8; COPY];
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .map_err(|err| Error::new(err.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            counted
+                .write_all(&buf[..n])
+                .map_err(|err| Error::new(err.to_string()))?;
+        }
     }
     Ok(RunStats {
         scratch_peak: scratch,
@@ -108,12 +111,16 @@ fn container_opf<R: Read + Seek>(
     Ok(path.clone())
 }
 
-fn spine_href<R: Read + Seek>(
+fn spine_shape() -> Error {
+    Error::new("spine is not one or two xhtml files")
+}
+
+fn spine_hrefs<R: Read + Seek>(
     src: &mut R,
     index: &ArchiveIndex,
     opf_path: &str,
     scratch: &mut usize,
-) -> Result<String> {
+) -> Result<Vec<String>> {
     if index.by_name(opf_path).is_none() {
         return Err(Error::new("package is not one xhtml spine"));
     }
@@ -126,19 +133,22 @@ fn spine_href<R: Read + Seek>(
         refs: Vec::new(),
     };
     xml::pull(&mut reader, &mut sink)?;
-    if sink.refs.len() != 1 {
-        return Err(Error::new("spine is not one xhtml file"));
+    if !(1..=2).contains(&sink.refs.len()) {
+        return Err(spine_shape());
     }
-    let idref = &sink.refs[0];
-    let matches: Vec<_> = sink.items.iter().filter(|item| item.id == *idref).collect();
-    if matches.len() != 1 {
-        return Err(Error::new("spine is not one xhtml file"));
+    let mut hrefs = Vec::new();
+    for idref in &sink.refs {
+        let matches: Vec<_> = sink.items.iter().filter(|item| item.id == *idref).collect();
+        if matches.len() != 1 {
+            return Err(spine_shape());
+        }
+        let item = matches[0];
+        if item.media != "application/xhtml+xml" {
+            return Err(spine_shape());
+        }
+        hrefs.push(item.href.clone());
     }
-    let item = matches[0];
-    if item.media != "application/xhtml+xml" {
-        return Err(Error::new("spine is not one xhtml file"));
-    }
-    Ok(item.href.clone())
+    Ok(hrefs)
 }
 
 fn join_href(opf_path: &str, href: &str) -> Result<String> {
@@ -149,20 +159,20 @@ fn join_href(opf_path: &str, href: &str) -> Result<String> {
         || href.contains('?')
         || href.contains('%')
     {
-        return Err(Error::new("spine is not one xhtml file"));
+        return Err(spine_shape());
     }
     let mut parts = Vec::new();
     if let Some((dir, _)) = opf_path.rsplit_once('/') {
         for part in dir.split('/') {
             if part.is_empty() || part == "." || part == ".." {
-                return Err(Error::new("spine is not one xhtml file"));
+                return Err(spine_shape());
             }
             parts.push(part);
         }
     }
     for part in href.split('/') {
         if part.is_empty() || part == "." || part == ".." {
-            return Err(Error::new("spine is not one xhtml file"));
+            return Err(spine_shape());
         }
         parts.push(part);
     }
@@ -245,7 +255,8 @@ impl XmlSink for OpfSink {
                 media: attr(attrs, "media-type").unwrap_or("").to_string(),
             }),
             "itemref" if self.spine => {
-                self.refs.push(attr(attrs, "idref").unwrap_or("").to_string());
+                self.refs
+                    .push(attr(attrs, "idref").unwrap_or("").to_string());
             }
             _ => {}
         }
@@ -342,21 +353,73 @@ mod tests {
         }
     }
 
+    fn two_opf(spine: &str) -> String {
+        format!(
+            r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    {spine}
+  </spine>
+</package>
+"#
+        )
+    }
+
     #[test]
-    fn two_spine_items_stay_a_miss() {
-        let opf = opf(
-            r#"<itemref idref="chap"/>
-    <itemref idref="chap"/>"#,
+    fn two_xhtml_files_are_copied_in_spine_order() {
+        let first = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
+        let second = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
+        let forward = two_opf("<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>");
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", forward.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+        ]);
+        let mut expect = first.to_vec();
+        expect.extend_from_slice(second);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+        let reverse = two_opf("<itemref idref=\"next\"/>\n    <itemref idref=\"chap\"/>");
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", reverse.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+        ]);
+        let mut expect = second.to_vec();
+        expect.extend_from_slice(first);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+    }
+
+    #[test]
+    fn three_spine_items_stay_a_miss() {
+        let opf = two_opf(
+            "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>\n    <itemref idref=\"more\"/>",
         );
         let bytes = pack_stored(&[
             ("mimetype", b"application/epub+zip"),
             ("META-INF/container.xml", container().as_bytes()),
             ("OEBPS/content.opf", opf.as_bytes()),
             ("OEBPS/chapter.xhtml", XHTML.as_bytes()),
+            (
+                "OEBPS/next.xhtml",
+                b"<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>",
+            ),
+            (
+                "OEBPS/more.xhtml",
+                b"<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>",
+            ),
         ]);
         let err = html_of(&bytes).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
-        assert!(err.message.contains("spine is not one xhtml file"), "{err}");
+        assert!(err.message.contains("not"), "{err}");
         assert!(
             err.message.contains(&format!("input_b={}", bytes.len())),
             "{err}"
