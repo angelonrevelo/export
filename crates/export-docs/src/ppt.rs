@@ -1,5 +1,5 @@
 //! Legacy PowerPoint 97 to HTML for one generated compound file.
-//! The `PowerPoint Document` stream holds one or two text-bytes shapes.
+//! The `PowerPoint Document` stream holds one, two, or three text-bytes shapes.
 //! Any other file stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -81,6 +81,18 @@ pub fn ppt_two_text_document(first: &str, second: &str) -> Result<Vec<u8>> {
     pack_cfb(&document_stream(&[first.as_bytes(), second.as_bytes()]))
 }
 
+/// Compound file whose `PowerPoint Document` stream is three text-bytes shapes.
+pub fn ppt_three_text_document(first: &str, second: &str, third: &str) -> Result<Vec<u8>> {
+    if !plain_shape(first) || !plain_shape(second) || !plain_shape(third) {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    pack_cfb(&document_stream(&[
+        first.as_bytes(),
+        second.as_bytes(),
+        third.as_bytes(),
+    ]))
+}
+
 fn plain_shape(text: &str) -> bool {
     !text.is_empty() && text.len() <= MAX_TEXT && text.bytes().all(allowed_text)
 }
@@ -94,7 +106,7 @@ fn unreadable() -> Error {
 }
 
 fn shape() -> Error {
-    Error::new("file is not one or two text shapes")
+    Error::new("file is not one, two, or three text shapes")
 }
 
 fn allowed_text(b: u8) -> bool {
@@ -185,7 +197,7 @@ fn list_text(body: &[u8]) -> Result<Vec<String>> {
         at += n;
         match rec.ty {
             RT_TEXT_HEADER => {
-                if pending_header || texts.len() >= 2 || rec.ver != 0 || rec.data.len() != 4 {
+                if pending_header || texts.len() >= 3 || rec.ver != 0 || rec.data.len() != 4 {
                     return Err(shape());
                 }
                 pending_header = true;
@@ -643,12 +655,54 @@ mod tests {
     }
 
     #[test]
-    fn three_text_shapes_stay_a_miss() {
-        let stream = document_stream(&[b"One shape.", b"Two shape.", b"Three shape."]);
+    fn two_shape_stays_the_published_size() {
+        let mut first = String::new();
+        let mut second = String::new();
+        for i in 0..40 {
+            first.push_str(&format!(
+                "First shape sentence {i} of the generated PowerPoint file. "
+            ));
+            second.push_str(&format!(
+                "Second shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        let file = ppt_two_text_document(&first, &second).unwrap();
+        assert_eq!(file.len(), 6656);
+        let got = html(&file).unwrap();
+        assert_eq!(got.len(), 4750);
+        assert!(got.contains(&first) && got.contains(&second), "{got}");
+    }
+
+    #[test]
+    fn three_text_shapes_become_html() {
+        let first = "First generated legacy PowerPoint text shape.";
+        let second = "Second generated legacy PowerPoint text shape.";
+        let third = "Third generated legacy PowerPoint text shape.";
+        let file = ppt_three_text_document(first, second, third).unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!("<p>{first}</p><p>{second}</p><p>{third}</p>");
+        assert!(got.contains(&marked), "{got}");
+        let a = got.find(first).unwrap();
+        let b = got.find(second).unwrap();
+        let c = got.find(third).unwrap();
+        assert!(a < b && b < c);
+    }
+
+    #[test]
+    fn four_text_shapes_stay_a_miss() {
+        let stream = document_stream(&[
+            b"One shape.",
+            b"Two shape.",
+            b"Three shape.",
+            b"Four shape.",
+        ]);
         let file = pack_cfb(&stream).unwrap();
         let err = html(&file).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
-        assert!(err.message.contains("not one or two text shapes"), "{err}");
+        assert!(
+            err.message.contains("not one, two, or three text shapes"),
+            "{err}"
+        );
         assert!(
             err.message.contains(&format!("input_b={}", file.len())),
             "{err}"

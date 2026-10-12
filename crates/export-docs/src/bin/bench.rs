@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
-    pdf_split, pdf_text, pdf_watermark, ppt_text_document, ppt_two_text_document, pptx_raster_slide,
+    pdf_split, pdf_text, pdf_watermark, ppt_text_document, ppt_three_text_document,
+    ppt_two_text_document, pptx_raster_slide,
     pptx_raster_stored_pdf, word97_document,
 };
 
@@ -1342,6 +1343,115 @@ fn report_ppt_html_two() {
     }
 }
 
+fn report_ppt_html_three() {
+    let one = ppt_text_document(&ppt_html_text()).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let one_html = convert("ppt", "html", &one).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if one.len() != 5632 || one_html.len() != 3193 {
+        eprintln!(
+            "ppt one-shape size changed: input_b={} output_b={}",
+            one.len(),
+            one_html.len()
+        );
+        std::process::exit(1);
+    }
+    let (first, second) = ppt_html_two_texts();
+    let two = ppt_two_text_document(&first, &second).unwrap_or_else(|err| {
+        eprintln!("ppt two-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let two_html = convert("ppt", "html", &two).unwrap_or_else(|err| {
+        eprintln!("ppt two-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if two.len() != 6656 || two_html.len() != 4750 {
+        eprintln!(
+            "ppt two-shape size changed: input_b={} output_b={}",
+            two.len(),
+            two_html.len()
+        );
+        std::process::exit(1);
+    }
+    let (alpha, beta, gamma) = ppt_html_three_texts();
+    let file = ppt_three_text_document(&alpha, &beta, &gamma).unwrap_or_else(|err| {
+        eprintln!("ppt three-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("ppt", "html", &file) {
+        Ok(html) => {
+            let body = String::from_utf8_lossy(&html);
+            let alpha_p = format!("<p>{alpha}</p>");
+            let beta_p = format!("<p>{beta}</p>");
+            let gamma_p = format!("<p>{gamma}</p>");
+            let a = body.find(&alpha_p);
+            let b = body.find(&beta_p);
+            let c = body.find(&gamma_p);
+            let ordered = match (a, b, c) {
+                (Some(a), Some(b), Some(c)) => a < b && b < c,
+                _ => false,
+            };
+            if body.contains(&alpha) && body.contains(&beta) && body.contains(&gamma) && ordered {
+                let sample = measure(|| ready_bytes("ppt", "html", &file));
+                emit_ready("ppt→html three", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→html three p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                emit_untimed(
+                    "ppt→html three",
+                    file.len() as u64,
+                    Some(html.len() as u64),
+                    &format!(
+                        "MISS: html does not contain all three text shapes (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains(&format!("input_b={}", file.len()))
+            {
+                eprintln!("ppt three miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→html three", file.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn ppt_html_three_texts() -> (String, String, String) {
+    let mut alpha = String::new();
+    let mut beta = String::new();
+    let mut gamma = String::new();
+    for i in 0..30 {
+        alpha.push_str(&format!(
+            "Alpha shape sentence {i} of the generated PowerPoint file. "
+        ));
+        beta.push_str(&format!(
+            "Beta shape sentence {i} of the generated PowerPoint file. "
+        ));
+        gamma.push_str(&format!(
+            "Gamma shape sentence {i} of the generated PowerPoint file. "
+        ));
+    }
+    (alpha, beta, gamma)
+}
+
 fn ppt_html_two_texts() -> (String, String) {
     let mut first = String::new();
     let mut second = String::new();
@@ -1780,6 +1890,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_html_two();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-html-three") {
+        println!("export-docs ppt three-shape html byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_html_three();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {
