@@ -137,6 +137,17 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 807 ns |
 
+A tenth generated file lengthens that column by one cell, still with no
+cached number. A1 = 1, A2 = 2, A3 = 3, and A4 = 4. The formula is the same
+area token. The value is **10**. `xls → csv` prints `1`, `2`, `3`, `4`, and
+then `10`. Any other uncached expression is still refused.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 966 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
