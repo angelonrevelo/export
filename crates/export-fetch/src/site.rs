@@ -908,7 +908,7 @@ struct Parser<'a> {
     depth: usize,
 }
 
-impl<'a> Parser<'a> {
+impl Parser<'_> {
     fn value(&mut self) -> Result<Json> {
         self.skip();
         if self.depth > 48 {
