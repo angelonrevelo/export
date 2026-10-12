@@ -1,0 +1,24 @@
+[package]
+name = "export-deflate"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "Raw DEFLATE compressor and inflater (RFC 1951). No zlib wrapper."
+publish = false
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bench]]
+name = "speed"
+harness = false
