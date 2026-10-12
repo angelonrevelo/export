@@ -37,4 +37,4 @@ Decode allocates one `Vec<f32>` of 1152 samples and uses fixed stack buffers for
 
 ## Benchmarks
 
-`bench/runs/release.txt` is the recorded silence row (decode p50 948 ns, p99 1490 ns) and pulse row (decode p50 514755 ns, about 515 µs, p99 819588 ns), plus the truncated-frame error. Those two decode rows are left as measured. `bench/runs/sine-440.txt` is the 440 Hz error, not a timing. Percentiles are nearest-rank, `floor(p * (n - 1))`. A missing run file means the number was not measured.
+`bench/runs/release.txt` keeps the recorded silence row (decode p50 948 ns, p99 1490 ns) and the recorded truncated row (decode p50 33 ns, p99 37 ns). The 515 µs row (`decode_tone_ns` p50 514755 ns, p99 819588 ns) is the older count-1 pulse path. A later release decode of the existing 16-line half-scale 440 Hz frame is `decode_440hz_16line_ns` p50 559231 ns, p99 581941 ns. That is not a waveform. `bench/runs/sine-440.txt` is the 440 Hz sample error, not this timing. Percentiles are nearest-rank, `floor(p * (n - 1))`, 1000 iterations, 50 warmup, release `opt-level = 3`, `lto = "thin"`, `codegen-units = 1`. A missing run file means the number was not measured.

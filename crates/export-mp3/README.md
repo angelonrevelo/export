@@ -27,4 +27,4 @@ cargo build --release --target wasm32-unknown-unknown
 
 ## Bench
 
-`cargo run --release --example bench` prints nearest-rank p50 and p99 for silence decode, pulse decode, and the truncated-frame error. The recorded silence row (decode p50 948 ns) and pulse row (decode p50 515 µs) stay in `bench/runs/release.txt`. The 440 Hz sine error is in `bench/runs/sine-440.txt`. These are measurements, not a speedup claim.
+`cargo run --release --example bench` prints nearest-rank p50 and p99. In `bench/runs/release.txt` the recorded silence row stays decode p50 948 ns, and the recorded truncated row stays decode p50 33 ns. The 515 µs row is the older count-1 pulse path. A release decode of the existing 16-line 440 Hz frame is p50 559231 ns and p99 581941 ns. That frame is not a waveform. The sample error is in `bench/runs/sine-440.txt`. These are measurements, not a speedup claim.
