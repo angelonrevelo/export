@@ -38,3 +38,15 @@ Decode p99 is 212.79 pixel MB/s. Encode p99 is 151.77 pixel MB/s. The 80 MB/s de
 | bound | 18, 18, 42 |
 
 Red and green share the same eight levels, and this fixture visits every byte equally on both, so those two means match. The bound is every channel value 0..=255, not only this image. A truncated quantize file still errors.
+
+The 96×64 row is a small fixture. The same generator at 640×480, same 3-3-2 path, `cargo bench --manifest-path crates/export-gif/Cargo.toml --bench quantize_vga`. 307,200 pixels, 20 samples.
+
+| | |
+|---|---|
+| p50 | 5333.5 µs |
+| p99 | 5494.2 µs |
+| MAE R, G, B | 9.070, 9.070, 21.164 |
+| max abs | 18, 18, 42 |
+| bound | holds |
+
+Both sizes divide the byte range evenly, so the means match the small fixture. The bound still holds. Video-to-GIF is not this path.
