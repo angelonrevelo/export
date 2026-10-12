@@ -1,0 +1,26 @@
+[package]
+name = "export-meta"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.74"
+description = "Portable file-metadata record: times, comment, tags, and an in-place header scrub."
+
+# Zero dependencies. Checksums and the byte layout are hand-written so a wrong
+# decoder cannot hide behind a crate that "usually" matches.
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bench]]
+name = "scrub"
+harness = false
