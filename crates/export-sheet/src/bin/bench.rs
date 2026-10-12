@@ -163,6 +163,7 @@ fn main() {
     xls_sum_uncached_area_percentiles();
     xls_sum_uncached_area_four_percentiles();
     xls_sum_uncached_area_column_percentiles();
+    xls_sum_uncached_area_column_four_percentiles();
 }
 
 fn nearest_rank(sorted: &[u128], pct: usize) -> u128 {
@@ -424,4 +425,29 @@ fn xls_sum_uncached_area_column_percentiles() {
     samples.sort_unstable();
     let p50 = nearest_rank(&samples, 50);
     println!("xls_sum_uncached_area_column value=6 samples={samples_n} p50_ns={p50}");
+}
+
+fn xls_sum_uncached_area_column_four_percentiles() {
+    let file = export_sheet::generated_biff_xls_sum_uncached_area_column_four();
+    let (out, stats) =
+        export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("uncached four-cell column sum xls is BIFF");
+    assert_eq!(stats.rows, 5);
+    assert_eq!(out, b"1\n2\n3\n4\n10\n");
+    let samples_n = 10_000;
+    for _ in 0..200 {
+        let _ = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default());
+    }
+    let mut samples = Vec::with_capacity(samples_n);
+    for _ in 0..samples_n {
+        let started = Instant::now();
+        let got = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("uncached four-cell column sum xls is BIFF");
+        let ns = started.elapsed().as_nanos();
+        assert_eq!(got.0, b"1\n2\n3\n4\n10\n");
+        samples.push(ns);
+    }
+    samples.sort_unstable();
+    let p50 = nearest_rank(&samples, 50);
+    println!("xls_sum_uncached_area_column_four value=10 samples={samples_n} p50_ns={p50}");
 }
