@@ -9,8 +9,8 @@
 //! example does not call ffmpeg.
 
 use export_opus::{
-    decode, encode, encode_second_sine_frame, encode_third_sine_frame, sine_followed_frame,
-    sine_third_frame, FRAME_SAMPLES,
+    decode, encode, encode_second_sine_frame, encode_stereo_frame, encode_third_sine_frame,
+    sine_followed_frame, sine_third_frame, FRAME_SAMPLES,
 };
 use std::env;
 use std::fs;
@@ -24,6 +24,9 @@ fn main() -> ExitCode {
     }
     if kind == "sine-three" {
         return dump_sine_three(args);
+    }
+    if kind == "stereo" {
+        return dump_stereo(args);
     }
     let packet_path = args.next().unwrap_or_else(|| "packet.opus".to_string());
     let pcm_path = args.next().unwrap_or_else(|| "expected.pcm".to_string());
@@ -72,6 +75,21 @@ fn main() -> ExitCode {
         packet.len(),
         decoded.len()
     );
+    ExitCode::SUCCESS
+}
+
+fn dump_stereo(mut args: impl Iterator<Item = String>) -> ExitCode {
+    let packet_path = args.next().unwrap_or_else(|| "stereo.opus".to_string());
+    let packet = encode_stereo_frame();
+    if decode(&packet, 1, false) != Err(export_opus::Error::Unsupported) {
+        eprintln!("stereo decode was accepted");
+        return ExitCode::from(1);
+    }
+    if let Err(err) = fs::write(&packet_path, &packet) {
+        eprintln!("write {packet_path}: {err}");
+        return ExitCode::from(1);
+    }
+    println!("stereo packet={} bytes", packet.len());
     ExitCode::SUCCESS
 }
 

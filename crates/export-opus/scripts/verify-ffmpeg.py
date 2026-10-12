@@ -45,14 +45,14 @@ def ogg_page(header_type: int, granule: int, serial: int, seq: int, payload: byt
     return page[:22] + struct.pack("<I", crc) + page[26:]
 
 
-def opus_ogg(packet: bytes) -> bytes:
-    return opus_ogg_frames([packet])
+def opus_ogg(packet: bytes, channels: int = 1) -> bytes:
+    return opus_ogg_frames([packet], channels)
 
 
-def opus_ogg_frames(packets: list[bytes]) -> bytes:
+def opus_ogg_frames(packets: list[bytes], channels: int = 1) -> bytes:
     head = (
         b"OpusHead"
-        + bytes([1, 1])
+        + bytes([1, channels])
         + struct.pack("<H", 0)
         + struct.pack("<I", 48000)
         + struct.pack("<h", 0)
@@ -374,7 +374,48 @@ def main() -> int:
             status |= check_frame(tmp_path, kind)
         status |= check_two_frames(tmp_path)
         status |= check_three_frames(tmp_path)
+        status |= check_stereo(tmp_path)
         return status
+
+
+def check_stereo(tmp_path: Path) -> int:
+    packet_path = tmp_path / "stereo.opus"
+    ogg_path = tmp_path / "stereo.ogg"
+    subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "--example",
+            "dump-packet",
+            "--",
+            "stereo",
+            str(packet_path),
+        ],
+        cwd=CRATE,
+        check=True,
+    )
+    packet = packet_path.read_bytes()
+    ogg_path.write_bytes(opus_ogg(packet, channels=2))
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(ogg_path), "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        print("ffmpeg could not read the stereo packet", file=sys.stderr)
+        print("stereo stays unsupported; not a stereo encoder", file=sys.stderr)
+        return 1
+    audio = next(
+        (line.strip() for line in result.stderr.splitlines() if "Audio: opus" in line),
+        "",
+    )
+    print(f"stereo ffmpeg {audio} packet_bytes={len(packet)}")
+    if "stereo" not in audio or "48000 Hz" not in audio:
+        print("stereo stays unsupported; not a stereo encoder", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

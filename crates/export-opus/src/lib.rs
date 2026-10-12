@@ -13,10 +13,11 @@ mod error;
 mod sine_frame;
 mod sine_next;
 mod sine_third;
+mod stereo_frame;
 mod toc;
 
 pub use decoder::decode;
-pub use encoder::{encode, encode_second_sine_frame, encode_third_sine_frame};
+pub use encoder::{encode, encode_second_sine_frame, encode_stereo_frame, encode_third_sine_frame};
 pub use error::Error;
 
 /// PCM samples of the half-scale 440 Hz frame this crate can encode.
@@ -91,6 +92,10 @@ mod tests {
         // Config 31, stereo, one frame.
         let packet = [0xFC, 0xFF, 0xFE];
         assert_eq!(decode(&packet, 1, false), Err(Error::Unsupported));
+        let stereo = encode_stereo_frame();
+        assert_eq!(stereo.len(), 160);
+        assert_eq!(stereo[0] & 0x04, 0x04);
+        assert_eq!(decode(&stereo, 1, false), Err(Error::Unsupported));
     }
 
     #[test]
