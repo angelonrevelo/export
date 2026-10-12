@@ -24,3 +24,7 @@ codegen-units = 1
 [[bin]]
 name = "avcbox"
 path = "src/bin/avcbox.rs"
+
+[[bin]]
+name = "avcbox160"
+path = "src/bin/avcbox160.rs"

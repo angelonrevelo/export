@@ -1,4 +1,4 @@
-use export_avcbox::{box_iframe, Error, Options, IFRAME_32X32};
+use export_avcbox::{box_iframe, Error, Options, IFRAME_160X160, IFRAME_32X32};
 
 fn opts() -> Options {
     Options::default()
@@ -27,6 +27,36 @@ fn fixture_is_one_avc1_sample() {
     assert!(boxed.mp4.ends_with(&IFRAME_32X32[29..]));
     let again = box_iframe(IFRAME_32X32, &opts()).unwrap();
     assert_eq!(again.mp4, boxed.mp4);
+}
+
+#[test]
+fn larger_iframe_is_one_avc1_sample() {
+    assert_eq!(IFRAME_160X160.len(), 6432);
+    assert!(IFRAME_160X160
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x0b]));
+    let boxed = box_iframe(IFRAME_160X160, &opts()).unwrap();
+    assert_eq!(boxed.width, 160);
+    assert_eq!(boxed.height, 160);
+    assert_eq!(boxed.mp4.len(), 7048);
+    assert!(boxed.mp4.starts_with(b"\x00\x00\x00\x20ftyp"));
+    let kinds = top_level(&boxed.mp4);
+    assert_eq!(kinds, vec!["ftyp", "moov", "mdat"]);
+    assert_eq!(count(&boxed.mp4, b"avcC"), 1);
+    let stsz = find(&boxed.mp4, b"stsz");
+    let sample_count = u32::from_be_bytes(boxed.mp4[stsz + 12..stsz + 16].try_into().unwrap());
+    let sample_size = u32::from_be_bytes(boxed.mp4[stsz + 16..stsz + 20].try_into().unwrap());
+    assert_eq!(sample_count, 1);
+    assert_eq!(sample_size, 6406);
+    assert!(boxed.mp4.windows(4).any(|w| w == [0x67, 0x42, 0xc0, 0x0b]));
+    assert_eq!(
+        box_iframe(&IFRAME_160X160[..IFRAME_160X160.len() - 1], &opts()).unwrap_err(),
+        Error::Truncated
+    );
+    let again = box_iframe(IFRAME_160X160, &opts()).unwrap();
+    assert_eq!(again.mp4, boxed.mp4);
+    let small = box_iframe(IFRAME_32X32, &opts()).unwrap();
+    assert_eq!(small.mp4.len(), 888);
 }
 
 #[test]

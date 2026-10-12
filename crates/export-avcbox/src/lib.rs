@@ -15,7 +15,7 @@ mod param;
 mod walk;
 
 pub use error::Error;
-pub use fixture::IFRAME_32X32;
+pub use fixture::{IFRAME_160X160, IFRAME_32X32};
 
 /// Encode settings for the boxer. Threading is off: `threads` must be 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
