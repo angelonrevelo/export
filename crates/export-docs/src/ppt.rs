@@ -2849,7 +2849,9 @@ mod tests {
             &north, &east, &south, &west, &center, &inner, &outer, &rim, &band, &arc, &cove,
         )
         .unwrap();
+        assert_eq!(file.len(), 17920);
         let got = html(&file).unwrap();
+        assert_eq!(got.len(), 15818);
         let marked = format!(
             "<p>{north}</p><p>{east}</p><p>{south}</p><p>{west}</p><p>{center}</p><p>{inner}</p><p>{outer}</p><p>{rim}</p><p>{band}</p><p>{arc}</p><p>{cove}</p>"
         );
