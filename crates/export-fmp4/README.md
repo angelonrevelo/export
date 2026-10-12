@@ -2,9 +2,11 @@
 
 Stream copy for fragmented MP4.
 
-Each input is hashed once with SHA-256, sniffed as ISO BMFF, then the `moof` / `mdat` sample bytes are copied into a new fragmented file. H.264 (`avc1`–`avc4`), AAC (`mp4a`), Opus (`Opus`), and VP9 (`vp09`) are sniffed and return `unsupported`. They are not decoded.
+Each input is hashed once with SHA-256, sniffed as ISO BMFF, then the `moof` / `mdat` sample bytes are copied into a new fragmented file. AAC (`mp4a`), Opus (`Opus`), and VP9 (`vp09`) are sniffed and return `unsupported`. They are not decoded.
 
-The library does not call ffmpeg. `scripts/identify.sh` is a host check: ffmpeg must name the copied file as `mov,mp4,m4a,3gp,3g2,mj2`.
+One fragmented file carries a single `avc1` sample. Those bytes are copied. `avcC` and the NAL payload are not parsed. `scripts/identify.sh` runs ffmpeg on that copy; ffmpeg names it `Video: h264 (Constrained Baseline)`, 16×16. The library does not call ffmpeg.
+
+The same host script checks that the PCM copy is named `mov,mp4,m4a,3gp,3g2,mj2`.
 
 Threading is off. There is no parallel copy path.
 
@@ -14,4 +16,5 @@ Threading is off. There is no parallel copy path.
 - Sample counts are bounded by the file length before the sample table is allocated. A declared sample that runs past the buffer is `truncated`.
 - A `trun` data offset has to fit in a signed 32-bit field.
 - This is not a video shrink, and it does not flatten a non-fragmented MP4. A file with no `moof` is invalid.
-- The generated file is one PCM (`ipcm`) track, two fragments, 1 MiB of sample bytes.
+- The PCM file is one `ipcm` track, two fragments, 1 MiB of sample bytes.
+- The H.264 file is one 16×16 `avc1` sample. It is a byte copy, not a decoder.

@@ -3,8 +3,9 @@
 pub enum Error {
     /// The buffer ended before a box or a sample was complete.
     Truncated,
-    /// A sample entry is H.264, AAC, Opus, or VP9.
+    /// A sample entry is AAC, Opus, or VP9.
     /// Those codecs are sniffed and refused. They are not decoded.
+    /// H.264 sample bytes are copied and are not decoded.
     Unsupported,
     /// The bytes are not a usable fragmented MP4 stream.
     Invalid,

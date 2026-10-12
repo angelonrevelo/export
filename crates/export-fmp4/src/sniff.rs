@@ -3,8 +3,6 @@
 use crate::atom::atoms;
 use crate::error::Error;
 
-/// H.264 sample entries. `avcC` is the decoder config; seeing the entry is enough.
-const H264: [[u8; 4]; 4] = [*b"avc1", *b"avc2", *b"avc3", *b"avc4"];
 /// `mp4a` is the MPEG-4 audio sample entry used for AAC. Refusing the fourcc
 /// means AudioSpecificConfig is never parsed.
 const AAC: [u8; 4] = *b"mp4a";
@@ -21,10 +19,11 @@ pub struct Sniff {
     pub brand: [u8; 4],
 }
 
-/// Walk boxes, require a fragmented movie, and refuse H.264, AAC, Opus, and VP9.
+/// Walk boxes and require a fragmented movie.
 ///
+/// AAC, Opus, and VP9 sample entries are refused. An `avc1` entry is not
+/// refused: its bytes are copied later and are not decoded.
 /// A box whose declared size runs past `input` is [`Error::Truncated`].
-/// Codec checks look at sample-entry fourccs only.
 pub fn sniff(input: &[u8]) -> Result<Sniff, Error> {
     if input.len() < 8 {
         return Err(Error::Truncated);
@@ -100,7 +99,7 @@ fn sniff_stsd(input: &[u8], atom: &crate::atom::Atom) -> Result<(), Error> {
 }
 
 pub fn is_forbidden(typ: [u8; 4]) -> bool {
-    typ == AAC || typ == OPUS || typ == VP9 || H264.contains(&typ)
+    typ == AAC || typ == OPUS || typ == VP9
 }
 
 fn is_container(typ: [u8; 4]) -> bool {

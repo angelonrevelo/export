@@ -6,11 +6,20 @@ fn main() -> ExitCode {
     let path = match env::args().nth(1) {
         Some(path) => path,
         None => {
-            eprintln!("usage: write_sample OUTPUT.mp4");
+            eprintln!("usage: write_sample OUTPUT.mp4 [pcm|h264]");
             return ExitCode::from(2);
         }
     };
-    let copied = match export_fmp4::stream_copy(&export_fmp4::sample_file()) {
+    let kind = env::args().nth(2).unwrap_or_else(|| "pcm".to_owned());
+    let input = match kind.as_str() {
+        "pcm" | "audio" => export_fmp4::sample_file(),
+        "h264" => export_fmp4::h264_file(),
+        _ => {
+            eprintln!("usage: write_sample OUTPUT.mp4 [pcm|h264]");
+            return ExitCode::from(2);
+        }
+    };
+    let copied = match export_fmp4::stream_copy(&input) {
         Ok(copied) => copied,
         Err(err) => {
             eprintln!("stream copy failed: {err}");

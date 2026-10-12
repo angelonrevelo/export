@@ -3,20 +3,23 @@
 //! This is a stream copy, not a transcode, and not a video shrink.
 //! The pipeline hashes each input once (SHA-256), sniffs the boxes, then
 //! copies `moof`/`mdat` sample bytes.
-//! H.264, AAC, Opus, and VP9 are sniffed and return [`Error::Unsupported`].
-//! They are not decoded. This crate does not call ffmpeg.
+//! AAC, Opus, and VP9 are sniffed and return [`Error::Unsupported`].
+//! H.264 `avc1` sample bytes are copied and are not decoded.
+//! This crate does not call ffmpeg.
 
 #![forbid(unsafe_code)]
 
 mod atom;
 mod demux;
 mod error;
+mod h264;
 mod remux;
 mod sha256;
 mod sniff;
 
 pub use demux::{demux, Fragment, Movie, Run, Sample, Track};
 pub use error::Error;
+pub use h264::h264_file;
 pub use remux::{remux, sample_file, sample_movie};
 pub use sha256::sha256;
 pub use sniff::{sniff, Sniff};
@@ -158,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn h264_aac_opus_vp9_are_unsupported() {
-        for codec in [*b"avc1", *b"avc3", *b"mp4a", *b"Opus", *b"vp09"] {
+    fn aac_opus_vp9_are_unsupported() {
+        for codec in [*b"mp4a", *b"Opus", *b"vp09"] {
             let file = remux::file_with_codec(codec).unwrap();
             assert_eq!(stream_copy(&file).unwrap_err(), Error::Unsupported);
             assert_eq!(demux(&file).unwrap_err(), Error::Unsupported);
@@ -167,10 +170,29 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_payload_is_not_decoded() {
+    fn avc1_payload_is_copied_not_decoded() {
         let file = remux::file_with_codec(*b"avc1").unwrap();
-        assert!(file.windows(4).any(|w| w == *b"avc1"));
-        assert_eq!(sniff(&file).unwrap_err(), Error::Unsupported);
+        let copied = stream_copy(&file).unwrap();
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(again.fragments[0].runs[0].samples[0].payload, b"opaque");
+    }
+
+    #[test]
+    fn h264_fragment_samples_round_trip() {
+        let original = h264_file();
+        let parsed = demux(&original).unwrap();
+        assert_eq!(parsed.tracks[0].handler, *b"vide");
+        assert_eq!(parsed.tracks[0].width, 16);
+        assert_eq!(parsed.tracks[0].height, 16);
+        assert!(parsed.tracks[0]
+            .sample_entry
+            .windows(4)
+            .any(|w| w == b"avc1"));
+        let copied = stream_copy(&original).unwrap();
+        assert_eq!(copied.sha256, sha256(&original));
+        let again = demux(&copied.bytes).unwrap();
+        assert_eq!(payloads(&parsed), payloads(&again));
+        assert_eq!(payloads(&again), vec![h264::h264_payload().to_vec()]);
     }
 
     #[test]
