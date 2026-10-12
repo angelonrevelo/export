@@ -22,6 +22,8 @@
 //! page is 15051 ns p50 and 17352 ns p99.
 //! A 64×64 DeviceCMYK page is 17037 bytes in and out. Release split of that
 //! page is 15295 ns p50 and 16842 ns p99.
+//! The existing two-page text file is 2 pages, 846 bytes in, and 1168 bytes
+//! out. Release split of that file is 11604 ns p50 and 12062 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
 //! page, the gray page, or the CMYK page, and fonts other than the

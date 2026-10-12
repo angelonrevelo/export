@@ -1,30 +1,27 @@
-//! Release latency for a split of one 64×64 CMYK page.
+//! Release latency for a split of the existing two-page text file.
 //!
 //! ```text
 //! cargo run --release -p export-pdf --bin pdf-bench
 //! ```
 
-use export_pdf::{cmyk_pdf, cmyk_samples, split, CMYK_EDGE};
+use export_pdf::{page_count, split, text_pdf};
 use std::time::Instant;
 
 fn main() {
-    let width = CMYK_EDGE;
-    let height = CMYK_EDGE;
-    let mut samples = vec![0u8; (width * height * 4) as usize];
-    for (i, byte) in samples.iter_mut().enumerate() {
-        *byte = (i * 13 + 7) as u8;
-    }
-    let pdf = cmyk_pdf(width, height, &samples).expect("cmyk page");
+    let texts = ["Hello", "Second (line)"];
+    let pdf = text_pdf(&texts);
+    let expected: Vec<Vec<u8>> = texts.iter().map(|text| text_pdf(&[text])).collect();
     let pages = split(&pdf).expect("split");
-    let (got_w, got_h, got) = cmyk_samples(&pages[0]).expect("samples");
-    if pages.len() != 1 || got_w != width || got_h != height || got != samples {
-        eprintln!("pixels differ");
+    if pages != expected || page_count(&pdf).ok() != Some(texts.len()) {
+        eprintln!("text differs");
         std::process::exit(1);
     }
+    let page_count_n = texts.len();
     let bytes_in = pdf.len();
-    let bytes_out = pages[0].len();
+    let bytes_out: usize = pages.iter().map(Vec::len).sum();
     if cfg!(debug_assertions) {
-        println!("rgb split: NOT JUDGED (debug build)");
+        println!("text split: NOT JUDGED (debug build)");
+        println!("page count {page_count_n}");
         println!("bytes in {bytes_in}");
         println!("bytes out {bytes_out}");
         return;
@@ -38,8 +35,8 @@ fn main() {
         let start = Instant::now();
         let out = split(&pdf).expect("split");
         let ns = start.elapsed().as_nanos();
-        if out.len() != 1 || out[0].len() != bytes_out {
-            eprintln!("pixels differ");
+        if out != expected {
+            eprintln!("text differs");
             std::process::exit(1);
         }
         times.push(ns);
@@ -48,11 +45,11 @@ fn main() {
     let p50 = times[(times.len() - 1) / 2];
     let p99 = times[(times.len() - 1) * 99 / 100];
     let check = split(&pdf).expect("split");
-    let (_, _, after) = cmyk_samples(&check[0]).expect("samples");
-    if after != samples {
-        eprintln!("pixels differ");
+    if check != expected {
+        eprintln!("text differs");
         std::process::exit(1);
     }
+    println!("page count {page_count_n}");
     println!("bytes in {bytes_in}");
     println!("bytes out {bytes_out}");
     println!("p50 {p50} ns");
