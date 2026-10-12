@@ -1,11 +1,13 @@
 //! Fixed-pitch 5×7 printed Latin classifier.
 //!
-//! Thirty-six glyphs: `A`–`Z` and `0`–`9`. Each glyph is five columns, then
-//! one blank column. The score is Hamming distance to one stored prototype.
-//! A glyph farther than half the cell from every template is `?`.
+//! Thirty-seven glyphs: `A`–`Z`, `0`–`9`, and one lowercase `a`. Each glyph
+//! is five columns, then one blank column. The score is Hamming distance to
+//! one stored prototype. A glyph farther than half the cell from every
+//! template is `?`.
 //!
-//! This is not Tesseract. It does not do page layout, lowercase, rotation,
-//! noise beyond a one-bit edit, or any size other than this font.
+//! This is not Tesseract. It does not do page layout, any lowercase letter
+//! other than `a`, rotation, noise beyond a one-bit edit, or any size other
+//! than this font.
 
 /// Rows per glyph.
 pub const GLYPH_H: usize = 7;
@@ -41,7 +43,7 @@ impl std::fmt::Display for OcrError {
 impl std::error::Error for OcrError {}
 
 /// `(char, 7 row masks, low 5 bits, bit 4 = leftmost column)`.
-const GLYPHS: [(char, [u8; GLYPH_H]); 36] = [
+const GLYPHS: [(char, [u8; GLYPH_H]); 37] = [
     (
         'A',
         [
@@ -258,6 +260,14 @@ const GLYPHS: [(char, [u8; GLYPH_H]); 36] = [
             0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
         ],
     ),
+    // Double-story `a` on the x-height: two blank rows, then the bowl.
+    // Same Hamming prototype match as the uppercase glyphs.
+    (
+        'a',
+        [
+            0b00000, 0b00000, 0b01110, 0b00001, 0b01111, 0b10001, 0b01111,
+        ],
+    ),
 ];
 
 fn popcount_rows(rows: &[u8; GLYPH_H]) -> i32 {
@@ -394,7 +404,19 @@ mod tests {
     }
 
     #[test]
-    fn lowercase_is_refused() {
+    fn lowercase_a_reads_back_and_other_lowercase_is_refused() {
+        let alone = "a";
+        let (pixels, w, h) = render_line(alone).unwrap();
+        assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), "a");
+        assert_eq!(alone.chars().count(), 1);
+
+        // Uppercase, digits, and `a` on one line. 36 existing glyphs plus `a`.
+        let mixed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789a";
+        assert_eq!(mixed.chars().count(), 37);
+        let (pixels, w, h) = render_line(mixed).unwrap();
+        assert_eq!(read_fixed_pitch(&pixels, w, h).unwrap(), mixed);
+
         assert_eq!(render_line("Hi"), Err(OcrError::Glyph('i')));
+        assert_eq!(render_line("b"), Err(OcrError::Glyph('b')));
     }
 }

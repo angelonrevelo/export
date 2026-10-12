@@ -19,7 +19,8 @@
 //!   formant word `NO` (not a pure sine, not a frequency branch). They do not
 //!   transcribe microphone speech. A missing or flipped blob is an error.
 //!   Decode scratch stays flat as the clip grows.
-//! - [`ocr`] — 5×7 printed `A`–`Z` `0`–`9` at one pitch. Not Tesseract.
+//! - [`ocr`] — 5×7 printed `A`–`Z`, `0`–`9`, and one `a`, at one pitch.
+//!   Not Tesseract. Other lowercase is refused.
 //! - [`tts::synthesize`] — formant sines to WAV. Not Piper.
 //! - [`denoise`] — spectral subtraction from a short noise preamble.
 //! - [`crossover`] — a 300 Hz Butterworth split. Not Demucs.
