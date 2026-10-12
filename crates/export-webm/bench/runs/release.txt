@@ -1,0 +1,13 @@
+# One host measurement. Not a comparison and not a speedup claim.
+# Release bench, threading off (`cargo bench -j 1`). 2000 copy samples and 2000 truncated-input errors.
+
+samples=2000
+threading=off
+p50_ns=2432
+p99_ns=3077
+copy_p50_ns=2518
+copy_p99_ns=3130
+copy_p50_mib_s=78.778
+truncated_errors=2000
+truncated_p50_ns=575
+truncated_p99_ns=729
