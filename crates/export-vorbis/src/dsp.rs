@@ -201,4 +201,23 @@ mod tests {
             assert!((got - want).abs() < 1.0e-9);
         }
     }
+
+    #[test]
+    fn continuation_fits_grid() {
+        let mut target = [0.0; BINS];
+        for (offset, sample) in target.iter_mut().enumerate() {
+            let n = (32 + offset) as f64;
+            let phase = 2.0 * std::f64::consts::PI * 440.0 * n / 48_000.0;
+            *sample = 0.5 * phase.sin();
+        }
+        let (bridge, tone) = overlap_pair(&target);
+        let mut left = tone;
+        left[16..].fill(0.0);
+        for (name, time) in [("bridge", bridge), ("tone", tone), ("left", left)] {
+            let peak = mdct(&time)
+                .iter()
+                .fold(0.0f64, |peak, value| peak.max(value.abs()));
+            assert!(peak < 0.5, "{name} peak {peak}");
+        }
+    }
 }

@@ -24,7 +24,7 @@ pub fn decode_packet(bytes: &[u8]) -> Result<Vec<f32>, Error> {
         let setup = parse_setup(&packets[2], &id)?;
         return decode_audio(&packets[3], &id, &setup);
     }
-    if packets.len() != 5 && packets.len() != 6 {
+    if !(5..=8).contains(&packets.len()) {
         return Err(Error::BadHeader);
     }
     if id.blocksize_0 != BLOCKSIZE || id.blocksize_1 != BLOCKSIZE {

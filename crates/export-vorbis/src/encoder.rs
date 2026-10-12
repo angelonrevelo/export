@@ -1,7 +1,8 @@
 //! Build one Ogg Vorbis bitstream: mono, 48 kHz, one short frame.
 //!
 //! `encode_packet` uses an unused floor, so that frame is silence.
-//! `encode_half_scale_sine` writes two 440 Hz frames. This is not a song encoder.
+//! `encode_half_scale_sine` writes two 440 Hz frames and the next 32 samples of
+//! that sine. This is not a song encoder.
 
 use crate::dsp::{self, pack_vorbis_float, unpack_vorbis_float};
 use crate::{ogg_crc, Error, BLOCKSIZE, BLOCKSIZE_EXP, FRAME_SAMPLES, SAMPLE_RATE_HZ};
@@ -43,7 +44,9 @@ pub fn half_scale_sine() -> [f32; FRAME_SAMPLES] {
 /// Encode two short frames of [`half_scale_sine`].
 ///
 /// Vorbis overlap needs a leading delay frame in the same bitstream. The two
-/// audible frames are that sine. This is not a song encoder.
+/// audible frames are that sine, with n starting at 0. A later frame is
+/// n = 32 through 63, after the overlap frame that slice needs. This is not a
+/// song encoder.
 pub fn encode_half_scale_sine() -> Result<Vec<u8>, Error> {
     let tone_packets = tone_packets()?;
     let delay = tone_packets.delay;
@@ -64,11 +67,27 @@ pub fn encode_half_scale_sine() -> Result<Vec<u8>, Error> {
         &[&tone],
     ));
     out.extend(ogg_page(
-        0x04,
+        0x00,
         (FRAME_SAMPLES * 3) as u64,
         SERIAL,
         5,
         &[&tone],
+    ));
+    let (bridge, continuation) =
+        continuation_packets(tone_packets.setup_min, tone_packets.setup_step)?;
+    out.extend(ogg_page(
+        0x00,
+        (FRAME_SAMPLES * 4) as u64,
+        SERIAL,
+        6,
+        &[&bridge],
+    ));
+    out.extend(ogg_page(
+        0x04,
+        (FRAME_SAMPLES * 5) as u64,
+        SERIAL,
+        7,
+        &[&continuation],
     ));
     Ok(out)
 }
@@ -95,6 +114,8 @@ struct TonePackets {
     delay: Vec<u8>,
     tone: Vec<u8>,
     setup: Vec<u8>,
+    setup_min: f32,
+    setup_step: f32,
 }
 
 fn tone_packets() -> Result<TonePackets, Error> {
@@ -104,7 +125,27 @@ fn tone_packets() -> Result<TonePackets, Error> {
         delay: tone_audio(&quantize_time(&delay, min, step)?),
         tone: tone_audio(&quantize_time(&tone, min, step)?),
         setup: tone_setup_packet(min, step),
+        setup_min: min,
+        setup_step: step,
     })
+}
+
+/// Samples `n = 32..64` of the same half-scale 440 Hz sine.
+fn continuation_sine() -> [f64; FRAME_SAMPLES] {
+    let mut pcm = [0.0; FRAME_SAMPLES];
+    for (offset, sample) in pcm.iter_mut().enumerate() {
+        let n = (FRAME_SAMPLES + offset) as f64;
+        let phase = 2.0 * std::f64::consts::PI * 440.0 * n / f64::from(SAMPLE_RATE_HZ);
+        *sample = 0.5 * phase.sin();
+    }
+    pcm
+}
+
+fn continuation_packets(min: f32, step: f32) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    let (bridge, tone) = dsp::overlap_pair(&continuation_sine());
+    let bridge = tone_audio(&quantize_time(&bridge, min, step)?);
+    let tone = tone_audio(&quantize_time(&tone, min, step)?);
+    Ok((bridge, tone))
 }
 
 fn ideal_sine() -> [f64; FRAME_SAMPLES] {

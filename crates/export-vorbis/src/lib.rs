@@ -1,7 +1,8 @@
 //! One Vorbis audio packet: mono, 48 kHz, one short frame.
 //!
 //! `encode_packet` writes a silent frame. `encode_half_scale_sine` writes two
-//! half-scale 440 Hz frames. `decode_packet` reads either bitstream back to PCM.
+//! half-scale 440 Hz frames and the next 32 samples of that sine.
+//! `decode_packet` reads either bitstream back to PCM.
 //! This crate is not a song encoder.
 
 #![forbid(unsafe_code)]
@@ -146,14 +147,14 @@ mod tests {
         let decoded = decode_packet(&packet).expect("decode");
         assert_eq!(decoded.len(), FRAME_SAMPLES);
         let mut error = 0.0f32;
-        let mut peak = 0.0f32;
-        for (got, want) in decoded.iter().zip(ideal.iter()) {
-            let delta = got - want;
+        for (offset, sample) in decoded.iter().enumerate() {
+            let n = (FRAME_SAMPLES + offset) as f64;
+            let phase = 2.0 * std::f64::consts::PI * 440.0 * n / f64::from(SAMPLE_RATE_HZ);
+            let want = 0.5 * phase.sin();
+            let delta = *sample - want as f32;
             error += delta * delta;
-            peak = peak.max(got.abs());
         }
         let rms = (error / FRAME_SAMPLES as f32).sqrt();
-        assert!(peak > 0.2, "peak {peak}");
         assert!(rms < 0.02, "rms {rms}");
     }
 

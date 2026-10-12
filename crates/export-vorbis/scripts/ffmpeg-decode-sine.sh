@@ -23,25 +23,28 @@ def load(path):
         return ()
     return struct.unpack("<" + "f" * (len(raw) // 4), raw)
 
-def report(label, samples):
+def report(label, samples, n0):
     count = len(samples)
     if count == 0:
         print(f"{label} samples=0")
         return
     peak = max(abs(sample) for sample in samples)
     error = 0.0
-    for n, sample in enumerate(samples):
+    for index, sample in enumerate(samples):
+        n = n0 + index
         want = 0.5 * math.sin(2 * math.pi * 440 * n / 48000)
         error += (sample - want) ** 2
     rms = (error / count) ** 0.5
-    print(f"{label} samples={count} peak={peak:.5f} rms={rms:.5f}")
+    print(f"{label} samples={count} peak={peak:.5f} rms={rms:.5f} n0={n0}")
 
 file_samples = load(sys.argv[1])
-print(f"two-frame file samples={len(file_samples)}")
-if len(file_samples) < 64:
-    report("two-frame second", file_samples)
-else:
-    report("two-frame second", file_samples[-32:])
-report("packet alone default", load(sys.argv[3]))
-report("packet alone skip_manual", load(sys.argv[2]))
+print(f"sine file samples={len(file_samples)}")
+if len(file_samples) >= 64:
+    report("two-frame second", file_samples[32:64], 0)
+if len(file_samples) >= 128:
+    report("continuation", file_samples[96:128], 32)
+elif len(file_samples) >= 96:
+    report("continuation", file_samples[64:96], 32)
+report("packet alone default", load(sys.argv[3]), 0)
+report("packet alone skip_manual", load(sys.argv[2]), 0)
 PY
