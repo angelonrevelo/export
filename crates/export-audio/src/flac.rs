@@ -1,0 +1,1526 @@
+//! FLAC subset decode and encode.
+//!
+//! The encoder writes STREAMINFO, then fixed-blocksize frames. Each subframe
+//! is constant, verbatim, or fixed LPC (order 0..=4) with a single Rice
+//! partition or an unencoded residual. The decoder also accepts LPC
+//! coefficients, stereo decorrelation, wasted bits, and Rice partitions.
+
+use crate::crc::{crc8, crc16};
+use crate::error::{Error, Result};
+use crate::md5::Md5;
+
+/// Interleaved samples kept in memory at once.
+pub const MAX_SAMPLES: usize = 16 * 1024 * 1024;
+
+/// Signed interleaved PCM. `samples.len()` is `channels` times the
+/// per-channel count.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pcm {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub bits: u8,
+    pub samples: Vec<i32>,
+}
+
+#[derive(Clone, Copy)]
+struct Info {
+    min_block: u16,
+    max_block: u16,
+    sample_rate: u32,
+    channels: u16,
+    bits: u8,
+    total_samples: u64,
+    md5: [u8; 16],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Assign {
+    Indep,
+    LeftSide,
+    RightSide,
+    MidSide,
+}
+
+struct BitReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn at(data: &'a [u8], byte: usize) -> Self {
+        Self {
+            data,
+            pos: byte.saturating_mul(8),
+        }
+    }
+
+    fn read_bits(&mut self, n: u32) -> Result<u32> {
+        if n == 0 {
+            return Ok(0);
+        }
+        if n > 32 {
+            return Err(Error::Corrupt("bits"));
+        }
+        let end = self
+            .pos
+            .checked_add(n as usize)
+            .ok_or(Error::Corrupt("bits"))?;
+        let end_byte = (end + 7) / 8;
+        if end_byte > self.data.len() {
+            return Err(Error::Truncated {
+                at: self.data.len(),
+                need: end_byte - self.data.len(),
+            });
+        }
+        let start_byte = self.pos / 8;
+        let mut acc = 0u64;
+        for i in start_byte..end_byte {
+            acc = (acc << 8) | u64::from(self.data[i]);
+        }
+        let loaded = (end_byte - start_byte) * 8;
+        let skip = self.pos % 8;
+        let shift = loaded - skip - n as usize;
+        let mask = if n == 32 {
+            u32::MAX
+        } else {
+            (1u32 << n) - 1
+        };
+        let v = ((acc >> shift) as u32) & mask;
+        self.pos = end;
+        Ok(v)
+    }
+
+    fn read_unary(&mut self) -> Result<u32> {
+        let mut q = 0u32;
+        loop {
+            let byte_i = self.pos / 8;
+            if byte_i >= self.data.len() {
+                return Err(Error::Truncated {
+                    at: self.data.len(),
+                    need: 1,
+                });
+            }
+            let bit_off = (self.pos % 8) as u32;
+            let avail = 8 - bit_off;
+            let shifted = self.data[byte_i] << bit_off;
+            let lz = shifted.leading_zeros();
+            if lz >= avail {
+                q = q.checked_add(avail).ok_or(Error::Corrupt("rice"))?;
+                self.pos += avail as usize;
+                continue;
+            }
+            q = q.checked_add(lz).ok_or(Error::Corrupt("rice"))?;
+            self.pos += lz as usize + 1;
+            return Ok(q);
+        }
+    }
+
+    fn align_zero(&mut self) -> Result<()> {
+        let rem = (self.pos % 8) as u32;
+        if rem != 0 {
+            let pad = self.read_bits(8 - rem)?;
+            if pad != 0 {
+                return Err(Error::Corrupt("padding"));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct BitWriter {
+    buf: Vec<u8>,
+    cur: u8,
+    nbit: u32,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            cur: 0,
+            nbit: 0,
+        }
+    }
+
+    fn write_bits(&mut self, val: u32, mut n: u32) {
+        if n == 0 || n > 32 {
+            return;
+        }
+        let mut val = if n == 32 {
+            val
+        } else {
+            val & ((1u32 << n) - 1)
+        };
+        while n > 0 {
+            let space = 8 - self.nbit;
+            let take = n.min(space);
+            let shift = n - take;
+            let piece = ((val >> shift) & ((1u32 << take) - 1)) as u8;
+            self.cur |= piece << (space - take);
+            self.nbit += take;
+            n -= take;
+            if n > 0 && n < 32 {
+                val &= (1u32 << n) - 1;
+            }
+            if self.nbit == 8 {
+                self.buf.push(self.cur);
+                self.cur = 0;
+                self.nbit = 0;
+            }
+        }
+    }
+
+    fn write_signed(&mut self, v: i32, n: u32) {
+        if n == 0 || n > 32 {
+            return;
+        }
+        let mask = if n == 32 {
+            u32::MAX
+        } else {
+            (1u32 << n) - 1
+        };
+        self.write_bits(v as u32 & mask, n);
+    }
+
+    fn align(&mut self) {
+        if self.nbit > 0 {
+            self.buf.push(self.cur);
+            self.cur = 0;
+            self.nbit = 0;
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        self.align();
+        self.buf
+    }
+}
+
+pub fn decode(bytes: &[u8]) -> Result<Pcm> {
+    if bytes.len() < 4 {
+        return Err(Error::Truncated {
+            at: bytes.len(),
+            need: 4 - bytes.len(),
+        });
+    }
+    let (info, mut pos) = read_metadata(bytes)?;
+    let channels = info.channels as usize;
+    let mut samples = Vec::new();
+    if info.total_samples > 0 {
+        let n = (info.total_samples as usize)
+            .checked_mul(channels)
+            .ok_or(Error::Corrupt("sample count"))?;
+        if n > MAX_SAMPLES {
+            return Err(Error::Limit {
+                cap: MAX_SAMPLES as u64,
+                got: n as u64,
+            });
+        }
+        samples.reserve(n);
+    }
+    let mut frame_index = 0u64;
+    let mut expected_block: Option<u32> = None;
+    while pos < bytes.len() {
+        let before = pos;
+        let frame = read_frame(bytes, &mut pos, &info)?;
+        if pos <= before {
+            return Err(Error::Corrupt("frame"));
+        }
+        if let Some(exp) = expected_block {
+            if frame.block != exp && pos != bytes.len() {
+                return Err(Error::Corrupt("block size"));
+            }
+        } else {
+            expected_block = Some(frame.block);
+        }
+        if frame.variable {
+            let have = (samples.len() / channels) as u64;
+            if frame.number != have {
+                return Err(Error::Corrupt("frame number"));
+            }
+        } else if frame.number != frame_index {
+            return Err(Error::Corrupt("frame number"));
+        }
+        let add = frame.block as usize * channels;
+        if samples.len().saturating_add(add) > MAX_SAMPLES {
+            return Err(Error::Limit {
+                cap: MAX_SAMPLES as u64,
+                got: samples.len().saturating_add(add) as u64,
+            });
+        }
+        for i in 0..frame.block as usize {
+            for ch in &frame.channels {
+                samples.push(ch[i]);
+            }
+        }
+        frame_index += 1;
+    }
+    if samples.is_empty() {
+        return Err(Error::Corrupt("no frames"));
+    }
+    if info.total_samples != 0 {
+        let expect = (info.total_samples as usize)
+            .checked_mul(channels)
+            .ok_or(Error::Corrupt("sample count"))?;
+        if samples.len() != expect {
+            return Err(Error::Corrupt("sample count"));
+        }
+    }
+    let pcm = Pcm {
+        sample_rate: info.sample_rate,
+        channels: info.channels,
+        bits: info.bits,
+        samples,
+    };
+    if info.md5 != [0u8; 16] {
+        let got = audio_md5(&pcm);
+        if got != info.md5 {
+            return Err(Error::Corrupt("md5"));
+        }
+    }
+    Ok(pcm)
+}
+
+struct Frame {
+    block: u32,
+    number: u64,
+    variable: bool,
+    channels: Vec<Vec<i32>>,
+}
+
+fn read_metadata(data: &[u8]) -> Result<(Info, usize)> {
+    if &data[0..4] != b"fLaC" {
+        return Err(Error::Corrupt("magic"));
+    }
+    let mut pos = 4usize;
+    let mut info = None;
+    let mut first = true;
+    loop {
+        if pos + 4 > data.len() {
+            return Err(Error::Truncated {
+                at: data.len(),
+                need: pos + 4 - data.len(),
+            });
+        }
+        let last = data[pos] & 0x80 != 0;
+        let kind = data[pos] & 0x7f;
+        let len = (u32::from(data[pos + 1]) << 16)
+            | (u32::from(data[pos + 2]) << 8)
+            | u32::from(data[pos + 3]);
+        let len = len as usize;
+        pos += 4;
+        if pos + len > data.len() {
+            return Err(Error::Truncated {
+                at: data.len(),
+                need: pos + len - data.len(),
+            });
+        }
+        let body = &data[pos..pos + len];
+        pos += len;
+        if first {
+            if kind != 0 || len != 34 {
+                return Err(Error::Corrupt("streaminfo"));
+            }
+            info = Some(parse_streaminfo(body)?);
+            first = false;
+        } else if kind == 0 || kind == 127 {
+            return Err(Error::Corrupt("metadata"));
+        }
+        if last {
+            break;
+        }
+    }
+    Ok((info.ok_or(Error::Corrupt("streaminfo"))?, pos))
+}
+
+fn parse_streaminfo(body: &[u8]) -> Result<Info> {
+    let mut br = BitReader::at(body, 0);
+    let min_block = br.read_bits(16)? as u16;
+    let max_block = br.read_bits(16)? as u16;
+    let _min_frame = br.read_bits(24)?;
+    let _max_frame = br.read_bits(24)?;
+    let sample_rate = br.read_bits(20)?;
+    let channels = br.read_bits(3)? as u16 + 1;
+    let bits = br.read_bits(5)? as u8 + 1;
+    let hi = br.read_bits(4)? as u64;
+    let lo = br.read_bits(32)? as u64;
+    let total_samples = (hi << 32) | lo;
+    if body.len() < 34 {
+        return Err(Error::Corrupt("streaminfo"));
+    }
+    let mut md5 = [0u8; 16];
+    md5.copy_from_slice(&body[18..34]);
+    if min_block < 16 || max_block < min_block || sample_rate == 0 || !(4..=32).contains(&bits) {
+        return Err(Error::Corrupt("streaminfo"));
+    }
+    Ok(Info {
+        min_block,
+        max_block,
+        sample_rate,
+        channels,
+        bits,
+        total_samples,
+        md5,
+    })
+}
+
+fn read_frame(data: &[u8], pos: &mut usize, info: &Info) -> Result<Frame> {
+    let start = *pos;
+    if data.len() < start + 6 {
+        return Err(Error::Truncated {
+            at: data.len(),
+            need: start + 6 - data.len(),
+        });
+    }
+    if data[start] != 0xff || (data[start + 1] & 0xfe) != 0xf8 {
+        return Err(Error::Corrupt("sync"));
+    }
+    let variable = data[start + 1] & 1 == 1;
+    let bs_code = data[start + 2] >> 4;
+    let sr_code = data[start + 2] & 0x0f;
+    let ch_code = data[start + 3] >> 4;
+    let bps_code = (data[start + 3] >> 1) & 0x07;
+    if data[start + 3] & 1 != 0 {
+        return Err(Error::Corrupt("frame reserved"));
+    }
+    *pos = start + 4;
+    let (number, nlen) = read_utf8(&data[*pos..])?;
+    *pos += nlen;
+    let block = match bs_code {
+        1 => 192u32,
+        2 => 576,
+        3 => 1152,
+        4 => 2304,
+        5 => 4608,
+        6 => u32::from(take_u8(data, pos)?) + 1,
+        7 => u32::from(take_u16(data, pos)?) + 1,
+        8..=15 => 256u32 << (bs_code - 8),
+        _ => return Err(Error::Corrupt("block size")),
+    };
+    if !(16..=65535).contains(&block) {
+        return Err(Error::Corrupt("block size"));
+    }
+    if block < u32::from(info.min_block) || block > u32::from(info.max_block) {
+        return Err(Error::Corrupt("block size"));
+    }
+    let rate = match sr_code {
+        0 => info.sample_rate,
+        1 => 88_200,
+        2 => 176_400,
+        3 => 192_000,
+        4 => 8_000,
+        5 => 16_000,
+        6 => 22_050,
+        7 => 24_000,
+        8 => 32_000,
+        9 => 44_100,
+        10 => 48_000,
+        11 => 96_000,
+        12 => u32::from(take_u8(data, pos)?) * 1000,
+        13 => u32::from(take_u16(data, pos)?),
+        14 => u32::from(take_u16(data, pos)?) * 10,
+        _ => return Err(Error::Corrupt("sample rate")),
+    };
+    if rate != info.sample_rate || rate == 0 {
+        return Err(Error::Corrupt("sample rate"));
+    }
+    let (channels, assign) = match ch_code {
+        0..=7 => (ch_code + 1, Assign::Indep),
+        8 => (2, Assign::LeftSide),
+        9 => (2, Assign::RightSide),
+        10 => (2, Assign::MidSide),
+        _ => return Err(Error::Corrupt("channel")),
+    };
+    if u16::from(channels) != info.channels {
+        return Err(Error::Corrupt("channel"));
+    }
+    let bps = match bps_code {
+        0 => u32::from(info.bits),
+        1 => 8,
+        2 => 12,
+        4 => 16,
+        5 => 20,
+        6 => 24,
+        7 => 32,
+        _ => return Err(Error::Corrupt("bps")),
+    };
+    if bps != u32::from(info.bits) {
+        return Err(Error::Corrupt("bps"));
+    }
+    if *pos >= data.len() {
+        return Err(Error::Truncated {
+            at: data.len(),
+            need: 1,
+        });
+    }
+    let expect_crc = data[*pos];
+    if crc8(&data[start..*pos]) != expect_crc {
+        return Err(Error::Corrupt("crc8"));
+    }
+    *pos += 1;
+    let mut br = BitReader::at(data, *pos);
+    let mut chans = Vec::with_capacity(channels as usize);
+    for i in 0..channels {
+        let mut width = bps;
+        if matches!(assign, Assign::LeftSide | Assign::MidSide) && i == 1 {
+            width += 1;
+        }
+        if assign == Assign::RightSide && i == 0 {
+            width += 1;
+        }
+        chans.push(read_subframe(&mut br, block as usize, width)?);
+    }
+    decorrelate(&mut chans, assign);
+    br.align_zero()?;
+    if br.pos % 8 != 0 {
+        return Err(Error::Corrupt("padding"));
+    }
+    let crc_at = br.pos / 8;
+    if crc_at + 2 > data.len() {
+        return Err(Error::Truncated {
+            at: data.len(),
+            need: crc_at + 2 - data.len(),
+        });
+    }
+    let expect = u16::from_be_bytes([data[crc_at], data[crc_at + 1]]);
+    if crc16(&data[start..crc_at]) != expect {
+        return Err(Error::Corrupt("crc16"));
+    }
+    *pos = crc_at + 2;
+    Ok(Frame {
+        block,
+        number,
+        variable,
+        channels: chans,
+    })
+}
+
+fn take_u8(data: &[u8], pos: &mut usize) -> Result<u8> {
+    if *pos >= data.len() {
+        return Err(Error::Truncated {
+            at: data.len(),
+            need: 1,
+        });
+    }
+    let v = data[*pos];
+    *pos += 1;
+    Ok(v)
+}
+
+fn take_u16(data: &[u8], pos: &mut usize) -> Result<u16> {
+    if *pos + 2 > data.len() {
+        return Err(Error::Truncated {
+            at: data.len(),
+            need: *pos + 2 - data.len(),
+        });
+    }
+    let v = u16::from_be_bytes([data[*pos], data[*pos + 1]]);
+    *pos += 2;
+    Ok(v)
+}
+
+fn read_utf8(data: &[u8]) -> Result<(u64, usize)> {
+    if data.is_empty() {
+        return Err(Error::Truncated { at: 0, need: 1 });
+    }
+    let b0 = data[0];
+    if b0 & 0x80 == 0 {
+        return Ok((u64::from(b0), 1));
+    }
+    let width = b0.leading_ones() as usize;
+    if !(2..=7).contains(&width) {
+        return Err(Error::Corrupt("utf8"));
+    }
+    if data.len() < width {
+        return Err(Error::Truncated {
+            at: data.len(),
+            need: width - data.len(),
+        });
+    }
+    let payload = 7 - width;
+    let mask = if payload == 0 {
+        0
+    } else {
+        (1u8 << payload) - 1
+    };
+    let mut v = u64::from(b0 & mask);
+    for &b in data.iter().take(width).skip(1) {
+        if b & 0xc0 != 0x80 {
+            return Err(Error::Corrupt("utf8"));
+        }
+        v = (v << 6) | u64::from(b & 0x3f);
+    }
+    Ok((v, width))
+}
+
+fn read_signed(br: &mut BitReader<'_>, n: u32) -> Result<i32> {
+    if n == 0 {
+        return Ok(0);
+    }
+    if n > 32 {
+        return Err(Error::Corrupt("bits"));
+    }
+    let u = br.read_bits(n)?;
+    if n == 32 {
+        return Ok(u as i32);
+    }
+    let sign = 1u32 << (n - 1);
+    if u & sign != 0 {
+        Ok((u | (!0u32 << n)) as i32)
+    } else {
+        Ok(u as i32)
+    }
+}
+
+fn read_subframe(br: &mut BitReader<'_>, block: usize, bps: u32) -> Result<Vec<i32>> {
+    if br.read_bits(1)? != 0 {
+        return Err(Error::Corrupt("subframe pad"));
+    }
+    let kind = br.read_bits(6)?;
+    let wasted = if br.read_bits(1)? == 1 {
+        br.read_unary()?.saturating_add(1)
+    } else {
+        0
+    };
+    if wasted >= bps {
+        return Err(Error::Corrupt("wasted"));
+    }
+    let stored = bps - wasted;
+    let mut samples = match kind {
+        0 => {
+            let s = read_signed(br, stored)?;
+            vec![s; block]
+        }
+        1 => {
+            let mut v = Vec::with_capacity(block);
+            for _ in 0..block {
+                v.push(read_signed(br, stored)?);
+            }
+            v
+        }
+        8..=12 => {
+            let order = (kind - 8) as usize;
+            if order > block {
+                return Err(Error::Corrupt("order"));
+            }
+            let mut warm = Vec::with_capacity(order);
+            for _ in 0..order {
+                warm.push(read_signed(br, stored)?);
+            }
+            let residual = read_residual(br, block, order)?;
+            restore_fixed(warm, &residual, order)?
+        }
+        32..=63 => {
+            let order = (kind - 31) as usize;
+            if order == 0 || order > block || order > 32 {
+                return Err(Error::Corrupt("order"));
+            }
+            let mut warm = Vec::with_capacity(order);
+            for _ in 0..order {
+                warm.push(read_signed(br, stored)?);
+            }
+            let prec_code = br.read_bits(4)?;
+            if prec_code == 15 {
+                return Err(Error::Corrupt("lpc"));
+            }
+            let prec = prec_code + 1;
+            let shift_u = br.read_bits(5)?;
+            let shift = if shift_u & 0x10 != 0 {
+                shift_u as i32 - 32
+            } else {
+                shift_u as i32
+            };
+            let mut coeff = Vec::with_capacity(order);
+            for _ in 0..order {
+                coeff.push(read_signed(br, prec)?);
+            }
+            let residual = read_residual(br, block, order)?;
+            restore_lpc(warm, &residual, &coeff, shift)?
+        }
+        _ => return Err(Error::Corrupt("subframe")),
+    };
+    if wasted > 0 {
+        for s in &mut samples {
+            *s = s.checked_shl(wasted).ok_or(Error::Corrupt("wasted"))?;
+        }
+    }
+    if samples.len() != block {
+        return Err(Error::Corrupt("block"));
+    }
+    Ok(samples)
+}
+
+fn read_residual(br: &mut BitReader<'_>, block: usize, order: usize) -> Result<Vec<i32>> {
+    let method = br.read_bits(2)?;
+    if method > 1 {
+        return Err(Error::Corrupt("residual"));
+    }
+    let part_order = br.read_bits(4)? as usize;
+    if part_order > 15 {
+        return Err(Error::Corrupt("partition"));
+    }
+    let parts = 1usize << part_order;
+    if block % parts != 0 {
+        return Err(Error::Corrupt("partition"));
+    }
+    let part_samples = block / parts;
+    if order > part_samples {
+        return Err(Error::Corrupt("partition"));
+    }
+    let param_bits = if method == 0 { 4 } else { 5 };
+    let escape = (1u32 << param_bits) - 1;
+    let mut out = Vec::with_capacity(block - order);
+    for p in 0..parts {
+        let count = if p == 0 {
+            part_samples - order
+        } else {
+            part_samples
+        };
+        let rice = br.read_bits(param_bits)?;
+        if rice == escape {
+            let width = br.read_bits(5)?;
+            for _ in 0..count {
+                out.push(read_signed(br, width)?);
+            }
+        } else {
+            for _ in 0..count {
+                out.push(read_rice(br, rice)?);
+            }
+        }
+    }
+    if out.len() != block - order {
+        return Err(Error::Corrupt("residual"));
+    }
+    Ok(out)
+}
+
+fn read_rice(br: &mut BitReader<'_>, param: u32) -> Result<i32> {
+    let q = br.read_unary()?;
+    let r = if param == 0 {
+        0
+    } else {
+        br.read_bits(param)?
+    };
+    let u = (u64::from(q))
+        .checked_shl(param)
+        .ok_or(Error::Corrupt("rice"))?
+        | u64::from(r);
+    if u > u64::from(u32::MAX) {
+        return Err(Error::Corrupt("rice"));
+    }
+    Ok(zigzag_dec(u as u32))
+}
+
+fn restore_fixed(mut data: Vec<i32>, residual: &[i32], order: usize) -> Result<Vec<i32>> {
+    if data.len() != order {
+        return Err(Error::Corrupt("order"));
+    }
+    for &r in residual {
+        let i = data.len();
+        let pred = match order {
+            0 => 0i64,
+            1 => i64::from(data[i - 1]),
+            2 => 2 * i64::from(data[i - 1]) - i64::from(data[i - 2]),
+            3 => {
+                3 * i64::from(data[i - 1]) - 3 * i64::from(data[i - 2]) + i64::from(data[i - 3])
+            }
+            4 => {
+                4 * i64::from(data[i - 1]) - 6 * i64::from(data[i - 2]) + 4 * i64::from(data[i - 3])
+                    - i64::from(data[i - 4])
+            }
+            _ => return Err(Error::Corrupt("order")),
+        };
+        data.push(fit_i32(pred + i64::from(r))?);
+    }
+    Ok(data)
+}
+
+fn restore_lpc(mut data: Vec<i32>, residual: &[i32], coeff: &[i32], shift: i32) -> Result<Vec<i32>> {
+    let order = coeff.len();
+    if data.len() != order {
+        return Err(Error::Corrupt("order"));
+    }
+    for &r in residual {
+        let i = data.len();
+        let mut sum = 0i64;
+        for (j, c) in coeff.iter().enumerate() {
+            sum += i64::from(*c) * i64::from(data[i - 1 - j]);
+        }
+        let pred = if shift >= 0 {
+            if shift >= 63 {
+                return Err(Error::Corrupt("lpc"));
+            }
+            sum >> shift
+        } else {
+            let sh = -shift;
+            if sh >= 63 {
+                return Err(Error::Corrupt("lpc"));
+            }
+            sum << sh
+        };
+        data.push(fit_i32(pred + i64::from(r))?);
+    }
+    Ok(data)
+}
+
+fn fit_i32(v: i64) -> Result<i32> {
+    if v < i64::from(i32::MIN) || v > i64::from(i32::MAX) {
+        Err(Error::Corrupt("sample"))
+    } else {
+        Ok(v as i32)
+    }
+}
+
+fn decorrelate(ch: &mut [Vec<i32>], assign: Assign) {
+    if ch.len() != 2 {
+        return;
+    }
+    let n = ch[0].len();
+    match assign {
+        Assign::Indep => {}
+        Assign::LeftSide => {
+            for i in 0..n {
+                ch[1][i] = ch[0][i].wrapping_sub(ch[1][i]);
+            }
+        }
+        Assign::RightSide => {
+            for i in 0..n {
+                ch[0][i] = ch[1][i].wrapping_add(ch[0][i]);
+            }
+        }
+        Assign::MidSide => {
+            for i in 0..n {
+                let mid = i64::from(ch[0][i]);
+                let side = i64::from(ch[1][i]);
+                let mid = (mid << 1) | (side & 1);
+                ch[0][i] = ((mid + side) >> 1) as i32;
+                ch[1][i] = ((mid - side) >> 1) as i32;
+            }
+        }
+    }
+}
+
+fn zigzag_enc(n: i32) -> u32 {
+    if n >= 0 {
+        (n as u32) << 1
+    } else {
+        n.unsigned_abs().wrapping_shl(1).wrapping_sub(1)
+    }
+}
+
+fn zigzag_dec(u: u32) -> i32 {
+    let u = u as i64;
+    if u & 1 == 0 {
+        (u >> 1) as i32
+    } else {
+        (-((u >> 1) + 1)) as i32
+    }
+}
+
+fn write_rice(w: &mut BitWriter, sample: i32, param: u32) {
+    let u = zigzag_enc(sample);
+    let mut q = if param >= 32 { 0 } else { u >> param };
+    while q >= 32 {
+        w.write_bits(0, 32);
+        q -= 32;
+    }
+    if q > 0 {
+        w.write_bits(0, q);
+    }
+    w.write_bits(1, 1);
+    if param > 0 && param < 32 {
+        let mask = (1u32 << param) - 1;
+        w.write_bits(u & mask, param);
+    }
+}
+
+pub fn encode(pcm: &Pcm) -> Result<Vec<u8>> {
+    encode_with(pcm, 4096)
+}
+
+fn encode_with(pcm: &Pcm, nominal: usize) -> Result<Vec<u8>> {
+    if pcm.channels == 0 || pcm.channels > 8 {
+        return Err(Error::Unsupported("channel count"));
+    }
+    if !matches!(pcm.bits, 8 | 16 | 24) {
+        return Err(Error::Unsupported("bit depth"));
+    }
+    if !rate_encodable(pcm.sample_rate) {
+        return Err(Error::Unsupported("sample rate"));
+    }
+    let channels = pcm.channels as usize;
+    if pcm.samples.len() % channels != 0 {
+        return Err(Error::Corrupt("channel alignment"));
+    }
+    let per = pcm.samples.len() / channels;
+    if per < 16 {
+        return Err(Error::Unsupported("fewer than 16 samples"));
+    }
+    if pcm.samples.len() > MAX_SAMPLES {
+        return Err(Error::Limit {
+            cap: MAX_SAMPLES as u64,
+            got: pcm.samples.len() as u64,
+        });
+    }
+    if !pcm.samples.iter().all(|s| sample_fits(*s, pcm.bits)) {
+        return Err(Error::Corrupt("sample"));
+    }
+    let cap = if pcm.sample_rate <= 48_000 { 4608 } else { 16384 };
+    let nominal = nominal.clamp(16, cap).min(per);
+    let blocks = plan_blocks(per, nominal);
+    let mut frames = Vec::new();
+    let mut min_block = u16::MAX;
+    let mut max_block = 0u16;
+    let mut min_frame = u32::MAX;
+    let mut max_frame = 0u32;
+    let mut done = 0usize;
+    for (idx, block) in blocks.iter().copied().enumerate() {
+        let frame = write_frame(pcm, done, block, idx as u64)?;
+        let flen = frame.len() as u32;
+        min_frame = min_frame.min(flen);
+        max_frame = max_frame.max(flen);
+        let b = block as u16;
+        min_block = min_block.min(b);
+        max_block = max_block.max(b);
+        frames.extend_from_slice(&frame);
+        done += block;
+    }
+    if done != per {
+        return Err(Error::Corrupt("block"));
+    }
+    let md5 = audio_md5(pcm);
+    let info = write_streaminfo(
+        min_block,
+        max_block,
+        min_frame,
+        max_frame,
+        pcm.sample_rate,
+        pcm.channels,
+        pcm.bits,
+        per as u64,
+        md5,
+    );
+    let mut out = Vec::with_capacity(42 + frames.len());
+    out.extend_from_slice(b"fLaC");
+    out.push(0x80);
+    out.push(0);
+    out.push(0);
+    out.push(34);
+    out.extend_from_slice(&info);
+    out.extend_from_slice(&frames);
+    Ok(out)
+}
+
+fn plan_blocks(n: usize, nominal: usize) -> Vec<usize> {
+    let mut blocks = Vec::new();
+    let mut off = 0usize;
+    while off < n {
+        let mut take = nominal.min(n - off);
+        let rem = n - off - take;
+        if rem > 0 && rem < 16 && take > 16 {
+            let give = 16 - rem;
+            if take - give >= 16 {
+                take -= give;
+            }
+        }
+        if take < 16 {
+            blocks.push(n - off);
+            break;
+        }
+        blocks.push(take);
+        off += take;
+    }
+    blocks
+}
+
+fn sample_fits(s: i32, bits: u8) -> bool {
+    if bits == 0 || bits > 32 {
+        return false;
+    }
+    if bits == 32 {
+        return true;
+    }
+    let max = (1i32 << (bits - 1)) - 1;
+    let min = -max - 1;
+    s >= min && s <= max
+}
+
+fn rate_encodable(rate: u32) -> bool {
+    rate > 0 && rate <= 655_350 && (rate <= 65_535 || rate % 10 == 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_streaminfo(
+    min_block: u16,
+    max_block: u16,
+    min_frame: u32,
+    max_frame: u32,
+    rate: u32,
+    channels: u16,
+    bits: u8,
+    total: u64,
+    md5: [u8; 16],
+) -> [u8; 34] {
+    let mut w = BitWriter::new();
+    w.write_bits(u32::from(min_block), 16);
+    w.write_bits(u32::from(max_block), 16);
+    w.write_bits(min_frame & 0x00ff_ffff, 24);
+    w.write_bits(max_frame & 0x00ff_ffff, 24);
+    w.write_bits(rate & 0x000f_ffff, 20);
+    w.write_bits(u32::from(channels - 1), 3);
+    w.write_bits(u32::from(bits - 1), 5);
+    w.write_bits((total >> 32) as u32, 4);
+    w.write_bits(total as u32, 32);
+    for b in md5 {
+        w.write_bits(u32::from(b), 8);
+    }
+    let bytes = w.finish();
+    let mut out = [0u8; 34];
+    let n = bytes.len().min(34);
+    out[..n].copy_from_slice(&bytes[..n]);
+    out
+}
+
+fn audio_md5(pcm: &Pcm) -> [u8; 16] {
+    let width = (usize::from(pcm.bits) + 7) / 8;
+    let mut m = Md5::new();
+    for &s in &pcm.samples {
+        let tmp = (s as u32).to_le_bytes();
+        m.update(&tmp[..width]);
+    }
+    m.finish()
+}
+
+fn write_frame(pcm: &Pcm, start: usize, block: usize, frame_number: u64) -> Result<Vec<u8>> {
+    let mut hdr = Vec::with_capacity(16);
+    hdr.push(0xff);
+    hdr.push(0xf8);
+    let (bs_code, bs_extra) = block_size_code(block as u16);
+    let (sr_code, sr_extra) = sample_rate_code(pcm.sample_rate)?;
+    let bps_code = match pcm.bits {
+        8 => 1u8,
+        16 => 4,
+        24 => 6,
+        _ => return Err(Error::Unsupported("bit depth")),
+    };
+    hdr.push((bs_code << 4) | sr_code);
+    let chan = (pcm.channels - 1) as u8;
+    hdr.push((chan << 4) | (bps_code << 1));
+    push_utf8(&mut hdr, frame_number);
+    if let Some(v) = bs_extra {
+        if bs_code == 6 {
+            hdr.push(v as u8);
+        } else {
+            hdr.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    if let Some(v) = sr_extra {
+        if sr_code == 12 {
+            hdr.push(v as u8);
+        } else {
+            hdr.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    let c = crc8(&hdr);
+    hdr.push(c);
+    let mut body = BitWriter::new();
+    let channels = pcm.channels as usize;
+    for ch in 0..channels {
+        let mut samples = Vec::with_capacity(block);
+        for i in 0..block {
+            samples.push(pcm.samples[(start + i) * channels + ch]);
+        }
+        write_subframe(&mut body, &samples, u32::from(pcm.bits));
+    }
+    let mut frame = hdr;
+    frame.extend_from_slice(&body.finish());
+    let sum = crc16(&frame);
+    frame.extend_from_slice(&sum.to_be_bytes());
+    Ok(frame)
+}
+
+fn block_size_code(n: u16) -> (u8, Option<u16>) {
+    match n {
+        192 => (1, None),
+        576 => (2, None),
+        1152 => (3, None),
+        2304 => (4, None),
+        4608 => (5, None),
+        256 => (8, None),
+        512 => (9, None),
+        1024 => (10, None),
+        2048 => (11, None),
+        4096 => (12, None),
+        8192 => (13, None),
+        16384 => (14, None),
+        32768 => (15, None),
+        1..=256 => (6, Some(n - 1)),
+        _ => (7, Some(n - 1)),
+    }
+}
+
+fn sample_rate_code(rate: u32) -> Result<(u8, Option<u16>)> {
+    let coded = match rate {
+        88_200 => (1, None),
+        176_400 => (2, None),
+        192_000 => (3, None),
+        8_000 => (4, None),
+        16_000 => (5, None),
+        22_050 => (6, None),
+        24_000 => (7, None),
+        32_000 => (8, None),
+        44_100 => (9, None),
+        48_000 => (10, None),
+        96_000 => (11, None),
+        r if r % 1000 == 0 && r / 1000 <= 255 => (12, Some((r / 1000) as u16)),
+        r if r <= 65_535 => (13, Some(r as u16)),
+        r if r % 10 == 0 && r / 10 <= 65_535 => (14, Some((r / 10) as u16)),
+        _ => return Err(Error::Unsupported("sample rate")),
+    };
+    Ok(coded)
+}
+
+fn push_utf8(out: &mut Vec<u8>, n: u64) {
+    if n < 0x80 {
+        out.push(n as u8);
+    } else if n < 0x800 {
+        out.push((0xc0 | (n >> 6)) as u8);
+        out.push((0x80 | (n & 0x3f)) as u8);
+    } else if n < 0x1_0000 {
+        out.push((0xe0 | (n >> 12)) as u8);
+        out.push((0x80 | ((n >> 6) & 0x3f)) as u8);
+        out.push((0x80 | (n & 0x3f)) as u8);
+    } else if n < 0x20_0000 {
+        out.push((0xf0 | (n >> 18)) as u8);
+        out.push((0x80 | ((n >> 12) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 6) & 0x3f)) as u8);
+        out.push((0x80 | (n & 0x3f)) as u8);
+    } else if n < 0x400_0000 {
+        out.push((0xf8 | (n >> 24)) as u8);
+        out.push((0x80 | ((n >> 18) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 12) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 6) & 0x3f)) as u8);
+        out.push((0x80 | (n & 0x3f)) as u8);
+    } else if n < 0x8000_0000 {
+        out.push((0xfc | (n >> 30)) as u8);
+        out.push((0x80 | ((n >> 24) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 18) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 12) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 6) & 0x3f)) as u8);
+        out.push((0x80 | (n & 0x3f)) as u8);
+    } else {
+        out.push(0xfe);
+        out.push((0x80 | ((n >> 30) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 24) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 18) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 12) & 0x3f)) as u8);
+        out.push((0x80 | ((n >> 6) & 0x3f)) as u8);
+        out.push((0x80 | (n & 0x3f)) as u8);
+    }
+}
+
+enum Coded {
+    Constant(i32),
+    Verbatim,
+    Fixed { order: usize, escape: Option<u32>, param: u32 },
+}
+
+fn write_subframe(w: &mut BitWriter, samples: &[i32], bps: u32) {
+    match choose(samples, bps) {
+        Coded::Constant(s) => {
+            write_sub_header(w, 0);
+            w.write_signed(s, bps);
+        }
+        Coded::Verbatim => {
+            write_sub_header(w, 1);
+            for &s in samples {
+                w.write_signed(s, bps);
+            }
+        }
+        Coded::Fixed {
+            order,
+            escape,
+            param,
+        } => {
+            let Some(residual) = fixed_residual(samples, order) else {
+                write_sub_header(w, 1);
+                for &s in samples {
+                    w.write_signed(s, bps);
+                }
+                return;
+            };
+            write_sub_header(w, 8 + order as u32);
+            for &s in &samples[..order] {
+                w.write_signed(s, bps);
+            }
+            write_residual(w, &residual, param, escape);
+        }
+    }
+}
+
+fn write_sub_header(w: &mut BitWriter, kind: u32) {
+    w.write_bits(0, 1);
+    w.write_bits(kind, 6);
+    w.write_bits(0, 1);
+}
+
+fn choose(samples: &[i32], bps: u32) -> Coded {
+    if samples.iter().all(|s| *s == samples[0]) {
+        return Coded::Constant(samples[0]);
+    }
+    let verbatim = samples.len() as u64 * u64::from(bps);
+    let mut best_cost = verbatim;
+    let mut best = Coded::Verbatim;
+    let max_order = 4.min(samples.len().saturating_sub(1));
+    for order in 0..=max_order {
+        let Some(residual) = fixed_residual(samples, order) else {
+            continue;
+        };
+        let (param, rice) = best_rice(&residual);
+        let rice_cost = rice + 10 + u64::from(bps) * order as u64;
+        let width = signed_width(&residual);
+        let esc_cost = 15 + u64::from(width) * residual.len() as u64 + u64::from(bps) * order as u64;
+        if esc_cost < rice_cost && esc_cost < best_cost {
+            best_cost = esc_cost;
+            best = Coded::Fixed {
+                order,
+                escape: Some(width),
+                param: 0,
+            };
+        } else if rice_cost < best_cost {
+            best_cost = rice_cost;
+            best = Coded::Fixed {
+                order,
+                escape: None,
+                param,
+            };
+        }
+    }
+    best
+}
+
+fn fixed_residual(samples: &[i32], order: usize) -> Option<Vec<i32>> {
+    let mut out = Vec::with_capacity(samples.len() - order);
+    for i in order..samples.len() {
+        let pred = match order {
+            0 => 0i64,
+            1 => i64::from(samples[i - 1]),
+            2 => 2 * i64::from(samples[i - 1]) - i64::from(samples[i - 2]),
+            3 => {
+                3 * i64::from(samples[i - 1]) - 3 * i64::from(samples[i - 2])
+                    + i64::from(samples[i - 3])
+            }
+            4 => {
+                4 * i64::from(samples[i - 1]) - 6 * i64::from(samples[i - 2])
+                    + 4 * i64::from(samples[i - 3])
+                    - i64::from(samples[i - 4])
+            }
+            _ => return None,
+        };
+        out.push(fit_i32(i64::from(samples[i]) - pred).ok()?);
+    }
+    Some(out)
+}
+
+fn best_rice(res: &[i32]) -> (u32, u64) {
+    let mut best_p = 0u32;
+    let mut best = u64::MAX;
+    for p in 0..15 {
+        let bits = rice_bits(res, p);
+        if bits < best {
+            best = bits;
+            best_p = p;
+        }
+    }
+    (best_p, best)
+}
+
+fn rice_bits(res: &[i32], param: u32) -> u64 {
+    let mut n = 0u64;
+    for &s in res {
+        let u = u64::from(zigzag_enc(s));
+        n += (u >> param) + 1 + u64::from(param);
+    }
+    n
+}
+
+fn signed_width(samples: &[i32]) -> u32 {
+    let mut need = 0u32;
+    for &s in samples {
+        let bits = if s > 0 {
+            (32 - (s as u32).leading_zeros()) + 1
+        } else if s == 0 {
+            0
+        } else if s == i32::MIN {
+            32
+        } else {
+            let abs = s.unsigned_abs();
+            let mag = 32 - abs.leading_zeros();
+            if abs.is_power_of_two() {
+                mag
+            } else {
+                mag + 1
+            }
+        };
+        if bits > need {
+            need = bits;
+        }
+    }
+    need
+}
+
+fn write_residual(w: &mut BitWriter, res: &[i32], param: u32, escape: Option<u32>) {
+    w.write_bits(0, 2);
+    w.write_bits(0, 4);
+    if let Some(width) = escape {
+        w.write_bits(0b1111, 4);
+        w.write_bits(width, 5);
+        if width > 0 {
+            for &s in res {
+                w.write_signed(s, width);
+            }
+        }
+    } else {
+        w.write_bits(param, 4);
+        for &s in res {
+            write_rice(w, s, param);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(pcm: &Pcm) {
+        let bytes = encode(pcm).unwrap();
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.samples, pcm.samples);
+        assert_eq!(back.sample_rate, pcm.sample_rate);
+        assert_eq!(back.channels, pcm.channels);
+        assert_eq!(back.bits, pcm.bits);
+    }
+
+    #[test]
+    fn silence_is_constant_and_exact() {
+        let pcm = Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples: vec![0; 4096],
+        };
+        let bytes = encode(&pcm).unwrap();
+        assert!(bytes.len() < 200, "constant frame grew to {}", bytes.len());
+        round_trip(&pcm);
+    }
+
+    #[test]
+    fn ramp_uses_fixed_predictor() {
+        let samples: Vec<i32> = (0..5000).map(|i| (i % 1000) - 500).collect();
+        let pcm = Pcm {
+            sample_rate: 48_000,
+            channels: 1,
+            bits: 16,
+            samples,
+        };
+        let bytes = encode(&pcm).unwrap();
+        assert!(bytes.len() < 2500, "ramp grew to {}", bytes.len());
+        round_trip(&pcm);
+    }
+
+    #[test]
+    fn noise_verbatim_round_trip() {
+        let samples: Vec<i32> = (0..4096i32)
+            .map(|i| i.wrapping_mul(1_103_515_245).wrapping_add(12_345) >> 8)
+            .map(|s| s.clamp(-32_768, 32_767))
+            .collect();
+        let pcm = Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples,
+        };
+        let bytes = encode(&pcm).unwrap();
+        assert!(bytes.len() > 4000, "expected a wide residual, got {}", bytes.len());
+        round_trip(&pcm);
+    }
+
+    #[test]
+    fn stereo_eight_and_twentyfour() {
+        let stereo: Vec<i32> = (0..8000)
+            .map(|i| {
+                if i % 2 == 0 {
+                    (i / 2) % 200 - 100
+                } else {
+                    1000 - (i / 2) % 50
+                }
+            })
+            .collect();
+        round_trip(&Pcm {
+            sample_rate: 44_100,
+            channels: 2,
+            bits: 16,
+            samples: stereo,
+        });
+        round_trip(&Pcm {
+            sample_rate: 8_000,
+            channels: 1,
+            bits: 8,
+            samples: (0..64).map(|i| (i % 17) - 8).collect(),
+        });
+        round_trip(&Pcm {
+            sample_rate: 96_000,
+            channels: 1,
+            bits: 24,
+            samples: (0..64).map(|i| i * 1000 - 30_000).collect(),
+        });
+    }
+
+    #[test]
+    fn many_frames_utf8_frame_number() {
+        let samples: Vec<i32> = (0..3200).map(|i| (i % 64) - 32).collect();
+        let pcm = Pcm {
+            sample_rate: 16_000,
+            channels: 1,
+            bits: 16,
+            samples,
+        };
+        let bytes = encode_with(&pcm, 16).unwrap();
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.samples, pcm.samples);
+    }
+
+    #[test]
+    fn rice_values_survive_both_readers() {
+        let values = [-4000, -2, -1, 0, 1, 2, 40, 9_000];
+        for param in [0u32, 1, 4, 7, 14] {
+            let mut w = BitWriter::new();
+            for &v in &values {
+                write_rice(&mut w, v, param);
+            }
+            let bytes = w.finish();
+            let mut br = BitReader::at(&bytes, 0);
+            for &v in &values {
+                assert_eq!(read_rice(&mut br, param).unwrap(), v, "param {param}");
+            }
+        }
+    }
+
+    #[test]
+    fn escape_residual_round_trip() {
+        let samples: Vec<i32> = (0..32).map(|i| if i % 2 == 0 { 30_000 } else { -30_000 }).collect();
+        round_trip(&Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples,
+        });
+    }
+
+    #[test]
+    fn truncated_and_flipped_crc() {
+        let pcm = Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples: (0..64).map(|i| i - 32).collect(),
+        };
+        let bytes = encode(&pcm).unwrap();
+        let mut cut = bytes.clone();
+        cut.pop();
+        assert!(matches!(
+            decode(&cut),
+            Err(Error::Truncated { .. }) | Err(Error::Corrupt(_))
+        ));
+        let mut half = bytes.clone();
+        half.truncate(half.len() / 2);
+        assert!(decode(&half).is_err());
+        let mut flip = bytes.clone();
+        let last = flip.len() - 1;
+        flip[last] ^= 0xff;
+        assert!(matches!(decode(&flip), Err(Error::Corrupt("crc16"))));
+        let mut mid = bytes.clone();
+        let at = 50.min(mid.len() - 3);
+        mid[at] ^= 0x01;
+        assert!(decode(&mid).is_err());
+    }
+
+    #[test]
+    fn hand_built_constant_verbatim_and_fixed() {
+        let constant = build_mono(16, &[7; 16], |w, _| {
+            write_sub_header(w, 0);
+            w.write_signed(7, 16);
+        });
+        assert_eq!(decode(&constant).unwrap().samples, vec![7; 16]);
+
+        let verb: Vec<i32> = (0..16).map(|i| i - 8).collect();
+        let verbatim = build_mono(16, &verb, |w, samples| {
+            write_sub_header(w, 1);
+            for &s in samples {
+                w.write_signed(s, 16);
+            }
+        });
+        assert_eq!(decode(&verbatim).unwrap().samples, verb);
+
+        let fixed: Vec<i32> = (0..16).collect();
+        let framed = build_mono(16, &fixed, |w, samples| {
+            write_sub_header(w, 9);
+            w.write_signed(samples[0], 16);
+            let residual = fixed_residual(samples, 1).unwrap();
+            write_residual(w, &residual, 0, None);
+        });
+        assert_eq!(decode(&framed).unwrap().samples, fixed);
+
+        let linear: Vec<i32> = (0..16).collect();
+        let lpc = build_mono(16, &linear, |w, samples| {
+            // LPC order 2, coeffs 4 and -2, shift 1, same as fixed order 2.
+            write_sub_header(w, 33);
+            w.write_signed(samples[0], 16);
+            w.write_signed(samples[1], 16);
+            w.write_bits(3, 4);
+            w.write_bits(1, 5);
+            w.write_signed(4, 4);
+            w.write_signed(-2, 4);
+            write_residual(w, &[0; 14], 0, None);
+        });
+        assert_eq!(decode(&lpc).unwrap().samples, linear);
+    }
+
+    fn build_mono(block: u16, samples: &[i32], body: impl Fn(&mut BitWriter, &[i32])) -> Vec<u8> {
+        let pcm = Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples: samples.to_vec(),
+        };
+        let md5 = audio_md5(&pcm);
+        let mut hdr = vec![0xff, 0xf8];
+        let (bs, extra) = block_size_code(block);
+        hdr.push((bs << 4) | 9);
+        hdr.push(4 << 1);
+        hdr.push(0);
+        if let Some(v) = extra {
+            if bs == 6 {
+                hdr.push(v as u8);
+            } else {
+                hdr.extend_from_slice(&v.to_be_bytes());
+            }
+        }
+        let c = crc8(&hdr);
+        hdr.push(c);
+        let mut w = BitWriter::new();
+        body(&mut w, samples);
+        let mut frame = hdr;
+        frame.extend_from_slice(&w.finish());
+        let sum = crc16(&frame);
+        frame.extend_from_slice(&sum.to_be_bytes());
+        let info = write_streaminfo(block, block, frame.len() as u32, frame.len() as u32, 44_100, 1, 16, samples.len() as u64, md5);
+        let mut out = Vec::new();
+        out.extend_from_slice(b"fLaC");
+        out.push(0x80);
+        out.extend_from_slice(&34u32.to_be_bytes()[1..]);
+        out.extend_from_slice(&info);
+        out.extend_from_slice(&frame);
+        out
+    }
+}
