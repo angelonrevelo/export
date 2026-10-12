@@ -1,0 +1,46 @@
+[package]
+name = "export-opus"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "One Opus packet: mono, 48 kHz, one 20 ms frame."
+readme = "README.md"
+publish = false
+
+[lib]
+name = "export_opus"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[example]]
+name = "dump-packet"
+path = "examples/dump-packet.rs"
+
+[[bench]]
+name = "packet"
+harness = false
+
+[[bench]]
+name = "sine"
+harness = false
+
+[[bench]]
+name = "sine-third"
+path = "benches/sine_third.rs"
+harness = false
+
+[[bench]]
+name = "stereo"
+path = "benches/stereo.rs"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

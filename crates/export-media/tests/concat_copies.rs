@@ -1,0 +1,121 @@
+use export_media::{audiogram, concat_mp4, elementary, encode_wav, parse, WavSpec, HEIGHT, WIDTH};
+
+fn one_second() -> Vec<u8> {
+    let rate = 48_000usize;
+    let mut pcm = Vec::with_capacity(rate * 2);
+    for i in 0..rate {
+        let s = ((i as i16).wrapping_mul(17)).wrapping_add((i as i16) >> 3);
+        pcm.extend_from_slice(&s.to_le_bytes());
+    }
+    encode_wav(
+        WavSpec {
+            channels: 1,
+            sample_rate: rate as u32,
+            bits: 16,
+        },
+        &pcm,
+    )
+    .expect("wav")
+}
+
+#[test]
+fn two_copies_of_the_audiogram_are_two_raw_samples() {
+    let one = audiogram(&one_second()).expect("audiogram");
+    assert_eq!(one.bytes, 327_420);
+    assert_eq!(one.video_samples, 1);
+    let source = parse(&one.data).expect("source");
+    let source_video = source
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"vide")
+        .expect("source video");
+    assert_eq!(source_video.samples.len(), 1);
+    assert_eq!(source_video.width >> 16, u32::from(WIDTH));
+    assert_eq!(source_video.height >> 16, u32::from(HEIGHT));
+    let frame = elementary(source_video, &one.data).expect("frame")[0].to_vec();
+    assert_eq!(frame.len(), usize::from(WIDTH) * usize::from(HEIGHT) * 3);
+
+    let out = concat_mp4(&one.data, &one.data).expect("concat");
+    let movie = parse(&out).expect("concat parse");
+    let video = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"vide")
+        .expect("video");
+    assert_eq!(video.codec, *b"raw ");
+    assert_eq!(video.samples.len(), 2);
+    assert_eq!(video.width >> 16, u32::from(WIDTH));
+    assert_eq!(video.height >> 16, u32::from(HEIGHT));
+    assert_eq!(video.stsd, source_video.stsd);
+    let samples = elementary(video, &out).expect("samples");
+    assert_eq!(samples.len(), 2);
+    assert_eq!(samples[0], frame.as_slice());
+    assert_eq!(samples[1], frame.as_slice());
+}
+
+#[test]
+fn both_picture_samples_are_the_raw_frame() {
+    let one = audiogram(&one_second()).expect("audiogram");
+    assert_eq!(one.bytes, 327_420);
+    let frame = {
+        let movie = parse(&one.data).expect("one");
+        let video = movie
+            .tracks
+            .iter()
+            .find(|t| t.handler == *b"vide")
+            .expect("video");
+        elementary(video, &one.data).expect("frame")[0].to_vec()
+    };
+    assert_eq!(frame.len(), 230_400);
+    let pair = concat_mp4(&one.data, &one.data).expect("pair");
+    assert_eq!(pair.len(), 653_824);
+    let movie = parse(&pair).expect("pair parse");
+    let video = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"vide")
+        .expect("video");
+    let samples = elementary(video, &pair).expect("pictures");
+    assert_eq!(samples.len(), 2);
+    assert_eq!(samples[0], frame.as_slice());
+    assert_eq!(samples[1], frame.as_slice());
+    let mut out = Vec::with_capacity(frame.len() * 2);
+    out.extend_from_slice(samples[0]);
+    out.extend_from_slice(samples[1]);
+    assert_eq!(out.len(), 460_800);
+}
+
+#[test]
+fn both_audio_samples_are_the_stored_pcm() {
+    let one = audiogram(&one_second()).expect("audiogram");
+    assert_eq!(one.bytes, 327_420);
+    let pcm = {
+        let movie = parse(&one.data).expect("one");
+        let audio = movie
+            .tracks
+            .iter()
+            .find(|t| t.handler == *b"soun")
+            .expect("audio");
+        let samples = elementary(audio, &one.data).expect("pcm");
+        assert_eq!(samples.len(), 1);
+        samples[0].to_vec()
+    };
+    assert_eq!(pcm.len(), 96_000);
+    let pair = concat_mp4(&one.data, &one.data).expect("pair");
+    assert_eq!(pair.len(), 653_824);
+    let movie = parse(&pair).expect("pair parse");
+    let audio = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"soun")
+        .expect("audio");
+    assert_eq!(audio.codec, *b"sowt");
+    let samples = elementary(audio, &pair).expect("pcm");
+    assert_eq!(samples.len(), 2);
+    assert_eq!(samples[0], pcm.as_slice());
+    assert_eq!(samples[1], pcm.as_slice());
+    let mut out = Vec::with_capacity(pcm.len() * 2);
+    out.extend_from_slice(samples[0]);
+    out.extend_from_slice(samples[1]);
+    assert_eq!(out.len(), 192_000);
+}

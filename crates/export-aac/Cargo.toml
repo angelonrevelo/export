@@ -1,0 +1,59 @@
+[package]
+name = "export-aac"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Encode and decode mono AAC-LC ADTS frames at 44.1 kHz. Not a song encoder."
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "one-frame"
+path = "src/bin/one_frame.rs"
+
+[[bin]]
+name = "second-frame"
+path = "src/bin/second_frame.rs"
+
+[[bin]]
+name = "third-frame"
+path = "src/bin/third_frame.rs"
+
+[[bin]]
+name = "fourth-frame"
+path = "src/bin/fourth_frame.rs"
+
+[[bin]]
+name = "flush-frame"
+path = "src/bin/flush_frame.rs"
+
+[[bin]]
+name = "stereo-frame"
+path = "src/bin/stereo_frame.rs"
+
+[[bin]]
+name = "second-stereo-frame"
+path = "src/bin/second_stereo_frame.rs"
+
+[[bin]]
+name = "third-stereo-frame"
+path = "src/bin/third_stereo_frame.rs"
+
+[[bin]]
+name = "fourth-stereo-frame"
+path = "src/bin/fourth_stereo_frame.rs"
+
+[[bin]]
+name = "stereo-flush"
+path = "src/bin/stereo_flush.rs"
+
+[dependencies]
+
+# Single-threaded. No thread pool, no atomics target-feature, no spawned work.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

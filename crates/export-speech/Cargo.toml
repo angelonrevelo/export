@@ -1,0 +1,19 @@
+[package]
+name = "export-speech"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.74"
+description = "Bounded mel frontend, integer kernels, CTC decode, fixture OCR, parametric TTS."
+publish = false
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "speech-bench"
+path = "src/bin/speech_bench.rs"

@@ -1,0 +1,126 @@
+[package]
+name = "export-h264"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.74"
+publish = false
+description = "Baseline H.264 I-frame and up to seven following P-frames. No dependencies."
+
+# Hot path has no decoder, no C toolchain, and no ffmpeg. Threading is off.
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "iframe"
+path = "src/bin/iframe.rs"
+
+[[bin]]
+name = "still32"
+path = "src/bin/still32.rs"
+
+[[bin]]
+name = "decode32"
+path = "src/bin/decode32.rs"
+
+[[bin]]
+name = "decodepair32"
+path = "src/bin/decodepair32.rs"
+
+[[bin]]
+name = "decodeshift32"
+path = "src/bin/decodeshift32.rs"
+
+[[bin]]
+name = "decodeshiftright32"
+path = "src/bin/decodeshiftright32.rs"
+
+[[bin]]
+name = "iframe160"
+path = "src/bin/iframe160.rs"
+
+[[bin]]
+name = "iframe320"
+path = "src/bin/iframe320.rs"
+
+[[bin]]
+name = "ipframe320"
+path = "src/bin/ipframe320.rs"
+
+[[bin]]
+name = "ipframe"
+path = "src/bin/ipframe.rs"
+
+[[bin]]
+name = "ipframe160"
+path = "src/bin/ipframe160.rs"
+
+[[bin]]
+name = "mvframe"
+path = "src/bin/mvframe.rs"
+
+[[bin]]
+name = "mvframe160"
+path = "src/bin/mvframe160.rs"
+
+[[bin]]
+name = "mvframe320"
+path = "src/bin/mvframe320.rs"
+
+[[bin]]
+name = "splitframe320"
+path = "src/bin/splitframe320.rs"
+
+[[bin]]
+name = "seqsplit320"
+path = "src/bin/seqsplit320.rs"
+
+[[bin]]
+name = "splitframe640"
+path = "src/bin/splitframe640.rs"
+
+[[bin]]
+name = "seqsplit640"
+path = "src/bin/seqsplit640.rs"
+
+[[bin]]
+name = "splitframe720"
+path = "src/bin/splitframe720.rs"
+
+[[bin]]
+name = "seqsplit720"
+path = "src/bin/seqsplit720.rs"
+
+[[bin]]
+name = "seqeight720"
+path = "src/bin/seqeight720.rs"
+
+[[bin]]
+name = "seqsixteen720"
+path = "src/bin/seqsixteen720.rs"
+
+[[bin]]
+name = "seqthirtytwo720"
+path = "src/bin/seqthirtytwo720.rs"
+
+[[bin]]
+name = "seqframe"
+path = "src/bin/seqframe.rs"
+
+[[bin]]
+name = "seqframe160"
+path = "src/bin/seqframe160.rs"
+
+[[bin]]
+name = "seqframe16"
+path = "src/bin/seqframe16.rs"

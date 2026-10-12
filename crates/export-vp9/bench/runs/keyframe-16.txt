@@ -1,0 +1,14 @@
+file_bytes=74
+frame_bytes=30
+max_abs_error=0
+error_bound=0
+samples=2000
+warmup=200
+release_p50_ns=1065
+release_p99_ns=1165
+earlier_runs_p50_p99_ns=1106/1291,1062/1148
+host=Linux 6.12.94+ x86_64
+rustc=1.83.0
+profile=opt-level 3, lto thin, codegen-units 1
+threads=1
+p50_limit_ns=1800

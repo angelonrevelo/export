@@ -1,0 +1,15 @@
+[package]
+name = "export-sheet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+publish = false
+description = "Streaming CSV, TSV, and JSON, plus one BIFF8 .xls read and one-sheet XLSX. Zero dependencies."
+readme = "README.md"
+
+[[bin]]
+name = "export-sheet-bench"
+path = "src/bin/bench.rs"
+
+[dependencies]

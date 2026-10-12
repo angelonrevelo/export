@@ -1,0 +1,46 @@
+[package]
+name = "export-fetch"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency cleartext fetch for Export URL jobs"
+readme = "README.md"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "assemble_bench"
+path = "src/bin/assemble_bench.rs"
+
+[[bin]]
+name = "download_bench"
+path = "src/bin/download_bench.rs"
+
+[[bin]]
+name = "pair_bench"
+path = "src/bin/pair_bench.rs"
+
+[[bin]]
+name = "quad_bench"
+path = "src/bin/quad_bench.rs"
+
+[[bin]]
+name = "octet_bench"
+path = "src/bin/octet_bench.rs"
+
+[[bin]]
+name = "sixteen_bench"
+path = "src/bin/sixteen_bench.rs"
+
+[[bin]]
+name = "thirty_two_bench"
+path = "src/bin/thirty_two_bench.rs"
+
+[[bin]]
+name = "sixty_four_bench"
+path = "src/bin/sixty_four_bench.rs"

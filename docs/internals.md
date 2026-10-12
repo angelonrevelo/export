@@ -153,9 +153,9 @@ cp .env.example .env             # set EXPORT_PASSWORD + EXPORT_PIPER_VOICE
 bash scripts/run.sh
 ```
 
-For a real deployment, see [scripts/export.service](scripts/export.service)
-(systemd unit) and [scripts/nginx-export.conf](scripts/nginx-export.conf)
-(reverse proxy for `export.bygelo.com`).
+`bash scripts/run.sh` is the local server. This repo has no hosted deploy
+target, certificate, or public URL. A checkout of `main` is what that local
+run serves.
 
 ## Architecture
 
@@ -191,6 +191,54 @@ deletes job dirs older than 6 h every 15 min.
 │   /tmp/export/{job_id}/output_file              │
 └─────────────────────────────────────────────────┘
 ```
+
+The diagram is the Python process. Rust crates are not on that path.
+
+### Rust workspace
+
+`Cargo.toml` lists each crate once. They are zero-dependency libraries.
+`cargo test --workspace --offline` tests them. The HTTP API above is still
+`app/main.py`, started by `scripts/run.sh`.
+
+`export-kernel` includes a checked raw DEFLATE inflater. `export-deflate` is
+a different crate: a raw RFC 1951 compressor and inflater, with no zlib
+wrapper. `export-pack`, `export-image`, `export-docs`, and `export-sheet`
+each keep their own inflate or deflate code. None of those files was folded
+into the others.
+
+| Crate | Implemented | Not this crate |
+|---|---|---|
+| `export-kernel` | Little-endian container, streaming SHA-256, CRC-32, magic-byte sniff, checked raw inflate | Codecs other than that inflater, network |
+| `export-subtitle` | SRT, WebVTT, ASS/SSA cues; CRC-checked cue file; one ASS bold / italic / underline / strikeout override | A general ASS renderer |
+| `export-web` | In-memory jobs, hard byte budget, SHA-256 dedup | Threads, a model, the FastAPI server |
+| `export-pdf` | Classic-xref text split and merge; one small uncompressed DeviceRGB, DeviceGray, or DeviceCMYK page | A general PDF toolkit |
+| `export-pack` | Store-method zip read/write, CBZ → minimal PDF, TTF/OTF container copy, PNG, this crate's inflate | A general-purpose compressor around the archive |
+| `export-sheet` | Streaming CSV, TSV, one JSON array of scalar objects or scalar arrays. BIFF8 `.xls` read of the generated files in the crate (numbers, a plain shared string, cached formula numbers, and the uncached SUM shapes the reader accepts). One-sheet XLSX, stored on write, stored or checked deflate on read | Arbitrary BIFF, JSON ↔ XLSX, zip64, encryption |
+| `export-meta` | `EXMETA01` record (times, comment, tags, extras) and in-place scrub of that header. OOXML decrypt: standard AES-128-ECB, and agile AES-256-CBC when the descriptor is SHA-512 | EXIF GPS scrub, Finder xattrs, PDF passwords |
+| `export-media` | Stream-copy remux of non-fragmented MP4/MOV/M4A, elementary sample copy, concat of two matching MP4s, WAV/PCM, one-pass WAV shrink, one-frame gray audiogram | Fragmented MP4, decoding AAC/Opus/MP3/FLAC/GIF/WebM, ffmpeg |
+| `export-translate` | en ↔ es and en ↔ tl lexicon transfer | NLLB, any other language pair |
+| `export-speech` | Streaming log-mel, integer matmul/conv/softmax/layer-norm, greedy CTC writers (`txt`/`srt`/`vtt`/`notes`/`words`), fixture transcribe (`HI`/`IH`, and `NO` from the 984-byte blob), 5×7 OCR for `A`–`Z`, `0`–`9`, `a`/`b`/`c`, formant-sine WAV, spectral subtraction from a short noise preamble | Whisper, Tesseract, Piper, ONNX, microphone transcription |
+| `export-image` | PNG decode, baseline JPEG shrink-to-bytes, 220px JPEG thumbnails, simple WebP (still, plus the animations `decode_webp` documents), 16×16 or 32×32 black-square SVG | HEIC, AVIF, TIFF, RAW, JPEG XL, background removal, a general SVG |
+| `export-fetch` | Cleartext HTTP/1.1: redirects, ranges, a coalesce gap, a byte-budget cache | TLS, YouTube signature ciphers, DRM, credentials |
+| `export-docs` | Hops whose `pairs()` row has `ready: true`: docx/odt → txt, html, pdf; md/markdown → html, txt, pdf; html/htm → pdf and html → txt; txt → html, pdf; pdf → txt, split, merge, rotate, watermark, and Flate shrink only when the new stream inflates to the same bytes and the file is smaller | Rows with `ready: false`: pdf encrypt, decrypt, pdf→docx, pdf→png. RTF, EPUB, PPTX, DOC, and PPT convert only the generated files their notes name. Spreadsheets are refused (`xls` → pdf is a miss). No LibreOffice, pandoc, or Ghostscript |
+| `export-gif` | GIF87a/89a LZW decode and encode, 3-3-2 quantize | Video→GIF, ffmpeg |
+| `export-deflate` | Raw DEFLATE compress and inflate | zlib CMF/FLG header, Adler-32, linking zlib |
+| `export-audio` | FLAC subset encode/decode, WAV, SHA-256 dedup | ffmpeg |
+| `export-h264` | Constrained Baseline Annex B this encoder writes: one I-frame, optional following P-frames (zero motion, one shared vector, or a left/right split), and `still` / `decode_iframe` of that I-frame reconstruction | A lone P-frame, B-frames, a second pass, an arbitrary bitstream, MP4 shrink, ffmpeg |
+| `export-opus` | One packet: digital silence, half-scale 440 Hz sine frames (including a second and third 20 ms frame), and one prepared stereo packet | Other stereo packets, a song encoder, yt-dlp |
+| `export-webm` | Stream-copy WebM/Matroska (hash, dedup, EBML sniff, copy block payloads and timestamps) | Decoding VP8, VP9, Opus, or Vorbis; transcode; shrink |
+| `export-aac` | AAC-LC ADTS, 44.1 kHz, 1024 samples/channel. Later frames of the same sine stay one frame late. A flush after the fourth frame emits the delayed sine. Stereo is a half-scale 440 Hz left and silence right | HE-AAC, SBR, parametric stereo, a song encoder |
+| `export-hls` | Cleartext media playlists (`#EXTINF`, no encryption) and, off wasm, cleartext HTTP/1.1 fetch | `https`, `#EXT-X-KEY`, cookies, credentials, userinfo, YouTube, transcode |
+| `export-fmp4` | Stream-copy of `moof`/`mdat` sample bytes. H.264 `avc1` bytes are copied | Decoding those samples; AAC, Opus, and VP9 (sniffed, then `Unsupported`); transcode; shrink |
+| `export-avcbox` | Annex B H.264 pictures into one non-fragmented `avc1` MP4 (I-frame, then following P-frames as further samples) | Encoding H.264, ffmpeg |
+| `export-vorbis` | One short mono 48 kHz packet: silence, or two half-scale 440 Hz frames and the next 32 samples, decoded back to PCM | A song encoder |
+| `export-mp3` | One MPEG-1 Layer III frame, mono, 44.1 kHz. Decode returns 1152 PCM samples. A non-silent block stores the first 32 quantized long-block MDCT lines of each granule | Bit reservoir, ffmpeg, a multi-frame file |
+| `export-vp9` | One generated keyframe at 8×8, 16×16, 32×32, 64×64, 128×128, 256×256, 512×512, 1024×1024, or 2048×2048 | Inter frames, extra frames, VP8, a video decoder |
+
+`scripts/outside_score.py` is a host oracle. The Python app is the reference.
+It scores files already stored in the git repo. `EXPORT_RUST_ORACLE` may name
+a separate program. The script does not generate substitute files and it is
+not started by `scripts/run.sh`.
 
 ### Adding a new conversion (the bridge pattern)
 
@@ -485,13 +533,12 @@ model.
 
 ## Security & deployment scope
 
-`export` is built for **personal use** (localhost or your private network).
-Phase 2 app hardening is in: download uses a short-lived `token` (not `?pw=`),
-mutating POSTs are rate-limited, URL extract refuses SSRF, Pillow bombs are
-capped at 64_000_000 pixels. HTTPS is a reverse-proxy job —
-[scripts/nginx-export.conf](scripts/nginx-export.conf) and
-[scripts/Caddyfile](scripts/Caddyfile). Certbot / live DNS / tmpfs mount are
-deploy-time, not claimed here.
+`export` is built for **personal use on localhost**. `scripts/run.sh` binds
+`HOST` / `PORT` (default `127.0.0.1:8500`). This repository has no hosted
+deploy target, certificate, or public URL. Phase 2 app hardening is in:
+download uses a short-lived `token` (not `?pw=`), mutating POSTs are
+rate-limited, URL extract refuses SSRF, Pillow bombs are capped at
+64_000_000 pixels.
 
 For a trusted-group host set `EXPORT_MAX_UPLOAD_MB=500`,
 `EXPORT_MAX_COMPRESS_MB=2000`, `EXPORT_DOWNLOAD_AUTODELETE=1`,

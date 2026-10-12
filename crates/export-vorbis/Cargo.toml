@@ -1,0 +1,28 @@
+[package]
+name = "export-vorbis"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+description = "One mono 48 kHz short Vorbis audio packet"
+readme = "README.md"
+publish = false
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[lib]
+path = "src/lib.rs"
+
+[[bench]]
+name = "latency"
+harness = false

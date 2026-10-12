@@ -1,0 +1,430 @@
+use export_audio::{decode, encode, encode_with_seek_table, export, hash, Dedup, Job, Output, Pcm};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+struct CountAlloc;
+
+static ALLOCS: AtomicU64 = AtomicU64::new(0);
+
+unsafe impl GlobalAlloc for CountAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        System.alloc(layout)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        System.dealloc(ptr, layout)
+    }
+}
+
+#[global_allocator]
+static GLOBAL: CountAlloc = CountAlloc;
+
+struct Timed {
+    secs: Vec<f64>,
+    allocs: Vec<u64>,
+}
+
+fn time_once(mut f: impl FnMut()) -> (f64, u64) {
+    ALLOCS.store(0, Ordering::Relaxed);
+    let t0 = Instant::now();
+    f();
+    let dt = t0.elapsed().as_secs_f64();
+    (dt, ALLOCS.load(Ordering::Relaxed))
+}
+
+fn measure(iters: usize, mut f: impl FnMut()) -> Timed {
+    for _ in 0..3 {
+        f();
+    }
+    let mut secs = Vec::with_capacity(iters);
+    let mut allocs = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let (dt, n) = time_once(&mut f);
+        secs.push(dt);
+        allocs.push(n);
+    }
+    secs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    Timed { secs, allocs }
+}
+
+fn pct(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let rank = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+    sorted[rank.min(sorted.len() - 1)]
+}
+
+fn median_u64(values: &[u64]) -> u64 {
+    let mut v = values.to_vec();
+    v.sort_unstable();
+    v[v.len() / 2]
+}
+
+fn report(name: &str, kind: &str, nbytes: u64, timed: &Timed) {
+    let p50 = pct(&timed.secs, 0.50);
+    let p99 = pct(&timed.secs, 0.99);
+    let mb = (nbytes as f64 / 1_000_000.0).max(1e-9);
+    let allocs_per_mb = median_u64(&timed.allocs) as f64 / mb;
+    if p50 >= 1e-6 {
+        let mb_s = (nbytes as f64 / 1_000_000.0) / p50;
+        println!(
+            "{name:16} {kind:4} {mb_s:10.2} MB/s  p50 {p50:.6e} s  p99 {p99:.6e} s  allocs/MB {allocs_per_mb:.2}  bytes {nbytes}"
+        );
+    } else {
+        println!(
+            "{name:16} {kind:4} {:>10} MB/s  p50 {p50:.6e} s  p99 {p99:.6e} s  allocs/MB {allocs_per_mb:.2}  bytes {nbytes}",
+            "n/a"
+        );
+    }
+}
+
+fn fixture() -> Pcm {
+    let n = 1_048_576usize;
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        samples.push((slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767));
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    }
+}
+
+fn stereo_pcm(n: usize) -> Pcm {
+    let mut samples = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767);
+        samples.push(left);
+        samples.push(right);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 2,
+        bits: 16,
+        samples,
+    }
+}
+
+fn stereo_block() -> Pcm {
+    stereo_pcm(4096)
+}
+
+fn aligned_stereo() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767) & !3;
+        let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767) & !3;
+        samples.push(left);
+        samples.push(right);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 2,
+        bits: 16,
+        samples,
+    }
+}
+
+fn aligned_block() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let sample = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        samples.push(sample & !3);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    }
+}
+
+fn mono_wide() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let narrow = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        let low = (i as i32) & 255;
+        samples.push((narrow << 8) + low);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 24,
+        samples,
+    }
+}
+
+fn stereo_wide() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767);
+        let low = (i as i32) & 255;
+        samples.push((left << 8) + low);
+        samples.push((right << 8) + (255 - low));
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 2,
+        bits: 24,
+        samples,
+    }
+}
+
+fn main() {
+    if cfg!(debug_assertions) {
+        eprintln!("refusing timing verdict: debug_assertions is on");
+        std::process::exit(2);
+    }
+    const ITERS: usize = 31;
+    let pcm = fixture();
+    let flac = encode(&pcm).expect("encode fixture");
+    let back = decode(&flac).expect("decode fixture");
+    assert_eq!(back.samples, pcm.samples, "bench fixture is not exact");
+    let flac_len = flac.len() as u64;
+    let pcm_len = (pcm.samples.len() * 2) as u64;
+
+    let sha = measure(ITERS, || {
+        std::hint::black_box(hash(&flac));
+    });
+    report("sha256", "hit", flac_len, &sha);
+
+    let decode_miss = measure(ITERS, || {
+        let mut dedup = Dedup::new();
+        std::hint::black_box(export(&flac, Job::ToWav, &mut dedup).expect("miss"));
+    });
+    report("flac_decode", "miss", flac_len, &decode_miss);
+
+    let mut seeded = Dedup::new();
+    export(&flac, Job::ToWav, &mut seeded).expect("seed");
+    let dedup_hit = measure(ITERS, || {
+        let out = export(&flac, Job::ToWav, &mut seeded).expect("hit");
+        assert!(matches!(out, Output::Duplicate { .. }));
+    });
+    report("dedup", "hit", flac_len, &dedup_hit);
+
+    let encode_miss = measure(ITERS, || {
+        std::hint::black_box(encode(&pcm).expect("encode"));
+    });
+    report("flac_encode", "miss", pcm_len, &encode_miss);
+
+    let mut torn = flac.clone();
+    torn.truncate(torn.len().saturating_sub(1).max(1));
+    let truncated = measure(ITERS, || {
+        std::hint::black_box(decode(&torn).err());
+    });
+    report("truncated", "miss", torn.len() as u64, &truncated);
+
+    let stereo = stereo_block();
+    let stereo_flac = encode(&stereo).expect("encode stereo");
+    let stereo_back = decode(&stereo_flac).expect("decode stereo");
+    assert_eq!(stereo_flac.len(), 7_601);
+    assert_eq!(stereo_back.channels, 2);
+    assert_eq!(stereo_back.bits, 16);
+    for i in 0..4096 {
+        assert_eq!(stereo_back.samples[i * 2], stereo.samples[i * 2], "left");
+        assert_eq!(
+            stereo_back.samples[i * 2 + 1],
+            stereo.samples[i * 2 + 1],
+            "right"
+        );
+    }
+    let stereo_pcm_len = (stereo.samples.len() * 2) as u64;
+    let stereo_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&stereo).expect("encode stereo"));
+    });
+    report("stereo_encode", "miss", stereo_pcm_len, &stereo_encode);
+    let stereo_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&stereo_flac).expect("decode stereo"));
+    });
+    report("stereo_decode", "miss", stereo_flac.len() as u64, &stereo_decode);
+
+    let wide = mono_wide();
+    let wide_flac = encode(&wide).expect("encode 24-bit");
+    let wide_back = decode(&wide_flac).expect("decode 24-bit");
+    assert_eq!(wide_flac.len(), 7_293);
+    assert_eq!(wide_back.bits, 24);
+    assert_eq!(wide_back.channels, 1);
+    assert_eq!(wide_back.samples, wide.samples, "24-bit block is not exact");
+    let wide_pcm_len = (wide.samples.len() * 3) as u64;
+    let wide_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&wide).expect("encode 24-bit"));
+    });
+    report("wide_encode", "miss", wide_pcm_len, &wide_encode);
+    let wide_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&wide_flac).expect("decode 24-bit"));
+    });
+    report("wide_decode", "miss", wide_flac.len() as u64, &wide_decode);
+
+    let wide_stereo = stereo_wide();
+    let wide_stereo_flac = encode(&wide_stereo).expect("encode 24-bit stereo");
+    let wide_stereo_back = decode(&wide_stereo_flac).expect("decode 24-bit stereo");
+    assert_eq!(wide_stereo_flac.len(), 16_025);
+    assert_eq!(wide_stereo_back.bits, 24);
+    assert_eq!(wide_stereo_back.channels, 2);
+    assert_eq!(wide_stereo_back.sample_rate, 44_100);
+    for i in 0..4096 {
+        assert_eq!(
+            wide_stereo_back.samples[i * 2],
+            wide_stereo.samples[i * 2],
+            "left"
+        );
+        assert_eq!(
+            wide_stereo_back.samples[i * 2 + 1],
+            wide_stereo.samples[i * 2 + 1],
+            "right"
+        );
+        assert_ne!(
+            wide_stereo.samples[i * 2],
+            wide_stereo.samples[i * 2 + 1],
+            "channels differ"
+        );
+    }
+    let wide_stereo_pcm = (wide_stereo.samples.len() * 3) as u64;
+    let wide_stereo_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&wide_stereo).expect("encode 24-bit stereo"));
+    });
+    report("wide_stereo_encode", "miss", wide_stereo_pcm, &wide_stereo_encode);
+    let wide_stereo_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&wide_stereo_flac).expect("decode 24-bit stereo"));
+    });
+    report("wide_stereo_decode", "miss", wide_stereo_flac.len() as u64, &wide_stereo_decode);
+
+    let second = stereo_pcm(44_100);
+    let second_flac = encode(&second).expect("encode one second");
+    let second_back = decode(&second_flac).expect("decode one second");
+    assert_eq!(second_flac.len(), 87_272);
+    assert_eq!(second_back.bits, 16);
+    assert_eq!(second_back.channels, 2);
+    assert_eq!(second_back.sample_rate, 44_100);
+    assert_eq!(second_back.samples.len(), 88_200);
+    let mut channels_differ = false;
+    for i in 0..44_100 {
+        assert_eq!(second_back.samples[i * 2], second.samples[i * 2], "left");
+        assert_eq!(second_back.samples[i * 2 + 1], second.samples[i * 2 + 1], "right");
+        if second.samples[i * 2] != second.samples[i * 2 + 1] {
+            channels_differ = true;
+        }
+    }
+    assert!(channels_differ, "channels are copies");
+    let second_pcm_len = (second.samples.len() * 2) as u64;
+    let second_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&second).expect("encode one second"));
+    });
+    report("second_encode", "miss", second_pcm_len, &second_encode);
+    let second_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&second_flac).expect("decode one second"));
+    });
+    report("second_decode", "miss", second_flac.len() as u64, &second_decode);
+
+    let sought = encode_with_seek_table(&second).expect("encode one second with seek table");
+    let sought_back = decode(&sought).expect("decode seek table file");
+    assert_eq!(sought_back.samples, second.samples, "seek table file is not exact");
+    assert_eq!(sought_back.channels, 2);
+    let sought_encode = measure(ITERS, || {
+        std::hint::black_box(encode_with_seek_table(&second).expect("encode seek table"));
+    });
+    report("second_seek_encode", "miss", second_pcm_len, &sought_encode);
+    println!("second_seek_bytes {}", sought.len());
+
+    assert_eq!(flac.len(), 948_202);
+    let mono_sought = encode_with_seek_table(&pcm).expect("encode mono with seek table");
+    let mono_sought_back = decode(&mono_sought).expect("decode mono seek table");
+    assert_eq!(mono_sought_back.samples, pcm.samples, "mono seek table file is not exact");
+    assert_eq!(mono_sought_back.channels, 1);
+    assert_eq!(mono_sought.len(), 952_814);
+    let mono_sought_encode = measure(ITERS, || {
+        std::hint::black_box(encode_with_seek_table(&pcm).expect("encode mono seek table"));
+    });
+    report("mono_seek_encode", "miss", pcm_len, &mono_sought_encode);
+    println!("mono_seek_bytes {}", mono_sought.len());
+
+    let aligned = aligned_block();
+    let aligned_flac = encode(&aligned).expect("encode aligned");
+    let aligned_back = decode(&aligned_flac).expect("decode aligned");
+    assert_eq!(aligned_back.samples, aligned.samples, "aligned block is not exact");
+    assert_eq!(aligned_back.channels, 1);
+    assert_eq!(aligned_back.bits, 16);
+    assert_eq!(aligned_flac.len(), 2_215);
+    assert!(aligned.samples.iter().all(|s| s % 4 == 0));
+    assert!(aligned.samples.iter().any(|s| s % 8 != 0));
+    let aligned_pcm_len = (aligned.samples.len() * 2) as u64;
+    let aligned_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&aligned).expect("encode aligned"));
+    });
+    report("aligned_encode", "miss", aligned_pcm_len, &aligned_encode);
+    println!("aligned_bytes {}", aligned_flac.len());
+    let aligned_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&aligned_flac).expect("decode aligned"));
+    });
+    report(
+        "aligned_decode",
+        "miss",
+        aligned_flac.len() as u64,
+        &aligned_decode,
+    );
+
+    let aligned_st = aligned_stereo();
+    let aligned_st_flac = encode(&aligned_st).expect("encode aligned stereo");
+    let aligned_st_back = decode(&aligned_st_flac).expect("decode aligned stereo");
+    assert_eq!(aligned_st_flac.len(), 5_594);
+    assert_eq!(aligned_st_back.samples, aligned_st.samples);
+    assert_eq!(aligned_st_back.channels, 2);
+    let mut channels_differ = false;
+    for i in 0..4096 {
+        assert_eq!(aligned_st.samples[i * 2] % 4, 0);
+        assert_eq!(aligned_st.samples[i * 2 + 1] % 4, 0);
+        assert_eq!(aligned_st_back.samples[i * 2], aligned_st.samples[i * 2]);
+        assert_eq!(
+            aligned_st_back.samples[i * 2 + 1],
+            aligned_st.samples[i * 2 + 1]
+        );
+        if aligned_st.samples[i * 2] != aligned_st.samples[i * 2 + 1] {
+            channels_differ = true;
+        }
+    }
+    assert!(channels_differ);
+    let aligned_st_pcm = (aligned_st.samples.len() * 2) as u64;
+    let aligned_st_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&aligned_st).expect("encode aligned stereo"));
+    });
+    report("aligned_stereo_encode", "miss", aligned_st_pcm, &aligned_st_encode);
+    println!("aligned_stereo_bytes {}", aligned_st_flac.len());
+    let aligned_st_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&aligned_st_flac).expect("decode aligned stereo"));
+    });
+    report(
+        "aligned_stereo_decode",
+        "miss",
+        aligned_st_flac.len() as u64,
+        &aligned_st_decode,
+    );
+}

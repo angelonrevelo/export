@@ -1,0 +1,56 @@
+[package]
+name = "export-gif"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.74"
+publish = false
+description = "GIF LZW decode and encode. No dependencies."
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "quantize"
+harness = false
+
+[[bench]]
+name = "quantize_vga"
+harness = false
+
+[[bench]]
+name = "quantize_anim"
+harness = false
+
+[[bench]]
+name = "quantize_anim_vga"
+harness = false
+
+[[bench]]
+name = "quantize_anim8"
+harness = false
+
+[[bench]]
+name = "quantize_anim16"
+harness = false
+
+[[bench]]
+name = "quantize_anim32"
+harness = false
+
+[[bench]]
+name = "quantize_anim64"
+harness = false
