@@ -599,4 +599,48 @@ fn main() {
         decoded4_hd.len(),
         decode_webp(&anim4_hd).is_err(),
     );
+
+    // Appended 1280×720 two-frame animation. The rows above are unchanged.
+    let wide_w = 1280u32;
+    let wide_h = 720u32;
+    let hd720 = gradient(wide_w, wide_h);
+    let mut shifted = hd720.pixels.clone();
+    for px in shifted.chunks_exact_mut(3) {
+        px[0] = px[0].wrapping_add(80);
+    }
+    let pair720 = [
+        hd720,
+        Raster::new(wide_w, wide_h, 3, shifted).unwrap(),
+    ];
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&pair720).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&pair720)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim720 = encode_webp_animation(&pair720).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim720_pixels = (wide_w as f64) * (wide_h as f64) * 2.0;
+    println!(
+        "webp_anim1280_encode {wide_w}x{wide_h} frames=2 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim720.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim720_pixels * 3.0, p50),
+        mb_s(anim720_pixels * 3.0, p99),
+        mb_s(anim720.len() as f64, p50),
+        allocs as f64 / (anim720_pixels / 1_000_000.0),
+    );
+    let decoded720 = decode_webp_animation(&anim720).unwrap();
+    let still720_a = decode_webp(&encode_webp_lossy(&pair720[0]).unwrap()).unwrap();
+    let still720_b = decode_webp(&encode_webp_lossy(&pair720[1]).unwrap()).unwrap();
+    let both720 = decoded720.len() == 2
+        && decoded720[0].pixels == still720_a.pixels
+        && decoded720[1].pixels == still720_b.pixels;
+    println!(
+        "webp_anim1280_decode frames={} both_frames={both720} still_match={both720} single_raster_errors={}",
+        decoded720.len(),
+        decode_webp(&anim720).is_err(),
+    );
 }
