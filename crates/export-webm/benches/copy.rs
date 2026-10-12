@@ -4,8 +4,8 @@
 
 use export_webm::{
     large_sample_file, opus_vorbis_webm, opus_webm, sample_file, stream_copy, vorbis_webm,
-    vp8_4096_webm, vp8_460800_webm, vp8_opus_webm, vp8_two_webm, vp8_webm, vp9_4096_webm, vp9_webm,
-    Error,
+    vp8_4096_webm, vp8_460800_opus_webm, vp8_460800_webm, vp8_opus_webm, vp8_two_webm, vp8_webm,
+    vp9_4096_webm, vp9_webm, Error,
 };
 use std::time::Instant;
 
@@ -22,6 +22,7 @@ fn main() {
     let vorbis = vorbis_webm();
     let opus_vorbis = opus_vorbis_webm();
     let vp8_opus = vp8_opus_webm();
+    let vp8_460800_opus = vp8_460800_opus_webm();
     let mut truncated = small.clone();
     truncated.truncate(truncated.len() / 2);
 
@@ -41,6 +42,9 @@ fn main() {
         .expect("opus and vorbis copy")
         .bytes;
     let vp8_opus_out = stream_copy(&vp8_opus).expect("vp8 and opus copy").bytes;
+    let vp8_460800_opus_out = stream_copy(&vp8_460800_opus)
+        .expect("460800-byte vp8 and opus copy")
+        .bytes;
     assert_eq!(
         stream_copy(&truncated).expect_err("truncated fails"),
         Error::Truncated
@@ -62,6 +66,7 @@ fn main() {
         let _ = stream_copy(vorbis);
         let _ = stream_copy(&opus_vorbis);
         let _ = stream_copy(&vp8_opus);
+        let _ = stream_copy(&vp8_460800_opus);
         let _ = stream_copy(&truncated);
     }
 
@@ -77,6 +82,7 @@ fn main() {
     let vorbis_ns = time_copy(vorbis, vorbis_out.len(), N_SMALL);
     let opus_vorbis_ns = time_copy(&opus_vorbis, opus_vorbis_out.len(), N_SMALL);
     let vp8_opus_ns = time_copy(&vp8_opus, vp8_opus_out.len(), N_SMALL);
+    let vp8_460800_opus_ns = time_copy(&vp8_460800_opus, vp8_460800_opus_out.len(), N_LARGE);
     let truncated_ns = time_truncated(&truncated, N_SMALL);
 
     println!("threading=off");
@@ -97,6 +103,12 @@ fn main() {
         &opus_vorbis_ns,
     );
     print_copy_row("vp8_opus", &vp8_opus, &vp8_opus_out, &vp8_opus_ns);
+    print_copy_row(
+        "vp8_460800_opus",
+        &vp8_460800_opus,
+        &vp8_460800_opus_out,
+        &vp8_460800_opus_ns,
+    );
     print_truncated_row(&truncated, &truncated_ns);
 }
 

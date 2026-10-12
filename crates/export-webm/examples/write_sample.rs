@@ -7,7 +7,7 @@ fn main() -> ExitCode {
         Some(path) => path,
         None => {
             eprintln!(
-                "usage: write_sample OUTPUT.webm [2x2|large|vp8-4096|vp8-460800|vp9-4096|opus-vorbis|vp8-opus]"
+                "usage: write_sample OUTPUT.webm [2x2|large|vp8-4096|vp8-460800|vp9-4096|opus-vorbis|vp8-opus|vp8-460800-opus]"
             );
             return ExitCode::from(2);
         }
@@ -21,9 +21,10 @@ fn main() -> ExitCode {
         "vp9-4096" => export_webm::vp9_4096_webm(),
         "opus-vorbis" => export_webm::opus_vorbis_webm(),
         "vp8-opus" => export_webm::vp8_opus_webm(),
+        "vp8-460800-opus" => export_webm::vp8_460800_opus_webm(),
         _ => {
             eprintln!(
-                "usage: write_sample OUTPUT.webm [2x2|large|vp8-4096|vp8-460800|vp9-4096|opus-vorbis|vp8-opus]"
+                "usage: write_sample OUTPUT.webm [2x2|large|vp8-4096|vp8-460800|vp9-4096|opus-vorbis|vp8-opus|vp8-460800-opus]"
             );
             return ExitCode::from(2);
         }

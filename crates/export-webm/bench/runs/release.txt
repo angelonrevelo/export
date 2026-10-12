@@ -54,3 +54,8 @@ row=opus_vorbis samples=2000 input_bytes=4185 output_bytes=4185 p50_ns=16381 p99
 # Both payloads are the existing track bytes. Neither is decoded.
 # p50 and p99 are this host, threading off, 2000 samples. Not a speedup claim.
 row=vp8_opus samples=2000 input_bytes=546 output_bytes=546 p50_ns=4781 p99_ns=8172 mb_s=114.202
+
+# 460800-byte VP8 payload and the existing Opus packets in one file.
+# ffmpeg names `Video: vp8` and `Audio: opus`. Neither payload is decoded.
+# p50 and p99 are this host, threading off, 400 samples. Not a speedup claim.
+row=vp8_460800_opus samples=400 input_bytes=461319 output_bytes=461319 p50_ns=2064833 p99_ns=2401250 mb_s=223.417
