@@ -155,6 +155,7 @@ fn main() {
     );
     xls_percentiles();
     xls_two_number_percentiles();
+    xls_column_percentiles();
 }
 
 fn nearest_rank(sorted: &[u128], pct: usize) -> u128 {
@@ -214,4 +215,31 @@ fn xls_two_number_percentiles() {
     let p99 = nearest_rank(&samples, 99);
     println!("xls_two_numbers values=42 cat 7");
     println!("xls_two_numbers samples={samples_n} p50_ns={p50} p99_ns={p99}");
+}
+
+fn xls_column_percentiles() {
+    let file = export_sheet::generated_biff_xls_numeric_column();
+    let (out, stats) =
+        export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("numeric column xls is BIFF");
+    assert_eq!(stats.rows, 1000);
+    assert!(out.starts_with(b"0\n") && out.ends_with(b"999\n"));
+    let samples_n = 10_000;
+    for _ in 0..200 {
+        let _ = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default());
+    }
+    let mut samples = Vec::with_capacity(samples_n);
+    for _ in 0..samples_n {
+        let started = Instant::now();
+        let got = export_sheet::convert_bytes(Format::Xls, Format::Csv, &file, Options::default())
+            .expect("numeric column xls is BIFF");
+        let ns = started.elapsed().as_nanos();
+        assert_eq!(got.0, out);
+        samples.push(ns);
+    }
+    samples.sort_unstable();
+    let p50 = nearest_rank(&samples, 50);
+    let p99 = nearest_rank(&samples, 99);
+    println!("xls_numeric_column rows=1000 file_bytes={}", file.len());
+    println!("xls_numeric_column samples={samples_n} p50_ns={p50} p99_ns={p99}");
 }

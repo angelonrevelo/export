@@ -52,6 +52,17 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 | p50 | 603 ns |
 | p99 | 780 ns |
 
+A third generated file is one sheet, 1 000 rows, one numeric column, values 0
+through 999. There is no formula record. The file is **19 968 bytes**.
+`xls → csv` writes 1 000 lines.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 138 342 ns |
+| p99 | 213 695 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is

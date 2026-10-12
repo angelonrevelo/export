@@ -1,5 +1,6 @@
 use export_sheet::{
-    convert_bytes, generated_biff_xls, generated_biff_xls_two_numbers, Format, Options,
+    convert_bytes, generated_biff_xls, generated_biff_xls_numeric_column,
+    generated_biff_xls_two_numbers, Format, Options,
 };
 
 #[test]
@@ -28,6 +29,17 @@ fn two_numbers_and_the_same_text() {
     assert_eq!(stats.rows, 1);
     assert_eq!(stats.lossy, 0);
     assert_eq!(csv, b"42,cat,7\n");
+}
+
+#[test]
+fn one_thousand_numeric_rows() {
+    let file = generated_biff_xls_numeric_column();
+    let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
+    assert_eq!(stats.rows, 1000);
+    assert_eq!(stats.lossy, 0);
+    assert!(csv.starts_with(b"0\n"));
+    assert!(csv.ends_with(b"999\n"));
+    assert_eq!(csv.iter().filter(|b| **b == b'\n').count(), 1000);
 }
 
 #[test]

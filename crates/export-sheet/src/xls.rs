@@ -35,6 +35,11 @@ pub fn generated_biff_xls_two_numbers() -> Vec<u8> {
     wrap_ole(&workbook_two_numbers())
 }
 
+/// One thousand rows, column A only, values 0 through 999. No formulas.
+pub fn generated_biff_xls_numeric_column() -> Vec<u8> {
+    wrap_ole_regular(&workbook_numeric_column())
+}
+
 pub(crate) fn to_delim<R: BufRead, W: Write>(
     mut input: R,
     output: &mut W,
@@ -93,6 +98,28 @@ fn workbook_two_numbers() -> Vec<u8> {
     push_rec(&mut out, 0x0203, &number_cell(0, 0, NUMBER_VALUE));
     push_rec(&mut out, 0x00FD, &labelsst_cell(0, 1, 0));
     push_rec(&mut out, 0x0203, &number_cell(0, 2, 7.0));
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
+fn workbook_numeric_column() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = [0u8; 14];
+    dims[4..8].copy_from_slice(&1000u32.to_le_bytes());
+    dims[10..12].copy_from_slice(&1u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    for row in 0..1000u16 {
+        push_rec(&mut out, 0x0203, &number_cell(row, 0, f64::from(row)));
+    }
     push_rec(&mut out, 0x000A, &[]);
     out
 }
@@ -224,6 +251,61 @@ fn wrap_ole(workbook: &[u8]) -> Vec<u8> {
         put_u32(&mut file, minifat + i * 4, next);
     }
     file[2048..2048 + workbook.len()].copy_from_slice(workbook);
+    file
+}
+
+/// A Workbook stream of at least 4096 bytes lives in regular FAT sectors.
+/// The small generated files stay on the mini-stream writer above.
+fn wrap_ole_regular(workbook: &[u8]) -> Vec<u8> {
+    let data_sectors = workbook.len().div_ceil(512);
+    let total_sectors = 2 + data_sectors;
+    let mut file = vec![0u8; 512 * (1 + total_sectors)];
+    file[..8].copy_from_slice(&OLE_MAGIC);
+    put_u16(&mut file, 0x18, 0x003E);
+    put_u16(&mut file, 0x1A, 0x0003);
+    put_u16(&mut file, 0x1C, 0xFFFE);
+    put_u16(&mut file, 0x1E, 9);
+    put_u16(&mut file, 0x20, 6);
+    put_u32(&mut file, 0x2C, 1);
+    put_u32(&mut file, 0x30, 1);
+    put_u32(&mut file, 0x38, 4096);
+    put_u32(&mut file, 0x3C, ENDOFCHAIN);
+    put_u32(&mut file, 0x40, 0);
+    put_u32(&mut file, 0x44, ENDOFCHAIN);
+    put_u32(&mut file, 0x4C, 0);
+    for i in 1..109 {
+        put_u32(&mut file, 0x4C + i * 4, FREESECT);
+    }
+
+    let fat = 512;
+    for i in 0..128 {
+        put_u32(&mut file, fat + i * 4, FREESECT);
+    }
+    put_u32(&mut file, fat, FATSECT);
+    put_u32(&mut file, fat + 4, ENDOFCHAIN);
+    for i in 0..data_sectors {
+        let sid = 2 + i;
+        let next = if i + 1 == data_sectors {
+            ENDOFCHAIN
+        } else {
+            (sid + 1) as u32
+        };
+        put_u32(&mut file, fat + sid * 4, next);
+    }
+
+    let dir = 1024;
+    write_dir(&mut file[dir..dir + 128], "Root Entry", 5, 1, ENDOFCHAIN, 0);
+    write_dir(
+        &mut file[dir + 128..dir + 256],
+        "Workbook",
+        2,
+        NOSTREAM,
+        2,
+        workbook.len() as u64,
+    );
+    free_dir(&mut file[dir + 256..dir + 384]);
+    free_dir(&mut file[dir + 384..dir + 512]);
+    file[1536..1536 + workbook.len()].copy_from_slice(workbook);
     file
 }
 
@@ -671,6 +753,30 @@ mod tests {
         let text = record(&stream, 0x00FD);
         assert_eq!(u16::from_le_bytes(text[2..4].try_into().unwrap()), 1);
         assert_eq!(&record(&stream, 0x00FC)[8..], &[3, 0, 0, b'c', b'a', b't']);
+    }
+
+    #[test]
+    fn numeric_column_is_one_thousand_numbers_and_no_formula() {
+        let stream = workbook_numeric_column();
+        assert!(stream.len() >= 4096);
+        assert_eq!(
+            &stream[..8],
+            &[0x09, 0x08, 0x10, 0x00, 0x00, 0x06, 0x05, 0x00]
+        );
+        assert!(records(&stream, 0x0006).is_empty());
+        let numbers = records(&stream, 0x0203);
+        assert_eq!(numbers.len(), 1000);
+        assert_eq!(
+            f64::from_le_bytes(numbers[0][6..14].try_into().unwrap()),
+            0.0
+        );
+        assert_eq!(
+            f64::from_le_bytes(numbers[999][6..14].try_into().unwrap()),
+            999.0
+        );
+        let file = generated_biff_xls_numeric_column();
+        assert_eq!(&file[..8], &OLE_MAGIC);
+        assert!(file.len() > stream.len());
     }
 
     fn records(stream: &[u8], op: u16) -> Vec<&[u8]> {
