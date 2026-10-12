@@ -1,3 +1,8 @@
+/// The 349,461-byte 1280×720 Annex B pair: the level 3.1 I-frame, then one zero-motion P-frame.
+///
+/// Copied as bytes. This crate does not link an H.264 encoder.
+pub static PAIR_1280X720: &[u8] = include_bytes!("ip_1280x720.annexb");
+
 /// The 232,774-byte 1280×720 Annex B I-frame. Level 3.1.
 ///
 /// Copied as bytes. This crate does not link an H.264 encoder.

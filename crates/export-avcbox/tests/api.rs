@@ -1,6 +1,6 @@
 use export_avcbox::{
     box_iframe, Error, Options, EIGHT_320X240, FOUR_320X240, IFRAME_1280X720, IFRAME_160X160,
-    IFRAME_320X240, IFRAME_32X32, PAIR_320X240, SEQUENCE_160X160,
+    IFRAME_320X240, IFRAME_32X32, PAIR_1280X720, PAIR_320X240, SEQUENCE_160X160,
 };
 
 fn opts() -> Options {
@@ -202,6 +202,28 @@ fn hd_iframe_is_level_31() {
     assert_eq!(box_iframe(EIGHT_320X240, &opts()).unwrap().mp4.len(), 30985);
     let again = box_iframe(IFRAME_1280X720, &opts()).unwrap();
     assert_eq!(again.mp4, boxed.mp4);
+}
+
+#[test]
+fn hd_pair_is_two_level_31_samples() {
+    assert_eq!(PAIR_1280X720.len(), 349461);
+    assert!(PAIR_1280X720.starts_with(IFRAME_1280X720));
+    assert!(PAIR_1280X720
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x1f]));
+    let boxed = box_iframe(PAIR_1280X720, &opts()).unwrap();
+    assert_eq!(boxed.width, 1280);
+    assert_eq!(boxed.height, 720);
+    assert_eq!(boxed.samples, 2);
+    assert_eq!(boxed.mp4.len(), 350095);
+    let prefix = box_iframe(&PAIR_1280X720[..IFRAME_1280X720.len()], &opts()).unwrap();
+    assert_eq!(prefix.mp4.len(), 233390);
+    assert_eq!(prefix.samples, 1);
+    assert_eq!(box_iframe(EIGHT_320X240, &opts()).unwrap().mp4.len(), 30985);
+    assert_eq!(
+        box_iframe(&PAIR_1280X720[..PAIR_1280X720.len() - 1], &opts()).unwrap_err(),
+        Error::Truncated
+    );
 }
 
 #[test]

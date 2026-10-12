@@ -17,7 +17,7 @@ mod walk;
 pub use error::Error;
 pub use fixture::{
     EIGHT_320X240, FOUR_320X240, IFRAME_1280X720, IFRAME_160X160, IFRAME_320X240, IFRAME_32X32,
-    PAIR_320X240, SEQUENCE_160X160,
+    PAIR_1280X720, PAIR_320X240, SEQUENCE_160X160,
 };
 
 /// Encode settings for the boxer. Threading is off: `threads` must be 1.

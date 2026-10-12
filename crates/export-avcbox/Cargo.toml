@@ -52,3 +52,7 @@ path = "src/bin/avcbox320eight.rs"
 [[bin]]
 name = "avcbox720"
 path = "src/bin/avcbox720.rs"
+
+[[bin]]
+name = "avcbox720pair"
+path = "src/bin/avcbox720pair.rs"

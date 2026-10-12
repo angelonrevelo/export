@@ -85,3 +85,13 @@ Same release profile and one thread. The input is the 232,774-byte 1280×720 Con
 - release p50: 22,068 µs, p99: 24,769 µs on the run taken immediately after linking. Four later runs on that binary were p50 22,346–24,800 µs and p99 24,512–26,990 µs
 
 `scripts/check-identify-720.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 1280×720, level 3.1, one frame.
+
+## 1280×720 and one P-frame
+
+Same release profile and one thread. The input is the 349,461-byte Annex B file: the 232,774-byte level 3.1 I-frame, then one zero-motion P-frame, copied in as bytes. Two `avc1` samples. 200 calls after 20 warmup.
+
+- input: 349,461 bytes
+- output: 350,095 bytes
+- release p50: 48,312 µs, p99: 52,859 µs on the run taken immediately after linking. Four later runs on that binary were p50 48,397–49,320 µs and p99 54,825–57,840 µs
+
+`scripts/check-identify-720pair.sh` may run ffmpeg only to identify that file. On this machine ffmpeg reported `Video: h264` (Constrained Baseline), 1280×720, level 3.1, and decoded 2 frames.
