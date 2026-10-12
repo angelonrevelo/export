@@ -1704,6 +1704,38 @@ mod tests {
         stereo_pcm(4096)
     }
 
+    fn aligned_block() -> Pcm {
+        let n = 4096usize;
+        let mut samples = Vec::with_capacity(n);
+        for i in 0..n {
+            let ramp = ((i % 256) as i32) - 128;
+            let slow = ((i / 64) % 512) as i32 - 256;
+            let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+            let sample = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+            samples.push(sample & !3);
+        }
+        Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples,
+        }
+    }
+
+    #[test]
+    fn aligned_block_round_trips() {
+        let pcm = aligned_block();
+        assert_eq!(pcm.samples.len(), 4096);
+        assert!(pcm.samples.iter().all(|s| s % 4 == 0));
+        assert!(pcm.samples.iter().any(|s| s % 8 != 0));
+        let bytes = encode(&pcm).unwrap();
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 1);
+        assert_eq!(back.bits, 16);
+        assert_eq!(back.sample_rate, 44_100);
+        assert_eq!(back.samples, pcm.samples);
+    }
+
     fn mono_wide() -> Pcm {
         let n = 4096usize;
         let mut samples = Vec::with_capacity(n);

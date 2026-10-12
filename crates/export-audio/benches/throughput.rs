@@ -121,6 +121,24 @@ fn stereo_block() -> Pcm {
     stereo_pcm(4096)
 }
 
+fn aligned_block() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let sample = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        samples.push(sample & !3);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 1,
+        bits: 16,
+        samples,
+    }
+}
+
 fn mono_wide() -> Pcm {
     let n = 4096usize;
     let mut samples = Vec::with_capacity(n);
@@ -328,4 +346,19 @@ fn main() {
     });
     report("mono_seek_encode", "miss", pcm_len, &mono_sought_encode);
     println!("mono_seek_bytes {}", mono_sought.len());
+
+    let aligned = aligned_block();
+    let aligned_flac = encode(&aligned).expect("encode aligned");
+    let aligned_back = decode(&aligned_flac).expect("decode aligned");
+    assert_eq!(aligned_back.samples, aligned.samples, "aligned block is not exact");
+    assert_eq!(aligned_back.channels, 1);
+    assert_eq!(aligned_back.bits, 16);
+    assert!(aligned.samples.iter().all(|s| s % 4 == 0));
+    assert!(aligned.samples.iter().any(|s| s % 8 != 0));
+    let aligned_pcm_len = (aligned.samples.len() * 2) as u64;
+    let aligned_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&aligned).expect("encode aligned"));
+    });
+    report("aligned_encode", "miss", aligned_pcm_len, &aligned_encode);
+    println!("aligned_bytes {}", aligned_flac.len());
 }
