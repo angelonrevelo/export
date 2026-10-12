@@ -29,6 +29,8 @@
 //! The existing reverse merge of the two-page text file is 2 pages, 1168 bytes
 //! in, and 846 bytes out. Release merge of that file is 11850 ns p50 and
 //! 13312 ns p99.
+//! A four-page reverse merge built the same way is 4 pages, 2336 bytes in, and
+//! 1377 bytes out. Release merge of that file is 14422 ns p50 and 15575 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
 //! page, the gray page, or the CMYK page, and fonts other than the
