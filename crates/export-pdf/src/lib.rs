@@ -20,6 +20,8 @@
 //! page is 9985 ns p50 and 10489 ns p99.
 //! A 32×32 DeviceCMYK page is 4747 bytes in and out. Release split of that
 //! page is 15051 ns p50 and 17352 ns p99.
+//! A 64×64 DeviceCMYK page is 17037 bytes in and out. Release split of that
+//! page is 15295 ns p50 and 16842 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
 //! page, the gray page, or the CMYK page, and fonts other than the
@@ -58,7 +60,7 @@ pub fn gray_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Erro
 }
 
 /// Largest edge, in pixels, of the one uncompressed CMYK page this crate keeps.
-pub const CMYK_EDGE: u32 = 32;
+pub const CMYK_EDGE: u32 = 64;
 
 /// One classic-xref page holding one uncompressed 8-bit DeviceCMYK image.
 ///
