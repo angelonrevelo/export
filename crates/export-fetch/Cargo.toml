@@ -24,3 +24,7 @@ path = "src/bin/download_bench.rs"
 [[bin]]
 name = "pair_bench"
 path = "src/bin/pair_bench.rs"
+
+[[bin]]
+name = "quad_bench"
+path = "src/bin/quad_bench.rs"
