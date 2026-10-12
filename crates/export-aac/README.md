@@ -206,6 +206,24 @@ Same profile, 200 calls of this frame only. Not a throughput number for a song.
 | --- | --- | --- | --- |
 | encode | 5.608 ms (5607668 ns) | 6.315 ms (6314886 ns) | 63 |
 
+## Stereo flush, release
+
+The flush is not another sine. Its left window starts with the fourth frame's
+PCM and ends in silence. Right stays silence. Same long sine window. Mid-side
+stereo stays off. Not SBR or parametric stereo, and not a song encoder.
+
+Overlap-add against the fourth stereo frame emits that frame's left sine.
+Max abs error versus that delayed sine is 0.0025660098. Right peak is 0.
+Host FFmpeg 6.1.1 decodes the five-frame ADTS file as AAC-LC, 44100 Hz,
+stereo, 5120 samples per channel. The flush hop matches this error and a
+right peak of 0.
+
+Same profile, 200 calls of this frame only. Not a throughput number for a song.
+
+| | p50 | p99 | output bytes |
+| --- | --- | --- | --- |
+| encode | 6.242 ms (6242023 ns) | 7.708 ms (7708169 ns) | 949 |
+
 ## Build
 
 ```

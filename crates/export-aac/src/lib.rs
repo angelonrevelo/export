@@ -17,10 +17,11 @@ mod mdct;
 
 pub use codec::{
     decode_flush_frame, decode_fourth_frame, decode_fourth_stereo_frame, decode_frame,
-    decode_frame_with_tail, decode_second_frame, decode_second_stereo_frame, decode_stereo_frame,
-    decode_third_frame, decode_third_stereo_frame, encode_flush_frame, encode_fourth_frame,
-    encode_fourth_stereo_frame, encode_frame, encode_frame_following, encode_second_frame,
-    encode_second_stereo_frame, encode_stereo_frame, encode_stereo_frame_following,
+    decode_frame_with_tail, decode_second_frame, decode_second_stereo_frame,
+    decode_stereo_flush_frame, decode_stereo_frame, decode_third_frame, decode_third_stereo_frame,
+    encode_flush_frame, encode_fourth_frame, encode_fourth_stereo_frame, encode_frame,
+    encode_frame_following, encode_second_frame, encode_second_stereo_frame,
+    encode_stereo_flush_frame, encode_stereo_frame, encode_stereo_frame_following,
     encode_third_frame, encode_third_stereo_frame, overlap_tail_after_third, Error, OverlapTail,
     StereoPcm,
 };
