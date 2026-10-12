@@ -45,7 +45,7 @@ pub use ppt::{
     ppt_four_text_document, ppt_text_document, ppt_text_indexed_document, ppt_text_nibble_document,
     ppt_text_picture_document, ppt_three_text_document, ppt_two_text_document,
     ppt_two_text_indexed_document, ppt_text_two_indexed_document, ppt_text_three_indexed_document,
-    ppt_text_four_indexed_document, ppt_text_five_indexed_document,
+    ppt_text_four_indexed_document, ppt_text_five_indexed_document, ppt_text_six_indexed_document,
 };
 pub use pptx::{pptx_raster_slide, pptx_raster_stored_pdf};
 pub use zip::{pack_deflated, pack_stored};
