@@ -1,4 +1,4 @@
-//! epub to HTML when the spine is one or two XHTML files.
+//! epub to HTML when the spine is one, two, or three XHTML files.
 //! Those files are copied in spine order. Any other package stays a miss.
 //! Pandoc is not called.
 
@@ -112,7 +112,7 @@ fn container_opf<R: Read + Seek>(
 }
 
 fn spine_shape() -> Error {
-    Error::new("spine is not one or two xhtml files")
+    Error::new("spine is not one, two, or three xhtml files")
 }
 
 fn spine_hrefs<R: Read + Seek>(
@@ -133,7 +133,7 @@ fn spine_hrefs<R: Read + Seek>(
         refs: Vec::new(),
     };
     xml::pull(&mut reader, &mut sink)?;
-    if !(1..=2).contains(&sink.refs.len()) {
+    if !(1..=3).contains(&sink.refs.len()) {
         return Err(spine_shape());
     }
     let mut hrefs = Vec::new();
@@ -399,9 +399,46 @@ mod tests {
     }
 
     #[test]
-    fn three_spine_items_stay_a_miss() {
-        let opf = two_opf(
+    fn three_xhtml_files_are_copied_in_spine_order() {
+        let first = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>One</p></body></html>";
+        let second = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Two</p></body></html>";
+        let third = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Three</p></body></html>";
+        let forward = two_opf(
             "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>\n    <itemref idref=\"more\"/>",
+        );
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", forward.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+            ("OEBPS/more.xhtml", third),
+        ]);
+        let mut expect = first.to_vec();
+        expect.extend_from_slice(second);
+        expect.extend_from_slice(third);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+        let reverse = two_opf(
+            "<itemref idref=\"more\"/>\n    <itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>",
+        );
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", reverse.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+            ("OEBPS/more.xhtml", third),
+        ]);
+        let mut expect = third.to_vec();
+        expect.extend_from_slice(first);
+        expect.extend_from_slice(second);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+    }
+
+    #[test]
+    fn four_spine_items_stay_a_miss() {
+        let opf = two_opf(
+            "<itemref idref=\"chap\"/>\n    <itemref idref=\"next\"/>\n    <itemref idref=\"more\"/>\n    <itemref idref=\"tail\"/>",
         );
         let bytes = pack_stored(&[
             ("mimetype", b"application/epub+zip"),
@@ -419,7 +456,7 @@ mod tests {
         ]);
         let err = html_of(&bytes).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{err}");
-        assert!(err.message.contains("not"), "{err}");
+        assert!(err.message.contains("not one, two, or three"), "{err}");
         assert!(
             err.message.contains(&format!("input_b={}", bytes.len())),
             "{err}"
