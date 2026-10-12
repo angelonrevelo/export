@@ -380,7 +380,9 @@ def main() -> int:
 
 def check_stereo(tmp_path: Path) -> int:
     packet_path = tmp_path / "stereo.opus"
+    expected_path = tmp_path / "stereo.pcm"
     ogg_path = tmp_path / "stereo.ogg"
+    decoded_path = tmp_path / "stereo-ffmpeg.pcm"
     subprocess.run(
         [
             "cargo",
@@ -391,30 +393,75 @@ def check_stereo(tmp_path: Path) -> int:
             "--",
             "stereo",
             str(packet_path),
+            str(expected_path),
         ],
         cwd=CRATE,
         check=True,
     )
     packet = packet_path.read_bytes()
     ogg_path.write_bytes(opus_ogg(packet, channels=2))
-    result = subprocess.run(
+    probe = subprocess.run(
         ["ffmpeg", "-hide_banner", "-i", str(ogg_path), "-f", "null", "-"],
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
+    if probe.returncode != 0:
+        sys.stderr.write(probe.stderr)
         print("ffmpeg could not read the stereo packet", file=sys.stderr)
-        print("stereo stays unsupported; not a stereo encoder", file=sys.stderr)
         return 1
     audio = next(
-        (line.strip() for line in result.stderr.splitlines() if "Audio: opus" in line),
+        (line.strip() for line in probe.stderr.splitlines() if "Audio: opus" in line),
         "",
     )
     print(f"stereo ffmpeg {audio} packet_bytes={len(packet)}")
     if "stereo" not in audio or "48000 Hz" not in audio:
-        print("stereo stays unsupported; not a stereo encoder", file=sys.stderr)
+        print("ffmpeg did not report two channels", file=sys.stderr)
         return 1
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(ogg_path),
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(decoded_path),
+        ],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr.decode("utf-8", "replace"))
+        print("ffmpeg could not decode the stereo packet", file=sys.stderr)
+        return 1
+    expected = pcm_samples(expected_path.read_bytes())
+    got = pcm_samples(decoded_path.read_bytes())
+    if got != expected:
+        print(
+            f"stereo sample mismatch: ffmpeg={len(got)} crate={len(expected)}",
+            file=sys.stderr,
+        )
+        return 1
+    if len(got) != 1920 or len(got) % 2 != 0:
+        print(f"stereo sample count {len(got)}", file=sys.stderr)
+        return 1
+    left = got[0::2]
+    right = got[1::2]
+    left_rms, left_peak, left_onset = frame_stats(left)
+    right_rms, right_peak, right_onset = frame_stats(right)
+    print(
+        f"stereo ffmpeg matched interleaved={len(got)} channels=2 "
+        f"left={len(left)} right={len(right)} "
+        f"left_rms={left_rms:.1f} left_peak={left_peak} left_onset={left_onset} "
+        f"right_rms={right_rms:.1f} right_peak={right_peak} right_onset={right_onset}"
+    )
     return 0
 
 

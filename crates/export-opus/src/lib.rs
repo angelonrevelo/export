@@ -2,6 +2,8 @@
 //!
 //! The frames this crate will encode are digital silence, one half-scale
 //! 440 Hz sine, and a second and third 20 ms frame of that same sine.
+//! One prepared stereo packet decodes to two channels. Other stereo packets
+//! stay unsupported.
 //! It is not a song encoder and it does not replace yt-dlp.
 //! The library never calls ffmpeg.
 
@@ -16,7 +18,7 @@ mod sine_third;
 mod stereo_frame;
 mod toc;
 
-pub use decoder::decode;
+pub use decoder::{decode, Pcm};
 pub use encoder::{encode, encode_second_sine_frame, encode_stereo_frame, encode_third_sine_frame};
 pub use error::Error;
 
@@ -44,7 +46,8 @@ pub fn sine_third_frame() -> [i16; FRAME_SAMPLES] {
 /// PCM sample rate for the one frame this crate handles.
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
 
-/// Channel count. Stereo and multistream are unsupported.
+/// Channel count of the mono frames. One prepared stereo packet is two
+/// channels. Other stereo packets and multistream are unsupported.
 pub const CHANNELS: u8 = 1;
 
 /// Frame duration in milliseconds.
@@ -69,8 +72,7 @@ mod tests {
         let pcm = silence();
         let packet = encode(&pcm).unwrap();
         assert_eq!(packet.first().copied(), Some(TOC_MONO_20MS));
-        let decoded = decode(&packet, 1, false).unwrap();
-        assert_eq!(decoded, pcm);
+        assert_eq!(decode(&packet, 1, false), Ok(Pcm::Mono(pcm)));
     }
 
     #[test]
@@ -89,13 +91,28 @@ mod tests {
 
     #[test]
     fn stereo_is_unsupported() {
-        // Config 31, stereo, one frame.
+        // Config 31, stereo, one frame. Not the prepared stereo packet.
         let packet = [0xFC, 0xFF, 0xFE];
         assert_eq!(decode(&packet, 1, false), Err(Error::Unsupported));
+    }
+
+    #[test]
+    fn prepared_stereo_packet_decodes_two_channels() {
         let stereo = encode_stereo_frame();
         assert_eq!(stereo.len(), 160);
         assert_eq!(stereo[0] & 0x04, 0x04);
-        assert_eq!(decode(&stereo, 1, false), Err(Error::Unsupported));
+        let decoded = decode(&stereo, 1, false).unwrap();
+        let Pcm::Stereo(pcm) = decoded else {
+            panic!("expected two channels");
+        };
+        assert_eq!(pcm.left.len(), FRAME_SAMPLES);
+        assert_eq!(pcm.right.len(), FRAME_SAMPLES);
+        assert_eq!(pcm.left, stereo_frame::STEREO_LEFT);
+        assert_eq!(pcm.right, stereo_frame::STEREO_RIGHT);
+        assert!(mean_square(&pcm.left) > 8_000 * 8_000);
+        assert!(mean_square(&pcm.right) > 4_000 * 4_000);
+        assert_eq!(decode(&stereo, 2, false), Err(Error::Unsupported));
+        assert_eq!(decode(&stereo, 1, true), Err(Error::Unsupported));
     }
 
     #[test]
@@ -124,7 +141,9 @@ mod tests {
         let packet = encode(&sine_frame::SINE_SOURCE).unwrap();
         assert_eq!(packet.as_slice(), sine_frame::SINE_PACKET.as_slice());
         assert_eq!(packet[0], TOC_MONO_20MS);
-        let decoded = decode(&packet, 1, false).unwrap();
+        let Ok(Pcm::Mono(decoded)) = decode(&packet, 1, false) else {
+            panic!("expected mono");
+        };
         assert_eq!(decoded, sine_frame::SINE_DECODED);
         let sum_sq: i64 = decoded
             .iter()
@@ -147,8 +166,8 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(second[0], TOC_MONO_20MS);
         assert_eq!(
-            decode(&second, 1, false).unwrap(),
-            sine_next::SINE_PACKET_2_ALONE
+            decode(&second, 1, false),
+            Ok(Pcm::Mono(sine_next::SINE_PACKET_2_ALONE))
         );
         assert_eq!(decode(&second, 2, false), Err(Error::Unsupported));
         assert_eq!(decode(&second, 1, true), Err(Error::Unsupported));
@@ -164,7 +183,9 @@ mod tests {
         let third = encode_third_sine_frame();
         assert_ne!(third, encode_second_sine_frame());
         assert_eq!(third[0], TOC_MONO_20MS);
-        let alone = decode(&third, 1, false).unwrap();
+        let Ok(Pcm::Mono(alone)) = decode(&third, 1, false) else {
+            panic!("expected mono");
+        };
         assert_eq!(alone, sine_third::SINE_PACKET_3_ALONE);
         let in_file = sine_third_frame();
         let diffs = in_file

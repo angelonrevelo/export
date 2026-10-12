@@ -4,13 +4,14 @@
 //! `dump-packet sine packet.opus expected.pcm`
 //! `dump-packet sine-two first.opus second.opus followed.pcm`
 //! `dump-packet sine-three a.opus b.opus c.opus file.pcm alone.pcm`
+//! `dump-packet stereo packet.opus pcm.pcm`
 //!
 //! The host verification script may pass those files to ffmpeg. This
 //! example does not call ffmpeg.
 
 use export_opus::{
     decode, encode, encode_second_sine_frame, encode_stereo_frame, encode_third_sine_frame,
-    sine_followed_frame, sine_third_frame, FRAME_SAMPLES,
+    sine_followed_frame, sine_third_frame, Pcm, FRAME_SAMPLES,
 };
 use std::env;
 use std::fs;
@@ -47,7 +48,11 @@ fn main() -> ExitCode {
         }
     };
     let decoded = match decode(&packet, 1, false) {
-        Ok(pcm) => pcm,
+        Ok(Pcm::Mono(pcm)) => pcm,
+        Ok(Pcm::Stereo(_)) => {
+            eprintln!("mono decode returned two channels");
+            return ExitCode::from(1);
+        }
         Err(err) => {
             eprintln!("decode failed: {err}");
             return ExitCode::from(1);
@@ -78,18 +83,48 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn expect_mono(packet: &[u8]) -> [i16; FRAME_SAMPLES] {
+    match decode(packet, 1, false) {
+        Ok(Pcm::Mono(pcm)) => pcm,
+        Ok(Pcm::Stereo(_)) => panic!("mono packet decoded as two channels"),
+        Err(err) => panic!("decode failed: {err}"),
+    }
+}
+
 fn dump_stereo(mut args: impl Iterator<Item = String>) -> ExitCode {
     let packet_path = args.next().unwrap_or_else(|| "stereo.opus".to_string());
+    let pcm_path = args.next().unwrap_or_else(|| "stereo.pcm".to_string());
     let packet = encode_stereo_frame();
-    if decode(&packet, 1, false) != Err(export_opus::Error::Unsupported) {
-        eprintln!("stereo decode was accepted");
-        return ExitCode::from(1);
-    }
+    let (left, right) = match decode(&packet, 1, false) {
+        Ok(Pcm::Stereo(pcm)) => (pcm.left, pcm.right),
+        Ok(Pcm::Mono(_)) => {
+            eprintln!("stereo packet decoded as one channel");
+            return ExitCode::from(1);
+        }
+        Err(err) => {
+            eprintln!("stereo decode failed: {err}");
+            return ExitCode::from(1);
+        }
+    };
     if let Err(err) = fs::write(&packet_path, &packet) {
         eprintln!("write {packet_path}: {err}");
         return ExitCode::from(1);
     }
-    println!("stereo packet={} bytes", packet.len());
+    let mut bytes = Vec::with_capacity(FRAME_SAMPLES * 4);
+    for index in 0..FRAME_SAMPLES {
+        bytes.extend_from_slice(&left[index].to_le_bytes());
+        bytes.extend_from_slice(&right[index].to_le_bytes());
+    }
+    if let Err(err) = fs::write(&pcm_path, &bytes) {
+        eprintln!("write {pcm_path}: {err}");
+        return ExitCode::from(1);
+    }
+    println!(
+        "stereo packet={} bytes channels=2 samples_per_channel={} interleaved={}",
+        packet.len(),
+        FRAME_SAMPLES,
+        FRAME_SAMPLES * 2
+    );
     ExitCode::SUCCESS
 }
 
@@ -107,7 +142,7 @@ fn dump_sine_two(mut args: impl Iterator<Item = String>) -> ExitCode {
     };
     let second = encode_second_sine_frame();
     let mut pcm = Vec::with_capacity(FRAME_SAMPLES * 4);
-    for sample in decode(&first, 1, false).expect("first frame") {
+    for sample in expect_mono(&first) {
         pcm.extend_from_slice(&sample.to_le_bytes());
     }
     for sample in sine_followed_frame() {
@@ -123,7 +158,7 @@ fn dump_sine_two(mut args: impl Iterator<Item = String>) -> ExitCode {
     }
     if let Some(alone_path) = alone_path {
         let mut alone = Vec::with_capacity(FRAME_SAMPLES * 2);
-        for sample in decode(&second, 1, false).expect("second frame") {
+        for sample in expect_mono(&second) {
             alone.extend_from_slice(&sample.to_le_bytes());
         }
         if let Err(err) = fs::write(&alone_path, &alone) {
@@ -156,7 +191,7 @@ fn dump_sine_three(mut args: impl Iterator<Item = String>) -> ExitCode {
     let second = encode_second_sine_frame();
     let third = encode_third_sine_frame();
     let mut pcm = Vec::with_capacity(FRAME_SAMPLES * 6);
-    for sample in decode(&first, 1, false).expect("first frame") {
+    for sample in expect_mono(&first) {
         pcm.extend_from_slice(&sample.to_le_bytes());
     }
     for sample in sine_followed_frame() {
@@ -178,7 +213,7 @@ fn dump_sine_three(mut args: impl Iterator<Item = String>) -> ExitCode {
     }
     if let Some(alone_path) = alone_path {
         let mut alone = Vec::with_capacity(FRAME_SAMPLES * 2);
-        for sample in decode(&third, 1, false).expect("third frame") {
+        for sample in expect_mono(&third) {
             alone.extend_from_slice(&sample.to_le_bytes());
         }
         if let Err(err) = fs::write(&alone_path, &alone) {

@@ -45,8 +45,8 @@ pub fn encode_third_sine_frame() -> Vec<u8> {
 
 /// One prepared stereo 20 ms packet at 48 kHz.
 ///
-/// This is that packet only. [`crate::decode`] still returns
-/// [`Error::Unsupported`] for it. This is not a stereo encoder.
+/// This is that packet only. [`crate::decode`] returns its two channels.
+/// Any other stereo packet stays unsupported. This is not a stereo encoder.
 pub fn encode_stereo_frame() -> Vec<u8> {
     crate::stereo_frame::STEREO_PACKET.to_vec()
 }
