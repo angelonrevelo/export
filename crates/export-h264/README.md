@@ -45,3 +45,13 @@ Same release profile and QP. The I-frame is the 272-byte picture above, then sev
 - mean absolute error, ffmpeg decode versus all eight sources: 2.3146. The I-frame half is still 2.4974. The seven P-frames are 2.4909, 2.3763, 2.3763, 2.2409, 2.2409, 2.1471, and 2.1471
 
 The ffmpeg decode matches the encoder reconstruction. `scripts/check-sequence.sh` may run ffmpeg only to decode that file.
+
+## 160×160
+
+Same release profile, QP 26, one slice, one thread. The picture is 100 macroblocks, so the level byte is 1.1. The 32×32 files stay on level 1.0. 200 calls after 20 warmup.
+
+- output: 6432 bytes
+- release p50: 202 µs, p99: 248 µs on the recorded run. Four later runs on that binary were p50 203–204 µs and p99 243–324 µs
+- mean absolute error, ffmpeg decode versus the source: 3.3912 (Y 2.0368, U 3.0250, V 9.1750)
+
+The ffmpeg decode matches the encoder reconstruction. `scripts/check-160.sh` may run ffmpeg only to decode that file. Chroma residual is still only the DC coefficient, which is why V is the large part of the error.
