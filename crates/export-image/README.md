@@ -12,7 +12,7 @@ Standalone crate. Its `Cargo.toml` has an empty `[dependencies]` list, and the l
 
 ## WebP, and the limit
 
-The sniffer accepts a RIFF container whose form type is `WEBP`. Decode and encode cover one still frame, plus one two-frame animation whose frames are existing lossy keyframes.
+The sniffer accepts a RIFF container whose form type is `WEBP`. Decode and encode cover one still frame, plus a two-frame or four-frame animation whose frames are existing lossy keyframes.
 
 **Lossless (`VP8L`).** `encode_webp_lossless` writes one prefix-code group of literal pixels: no predictor, color transform, palette, color cache, or meta-Huffman image. `decode_webp` of that file restores the original RGB or RGBA samples. The reader also accepts a VP8L stream that uses those transforms. A meta-Huffman image with more than 64 prefix groups is `Unsupported`.
 
@@ -27,7 +27,7 @@ The sniffer accepts a RIFF container whose form type is `WEBP`. Decode and encod
 
 Color conversion is limited-range BT.601. `decode_webp(encode_webp_lossy(image))` matches the BT.601 reconstruction of the source samples. That reconstruction is not the source RGB when a channel is saturated, so a lossy round-trip is not a promise that the original bytes come back. A flat color’s YUV samples match an independent decode of the same frame. Two neighboring gray macroblocks stay within 2 levels of the source.
 
-**Two-frame animation.** `encode_webp_animation` takes exactly two RGB frames of equal size, each with sides a multiple of 16. It calls the same lossy keyframe encoder twice and wraps the payloads in `VP8X`, `ANIM`, and two `ANMF` chunks. That container is not an entropy coder. `decode_webp_animation` returns both frame rasters. `decode_webp` still returns `Unsupported` for those bytes, because it returns one raster. A frame that does not cover the canvas, an `ALPH` subchunk, and ICC, EXIF, or XMP stay `Unsupported`. There is no compositor and no loop filter.
+**Animation.** `encode_webp_animation` takes two or four RGB frames of equal size, each with sides a multiple of 16. It calls the same lossy keyframe encoder once per frame and wraps the payloads in `VP8X`, `ANIM`, and one `ANMF` chunk per frame. That container is not an entropy coder. `decode_webp_animation` returns every frame. `decode_webp` still returns `Unsupported` for those bytes, because it returns one raster. A frame that does not cover the canvas, an `ALPH` subchunk, and ICC, EXIF, or XMP stay `Unsupported`. There is no compositor and no loop filter. Any other frame count stays `Unsupported`.
 
 **Errors.**
 
@@ -89,6 +89,12 @@ Two-frame animation, a later release run. Each frame is 16×16, which the lossy 
 | path | samples | p50 | p99 | pixel MB/s p50 | other |
 | --- | --- | --- | --- | --- | --- |
 | two-frame VP8 animation encode, 16×16 (output 182 bytes) | 40 | 17.8 µs | 20.0 µs | 86.31 (p99 76.63) | file MB/s p50 10.23; 33 allocs; 64,453.12 allocs/MP |
+
+Four-frame animation, a later release run on 16×16 frames. The two-frame row above was not replaced. `decode_webp_animation` returned all four frames, and each matched a still decode of that frame. `decode_webp` on the file still returns `Unsupported`.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| four-frame VP8 animation encode, 16×16 (output 306 bytes) | 40 | 39.5 µs | 52.4 µs | 77.75 (p99 58.67) | file MB/s p50 7.75; 59 allocs; 57,617.19 allocs/MP |
 
 ## Huffman lookup
 
