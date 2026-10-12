@@ -104,6 +104,17 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 921 ns |
 
+A seventh generated file is a SUM of one contiguous three-cell range, still
+with no cached number. The formula is one area token. A1 = 1, B1 = 2, and
+C1 = 3, so the value is **6**. `xls → csv` prints `1,2,3,6`. Any other
+uncached expression is still refused.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 763 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
