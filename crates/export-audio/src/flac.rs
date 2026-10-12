@@ -1870,6 +1870,56 @@ mod tests {
         assert_eq!(offset, (bytes.len() - audio) as u64);
     }
 
+    fn mono_pcm(n: usize) -> Pcm {
+        let mut samples = Vec::with_capacity(n);
+        for i in 0..n {
+            let ramp = ((i % 256) as i32) - 128;
+            let slow = ((i / 64) % 512) as i32 - 256;
+            let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+            samples.push((slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767));
+        }
+        Pcm {
+            sample_rate: 44_100,
+            channels: 1,
+            bits: 16,
+            samples,
+        }
+    }
+
+    #[test]
+    fn mono_long_seek_table_one_point_per_block() {
+        let pcm = mono_pcm(1_048_576);
+        let plain = encode(&pcm).unwrap();
+        assert_eq!(plain.len(), 948_202);
+        let bytes = encode_with_seek_table(&pcm).unwrap();
+        assert_eq!(bytes.len(), 952_814);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 1);
+        assert_eq!(back.bits, 16);
+        assert_eq!(back.sample_rate, 44_100);
+        assert_eq!(back.samples, pcm.samples);
+        let points = seek_points(&bytes).unwrap();
+        assert_eq!(points.len(), 256);
+        let mut sample = 0u64;
+        let mut offset = 0u64;
+        let audio = seek_audio_start(&bytes).unwrap();
+        for (i, (sample_n, off, count)) in points.iter().copied().enumerate() {
+            assert_eq!(sample_n, sample);
+            assert_eq!(off, offset);
+            assert_eq!(count, 4096);
+            let next = if i + 1 < points.len() {
+                audio + points[i + 1].1 as usize
+            } else {
+                bytes.len()
+            };
+            let frame_len = next - (audio + off as usize);
+            offset += frame_len as u64;
+            sample += u64::from(count);
+        }
+        assert_eq!(sample, 1_048_576);
+        assert_eq!(offset, (bytes.len() - audio) as u64);
+    }
+
     fn seek_audio_start(bytes: &[u8]) -> Option<usize> {
         if bytes.len() < 8 || &bytes[0..4] != b"fLaC" {
             return None;

@@ -316,4 +316,16 @@ fn main() {
     });
     report("second_seek_encode", "miss", second_pcm_len, &sought_encode);
     println!("second_seek_bytes {}", sought.len());
+
+    assert_eq!(flac.len(), 948_202);
+    let mono_sought = encode_with_seek_table(&pcm).expect("encode mono with seek table");
+    let mono_sought_back = decode(&mono_sought).expect("decode mono seek table");
+    assert_eq!(mono_sought_back.samples, pcm.samples, "mono seek table file is not exact");
+    assert_eq!(mono_sought_back.channels, 1);
+    assert_eq!(mono_sought.len(), 952_814);
+    let mono_sought_encode = measure(ITERS, || {
+        std::hint::black_box(encode_with_seek_table(&pcm).expect("encode mono seek table"));
+    });
+    report("mono_seek_encode", "miss", pcm_len, &mono_sought_encode);
+    println!("mono_seek_bytes {}", mono_sought.len());
 }
