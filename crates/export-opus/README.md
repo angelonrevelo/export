@@ -6,6 +6,7 @@ This crate encodes two of those frames and decodes them back to PCM:
 
 - Digital silence (960 zeros). The decoded frame is silence.
 - A half-scale 440 Hz sine (960 samples, amplitude `0.5 * 32767`). FFmpeg decodes that packet to a tone, not to silence: RMS 10802.8, peak 16826. The start of the reconstructed frame is near zero (onset peak 4 over the first 8 samples) because of the frame window; the rest of the frame is the tone. Those figures are the ffmpeg 6.1.1 decode checked by `scripts/verify-ffmpeg.py`.
+- A second 20 ms frame of that same sine, as the next packet. FFmpeg decodes the two-frame file to 1920 samples. The second frame is a tone, not near silence: RMS 11596.1, peak 17959, onset peak 15968. The same second packet with no frame before it is quieter (RMS 1767.0, peak 7524). That lone decode is what `decode` returns for the second packet.
 
 Any other PCM is `unsupported`. A truncated packet or a bad TOC byte returns an error. Stereo, multistream, and FEC return `unsupported`.
 
@@ -21,6 +22,6 @@ cargo build --release --target wasm32-unknown-unknown --lib
 python3 scripts/verify-ffmpeg.py
 ```
 
-The silence bench is single-threaded (threading off) and prints p50 and p99 for the silence packet, including the truncated-packet error. That silence encode row (p50 350 ns) is unchanged. `cargo bench --bench sine` times only the half-scale 440 Hz encode and decode.
+The silence bench is single-threaded (threading off) and prints p50 and p99 for the silence packet, including the truncated-packet error. The silence encode row (p50 350 ns) and the sine encode rows (p50 52 ns and 49 ns) are unchanged. `cargo bench --bench sine` times only the first half-scale 440 Hz packet.
 
 License: MIT OR Apache-2.0.

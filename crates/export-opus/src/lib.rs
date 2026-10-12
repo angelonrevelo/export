@@ -1,7 +1,8 @@
 //! One Opus packet: mono, 48 kHz, one 20 ms frame.
 //!
-//! The frames this crate will encode are digital silence and one half-scale
-//! 440 Hz sine. It is not a song encoder and it does not replace yt-dlp.
+//! The frames this crate will encode are digital silence, one half-scale
+//! 440 Hz sine, and a second 20 ms frame of that same sine. It is not a
+//! song encoder and it does not replace yt-dlp.
 //! The library never calls ffmpeg.
 
 #![forbid(unsafe_code)]
@@ -10,15 +11,24 @@ mod decoder;
 mod encoder;
 mod error;
 mod sine_frame;
+mod sine_next;
 mod toc;
 
 pub use decoder::decode;
-pub use encoder::encode;
+pub use encoder::{encode, encode_second_sine_frame};
 pub use error::Error;
 
 /// PCM samples of the half-scale 440 Hz frame this crate can encode.
 pub fn sine_source() -> [i16; FRAME_SAMPLES] {
     sine_frame::SINE_SOURCE
+}
+
+/// Second frame of the two-frame sine file, after the first packet.
+///
+/// This is not what [`decode`] returns for [`encode_second_sine_frame`]
+/// alone. A fresh decoder has no prior frame, so that packet is quieter.
+pub fn sine_followed_frame() -> [i16; FRAME_SAMPLES] {
+    sine_next::SINE_FOLLOWED
 }
 
 /// PCM sample rate for the one frame this crate handles.
@@ -117,6 +127,25 @@ mod tests {
     }
 
     #[test]
+    fn second_sine_frame_follows_the_first() {
+        let first = encode(&sine_frame::SINE_SOURCE).unwrap();
+        let second = encode_second_sine_frame();
+        assert_ne!(first, second);
+        assert_eq!(second[0], TOC_MONO_20MS);
+        assert_eq!(
+            decode(&second, 1, false).unwrap(),
+            sine_next::SINE_PACKET_2_ALONE
+        );
+        assert_eq!(decode(&second, 2, false), Err(Error::Unsupported));
+        assert_eq!(decode(&second, 1, true), Err(Error::Unsupported));
+        let alone = mean_square(&sine_next::SINE_PACKET_2_ALONE);
+        let followed = mean_square(&sine_followed_frame());
+        assert!(alone > 1_000 * 1_000);
+        assert!(followed > 8_000 * 8_000);
+        assert!(followed > alone * 4);
+    }
+
+    #[test]
     fn code3_missing_frame_byte_is_truncated() {
         // Config 31, mono, code 3, one frame, no frame byte.
         assert_eq!(decode(&[0xFB, 0x01], 1, false), Err(Error::Truncated));
@@ -132,5 +161,16 @@ mod tests {
     fn vbr_length_overrun_is_truncated() {
         // Code 3, VBR, two frames, first frame claims 50 bytes that are absent.
         assert_eq!(decode(&[0xFB, 0x82, 50], 1, false), Err(Error::Truncated));
+    }
+
+    fn mean_square(pcm: &[i16; FRAME_SAMPLES]) -> i64 {
+        let sum_sq: i64 = pcm
+            .iter()
+            .map(|&sample| {
+                let sample = i64::from(sample);
+                sample * sample
+            })
+            .sum();
+        sum_sq / FRAME_SAMPLES as i64
     }
 }

@@ -2,11 +2,12 @@
 //!
 //! `dump-packet silence packet.opus expected.pcm`
 //! `dump-packet sine packet.opus expected.pcm`
+//! `dump-packet sine-two first.opus second.opus followed.pcm`
 //!
 //! The host verification script may pass those files to ffmpeg. This
 //! example does not call ffmpeg.
 
-use export_opus::{decode, encode, FRAME_SAMPLES};
+use export_opus::{decode, encode, encode_second_sine_frame, sine_followed_frame, FRAME_SAMPLES};
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -14,6 +15,9 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let kind = args.next().unwrap_or_else(|| "silence".to_string());
+    if kind == "sine-two" {
+        return dump_sine_two(args);
+    }
     let packet_path = args.next().unwrap_or_else(|| "packet.opus".to_string());
     let pcm_path = args.next().unwrap_or_else(|| "expected.pcm".to_string());
 
@@ -60,6 +64,53 @@ fn main() -> ExitCode {
         "{kind} packet={} bytes pcm_samples={}",
         packet.len(),
         decoded.len()
+    );
+    ExitCode::SUCCESS
+}
+
+fn dump_sine_two(mut args: impl Iterator<Item = String>) -> ExitCode {
+    let first_path = args.next().unwrap_or_else(|| "sine.opus".to_string());
+    let second_path = args.next().unwrap_or_else(|| "sine-2.opus".to_string());
+    let pcm_path = args.next().unwrap_or_else(|| "followed.pcm".to_string());
+    let alone_path = args.next();
+    let first = match encode(&export_opus::sine_source()) {
+        Ok(packet) => packet,
+        Err(err) => {
+            eprintln!("encode failed: {err}");
+            return ExitCode::from(1);
+        }
+    };
+    let second = encode_second_sine_frame();
+    let mut pcm = Vec::with_capacity(FRAME_SAMPLES * 4);
+    for sample in decode(&first, 1, false).expect("first frame") {
+        pcm.extend_from_slice(&sample.to_le_bytes());
+    }
+    for sample in sine_followed_frame() {
+        pcm.extend_from_slice(&sample.to_le_bytes());
+    }
+    if fs::write(&first_path, &first).is_err() || fs::write(&second_path, &second).is_err() {
+        eprintln!("write packets failed");
+        return ExitCode::from(1);
+    }
+    if let Err(err) = fs::write(&pcm_path, &pcm) {
+        eprintln!("write {pcm_path}: {err}");
+        return ExitCode::from(1);
+    }
+    if let Some(alone_path) = alone_path {
+        let mut alone = Vec::with_capacity(FRAME_SAMPLES * 2);
+        for sample in decode(&second, 1, false).expect("second frame") {
+            alone.extend_from_slice(&sample.to_le_bytes());
+        }
+        if let Err(err) = fs::write(&alone_path, &alone) {
+            eprintln!("write {alone_path}: {err}");
+            return ExitCode::from(1);
+        }
+    }
+    println!(
+        "sine-two packets={} {} pcm_samples={}",
+        first.len(),
+        second.len(),
+        FRAME_SAMPLES * 2
     );
     ExitCode::SUCCESS
 }

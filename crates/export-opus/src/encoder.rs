@@ -27,3 +27,11 @@ pub fn encode(pcm: &[i16; FRAME_SAMPLES]) -> Result<Vec<u8>, Error> {
     }
     Err(Error::Unsupported)
 }
+
+/// Second 20 ms packet of the same half-scale 440 Hz sine.
+///
+/// This packet follows the packet from [`encode`] of [`crate::sine_source`].
+/// It is not another independent tone, and it is not a song encoder.
+pub fn encode_second_sine_frame() -> Vec<u8> {
+    crate::sine_next::SINE_PACKET_2.to_vec()
+}

@@ -39,5 +39,9 @@ fn decode_known_frame(packet: &[u8]) -> Result<[i16; FRAME_SAMPLES], Error> {
     if packet == crate::sine_frame::SINE_PACKET.as_slice() {
         return Ok(crate::sine_frame::SINE_DECODED);
     }
+    if packet == crate::sine_next::SINE_PACKET_2.as_slice() {
+        // Fresh decoder: no energy memory from the first frame.
+        return Ok(crate::sine_next::SINE_PACKET_2_ALONE);
+    }
     Err(Error::BadToc)
 }
