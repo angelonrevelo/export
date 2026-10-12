@@ -9,13 +9,14 @@ An archive is a structured file: local headers, store-method payload, a CRC-32 o
 | Format | Read | Write |
 |---|---|---|
 | Zip, store (method 0) | yes | yes |
-| Zip, deflate (method 8) | yes | no (writer stays store) |
+| Zip, deflate stored blocks | yes | no (writer stays store) |
+| Zip, deflate Huffman | refused | no |
 | CBZ of PNG/JPEG to a one-image-per-page PDF | yes | the PDF |
 | TTF ↔ OTF container copy | yes | yes |
 | Zip64, encrypted, split | refused | no |
 | WOFF, WOFF2 | refused | no |
 
-Entry payloads are copied in 64 KiB chunks. The central directory is the only zip structure kept in memory, and it is bounded by 65535 entries. Deflate entries are inflated into the caller’s writer with a 32 KiB window. CBZ conversion holds one image at a time while decoding, then the page list while the PDF is written.
+Entry payloads are copied in 64 KiB chunks. The central directory is the only zip structure kept in memory, and it is bounded by 65535 entries. Deflate read accepts stored blocks only. A fixed or dynamic Huffman block returns `fixed huffman` or `dynamic huffman` and writes nothing. CBZ conversion holds one image at a time while decoding, then the page list while the PDF is written.
 
 `Entry::name` is the raw central-directory name. Join it onto a directory only after `safe_name()` succeeds.
 
@@ -60,7 +61,7 @@ Median of 5 measured passes after one warmup, from `./target/release/pack-bench`
 | CBZ → PDF, 8×2048×1024 RGB | 66.6 MB/s (63.5 MiB/s) | 63.4–67.8 MB/s |
 | Tiny font TTF→OTF, 492 bytes × 5000 | 615.3 MB/s (586.9 MiB/s) | 552.7–649.8 MB/s |
 
-Inflate allocations were 0.6 / MiB and 2,098,214.0 bytes / MiB. That byte count is the output `Vec` growing to the uncompressed size. The stream is `zlib_store` (CMF/FLG `0x78 0x01`, stored deflate blocks), including the Adler-32 check. It is not a Huffman stream. The CPython zlib vectors (`hello`, `hello hello hello`) and a flipped block are the correctness check, not this rate.
+Inflate allocations were 0.6 / MiB and 2,098,214.0 bytes / MiB. That byte count is the output `Vec` growing to the uncompressed size. The stream is `zlib_store` (CMF/FLG `0x78 0x01`, stored deflate blocks), including the Adler-32 check. Huffman is not this rate: CPython’s `zlib.compress(b"hello")` is a fixed-Huffman zlib stream, and inflating it returns `fixed huffman` with no output bytes.
 
 PDF rate counts decoded RGB bytes. The timed call is `cbz_to_pdf`: zip read, stored-block PNG inflate, PDF write, fsync, and rename. The CBZ stays in the page cache after warmup. Allocations were 8.6 / MiB and 8,736,069.9 bytes / MiB, because each page is held decoded and the PDF is written from that buffer.
 
@@ -68,7 +69,7 @@ The font rate is a repeated tiny-font container copy, not a bulk font benchmark.
 
 ## Honest limits
 
-- The writer emits store only. Deflate is read, not written. Zip64, encryption, and split archives return an error.
+- The writer emits store only. Deflate read is stored blocks. Fixed and dynamic Huffman return an error and do not emit bytes. Zip64, encryption, and split archives return an error.
 - One archive is at most 4 GiB, one entry at most 4 GiB − 2 bytes, at most 65535 entries.
 - The end-of-central-directory record must end the file. Trailing bytes are refused.
 - On checksum mismatch, `copy_entry` may already have written payload bytes. Discard them. `extract_entry` writes `dest.tmp` and renames only after the CRC matches.

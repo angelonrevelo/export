@@ -1,7 +1,8 @@
 //! Store-method zip (method 0) on write. Payload bytes are copied, not wrapped
 //! in a general compressor. Each entry records a CRC-32 of the bytes written.
 //! The finished archive appears under its real name only after rename.
-//! Method 8 is read with the inflater. The writer still emits store.
+//! Method 8 stored blocks are read with the inflater. Huffman blocks are refused.
+//! The writer still emits store.
 
 use crate::crc::Crc32;
 use crate::error::{Error, Result};
