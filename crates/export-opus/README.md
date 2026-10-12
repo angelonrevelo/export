@@ -16,10 +16,11 @@ The library does not call ffmpeg. A host script may call ffmpeg only to decode t
 ```sh
 cargo test
 cargo bench --bench packet
+cargo bench --bench sine
 cargo build --release --target wasm32-unknown-unknown --lib
 python3 scripts/verify-ffmpeg.py
 ```
 
-The bench is single-threaded (threading off) and prints p50 and p99 for the silence packet, including the truncated-packet error. That silence encode row is unchanged by the sine frame.
+The silence bench is single-threaded (threading off) and prints p50 and p99 for the silence packet, including the truncated-packet error. That silence encode row (p50 350 ns) is unchanged. `cargo bench --bench sine` times only the half-scale 440 Hz encode and decode.
 
 License: MIT OR Apache-2.0.

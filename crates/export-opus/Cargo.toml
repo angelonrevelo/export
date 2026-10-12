@@ -25,6 +25,10 @@ path = "examples/dump-packet.rs"
 name = "packet"
 harness = false
 
+[[bench]]
+name = "sine"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "thin"
