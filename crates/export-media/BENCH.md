@@ -102,3 +102,15 @@ p50 is under 12.2 µs. The video still-read stays stopped at two samples.
 | audio_bytes | 96,000 | 2.926 µs | 3.297 µs |
 
 p50 is under 12 µs.
+
+## Two audio samples
+
+`cargo bench --bench audio_pair`. Same release profile, 31 iterations, 3 warmup. The rows above were not remeasured. The video still-read stays stopped at two samples.
+
+`elementary` copies both audio samples out of the two-sample file this crate already writes (653,824 bytes). That file already holds two `sowt` samples. Each is the 96,000-byte PCM frame stored in the one-frame audiogram. It does not decode them and it does not write a new file.
+
+| path | samples | bytes | p50 | p99 |
+|---|---:|---:|---:|---:|
+| audio_pair | 2 | 192,000 | 4.481 µs | 5.324 µs |
+
+p50 is under 6.4 µs.

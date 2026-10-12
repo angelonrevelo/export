@@ -43,7 +43,8 @@ result as an owned buffer the caller writes.
 Release only. `cargo bench --bench throughput`, `cargo bench --bench concat_shrink`,
 `cargo bench --bench audiogram`, `cargo bench --bench concat_copies`,
 `cargo bench --bench picture_bytes`, `cargo bench --bench picture_pair`,
-and `cargo bench --bench audio_bytes` print MB/s, p50, p99, and allocations
+`cargo bench --bench audio_bytes`, and `cargo bench --bench audio_pair`
+print MB/s, p50, p99, and allocations
 per MB for hits and misses. A debug build exits 2 and does not publish a
 timing verdict.
 

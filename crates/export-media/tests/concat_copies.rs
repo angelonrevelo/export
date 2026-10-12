@@ -84,3 +84,38 @@ fn both_picture_samples_are_the_raw_frame() {
     out.extend_from_slice(samples[1]);
     assert_eq!(out.len(), 460_800);
 }
+
+#[test]
+fn both_audio_samples_are_the_stored_pcm() {
+    let one = audiogram(&one_second()).expect("audiogram");
+    assert_eq!(one.bytes, 327_420);
+    let pcm = {
+        let movie = parse(&one.data).expect("one");
+        let audio = movie
+            .tracks
+            .iter()
+            .find(|t| t.handler == *b"soun")
+            .expect("audio");
+        let samples = elementary(audio, &one.data).expect("pcm");
+        assert_eq!(samples.len(), 1);
+        samples[0].to_vec()
+    };
+    assert_eq!(pcm.len(), 96_000);
+    let pair = concat_mp4(&one.data, &one.data).expect("pair");
+    assert_eq!(pair.len(), 653_824);
+    let movie = parse(&pair).expect("pair parse");
+    let audio = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"soun")
+        .expect("audio");
+    assert_eq!(audio.codec, *b"sowt");
+    let samples = elementary(audio, &pair).expect("pcm");
+    assert_eq!(samples.len(), 2);
+    assert_eq!(samples[0], pcm.as_slice());
+    assert_eq!(samples[1], pcm.as_slice());
+    let mut out = Vec::with_capacity(pcm.len() * 2);
+    out.extend_from_slice(samples[0]);
+    out.extend_from_slice(samples[1]);
+    assert_eq!(out.len(), 192_000);
+}

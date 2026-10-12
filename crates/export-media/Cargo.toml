@@ -49,6 +49,10 @@ harness = false
 name = "audio_bytes"
 harness = false
 
+[[bench]]
+name = "audio_pair"
+harness = false
+
 [[example]]
 name = "oracle_fixture"
 
