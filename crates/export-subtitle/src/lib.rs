@@ -1,9 +1,11 @@
-//! Subtitle cues for Export. SRT and WebVTT in, either format out.
+//! Subtitle cues for Export. SRT, WebVTT, and ASS/SSA in, any of those out.
 //! A binary cue file carries a CRC so a truncated file cannot look valid.
 
+mod ass;
 mod cuefile;
 mod parse;
 
+pub use ass::{cues_to_ass, parse_ass};
 pub use cuefile::{read_cue_file, write_cue_file};
 pub use parse::{cues_to_srt, cues_to_vtt, parse_srt, parse_vtt, Cue, Error};
 
