@@ -9,7 +9,7 @@ use std::io::{self, Cursor, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use export_meta::{decrypt_ooxml, encrypt_ooxml};
+use export_meta::{decrypt_ooxml, encrypt_ooxml, encrypt_ooxml_agile};
 
 struct Peak;
 
@@ -95,6 +95,41 @@ fn decrypt_once(file: &[u8], plain: &[u8]) {
     assert_eq!(out.pos, plain.len());
 }
 
+fn measure(kind: &str, file: &[u8], plain: &[u8], judged: bool) {
+    decrypt_once(file, plain);
+    let mut times = Vec::with_capacity(5);
+    let mut extras = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let before = CURRENT.load(Ordering::Relaxed);
+        PEAK.store(before, Ordering::Relaxed);
+        let started = Instant::now();
+        decrypt_once(file, plain);
+        let elapsed = started.elapsed().as_nanos();
+        let extra = PEAK.load(Ordering::Relaxed).saturating_sub(before);
+        times.push(elapsed);
+        extras.push(extra);
+    }
+    times.sort_unstable();
+    extras.sort_unstable();
+    let median = times[times.len() / 2];
+    let peak = extras[extras.len() / 2];
+    let n = plain.len();
+    if !judged {
+        println!("NOT JUDGED {kind} plain={n} peak_extra={peak}");
+        return;
+    }
+    let ms = median as f64 / 1_000_000.0;
+    let mb_s = (n as f64) / (median as f64 / 1_000_000_000.0) / 1_000_000.0;
+    println!(
+        "{kind} plain={n} file={} median_ns={median} median_ms={ms:.3} peak_extra={peak} mb_s={mb_s:.2}",
+        file.len()
+    );
+    assert!(
+        peak < 64 * 1024,
+        "{kind} allocated {peak} bytes on a {n}-byte package"
+    );
+}
+
 fn main() {
     let salt = [0x11u8; 16];
     let judged = !cfg!(debug_assertions);
@@ -103,37 +138,22 @@ fn main() {
         plain[..4].copy_from_slice(b"PK\x03\x04");
         let mut file = Vec::new();
         encrypt_ooxml("bench-password", &salt, &plain, &mut file).unwrap();
-        decrypt_once(&file, &plain);
-
-        let mut times = Vec::with_capacity(5);
-        let mut extras = Vec::with_capacity(5);
-        for _ in 0..5 {
-            let before = CURRENT.load(Ordering::Relaxed);
-            PEAK.store(before, Ordering::Relaxed);
-            let started = Instant::now();
-            decrypt_once(&file, &plain);
-            let elapsed = started.elapsed().as_nanos();
-            let extra = PEAK.load(Ordering::Relaxed).saturating_sub(before);
-            times.push(elapsed);
-            extras.push(extra);
-        }
-        times.sort_unstable();
-        extras.sort_unstable();
-        let median = times[times.len() / 2];
-        let peak = extras[extras.len() / 2];
-        if !judged {
-            println!("NOT JUDGED plain={n} peak_extra={peak}");
-            continue;
-        }
-        let ms = median as f64 / 1_000_000.0;
-        let mb_s = (n as f64) / (median as f64 / 1_000_000_000.0) / 1_000_000.0;
-        println!(
-            "decrypt plain={n} file={} median_ns={median} median_ms={ms:.3} peak_extra={peak} mb_s={mb_s:.2}",
-            file.len()
-        );
-        assert!(
-            peak < 64 * 1024,
-            "decrypt allocated {peak} bytes on a {n}-byte package"
-        );
+        measure("standard", &file, &plain, judged);
+    }
+    let password_salt = [0x22u8; 16];
+    let key_salt = [0x33u8; 16];
+    for &n in &[64 * 1024usize, 1024 * 1024] {
+        let mut plain = vec![0x5au8; n];
+        plain[..4].copy_from_slice(b"PK\x03\x04");
+        let mut file = Vec::new();
+        encrypt_ooxml_agile(
+            "bench-password",
+            &password_salt,
+            &key_salt,
+            &plain,
+            &mut file,
+        )
+        .unwrap();
+        measure("agile", &file, &plain, judged);
     }
 }

@@ -1,9 +1,11 @@
-//! Decrypt an ECMA-376 standard-encrypted OOXML package.
+//! Decrypt an encrypted OOXML package.
 //!
 //! A password-protected docx, xlsx, or pptx is a Compound File with two streams:
-//! `EncryptionInfo` and `EncryptedPackage`. The package stream is the zip, AES-128-ECB
-//! under a key stretched from the password with SHA-1. This reader seeks to each
-//! sector, decrypts 16-byte blocks, and writes them out. The plaintext is not buffered.
+//! `EncryptionInfo` and `EncryptedPackage`. Standard encryption (minor version 2)
+//! is AES-128-ECB under a SHA-1 password key. Agile encryption (version 4.4),
+//! which current Word writes, is AES-256-CBC and SHA-512 when the descriptor
+//! says so. The reader seeks to each sector and writes plaintext as it goes.
+//! The plaintext is not buffered.
 //!
 //! # What a wrong password does
 //!
@@ -12,12 +14,14 @@
 //!
 //! # Honest limits
 //!
-//! - Standard encryption only: version minor 2, AES-128 (`0x660E`), SHA-1 (`0x8004`),
-//!   50,000 iterations, one key for the whole package (ECB). Agile (4.4) and extensible
-//!   (minor 3) return [`DecryptError::Unsupported`], which is not a wrong password.
-//! - No RC4, no AES-192, no AES-256. Software AES, no AES-NI.
-//! - The password check is the verifier hash. There is no payload HMAC, so a bit flipped
-//!   in `EncryptedPackage` still decrypts, to different bytes.
+//! - Standard (minor 2): AES-128 (`0x660E`), SHA-1 (`0x8004`), 50,000 iterations, one
+//!   ECB key for the package. That path has no payload HMAC, so a flipped standard
+//!   ciphertext still decrypts, to different bytes.
+//! - Agile (4.4): AES-256-CBC and SHA-512 only, spin count at most 1,000,000. The
+//!   password verifier runs first. The payload HMAC is checked before any plaintext
+//!   is written. Other agile ciphers, and extensible encryption (minor 3), return
+//!   [`DecryptError::Unsupported`], which is not a wrong password.
+//! - No RC4 and no AES-192. Software AES, no AES-NI.
 //! - `EncryptionInfo` is read whole and refused above 64 KiB. The package is not.
 //! - Compound File major version 3, 512-byte sectors. A 4096-byte sector file is
 //!   [`DecryptError::Unsupported`]. One FAT sector, one mini-FAT sector, and one data
@@ -27,7 +31,10 @@
 //!   does not hold the plaintext.
 //! - The inner zip is not parsed. docx, xlsx, and pptx are the same container.
 
+mod agile;
 mod cfb;
+
+pub use agile::encrypt_ooxml_agile;
 
 use crate::aes::Aes128;
 use crate::sha1::sha1;
@@ -48,7 +55,7 @@ pub enum DecryptError {
 }
 
 impl DecryptError {
-    fn from_io(err: io::Error) -> Self {
+    pub(super) fn from_io(err: io::Error) -> Self {
         if err.kind() == io::ErrorKind::UnexpectedEof {
             Self::Truncated
         } else {
@@ -104,6 +111,9 @@ pub fn decrypt_ooxml<R: Read + Seek, W: Write>(
     let mut cfb = cfb::Cfb::open(input)?;
     let (info_loc, pkg_loc) = cfb.encryption_streams()?;
     let info = cfb.read_entire(&info_loc)?;
+    if agile::is_agile(&info) {
+        return agile::decrypt(&mut cfb, &info, &pkg_loc, password, out);
+    }
     let parsed = parse_info(&info)?;
     let key = derive_key(password, &parsed.salt);
     let aes = Aes128::new(&key);
@@ -369,7 +379,8 @@ mod tests {
         let bogus = cfb::build(&[0x04, 0x00, 0x04, 0x00], &[0; 8]).unwrap();
         file.extend_from_slice(&bogus);
         let err = decrypt_ooxml(&mut Cursor::new(file), "secret", &mut Bomb).unwrap_err();
-        assert!(matches!(err, DecryptError::Unsupported("agile")));
+        assert!(matches!(err, DecryptError::Truncated));
+        assert_ne!(err.to_string(), "wrong password");
     }
 
     #[test]

@@ -82,8 +82,9 @@ mod aes;
 mod crc;
 mod ooxml;
 mod sha1;
+mod sha512;
 
-pub use ooxml::{decrypt_ooxml, encrypt_ooxml, DecryptError};
+pub use ooxml::{decrypt_ooxml, encrypt_ooxml, encrypt_ooxml_agile, DecryptError};
 
 use crc::{crc32, Crc32};
 use std::fs::{self, File};

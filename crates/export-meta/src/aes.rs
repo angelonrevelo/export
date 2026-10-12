@@ -112,6 +112,79 @@ impl Aes128 {
     }
 }
 
+/// AES-256. Agile OOXML uses this. The AES-128 type above is the standard path.
+pub struct Aes256 {
+    round: [[u8; 16]; 15],
+}
+
+impl Aes256 {
+    pub fn new(key: &[u8; 32]) -> Self {
+        let mut w = [0u8; 240];
+        w[..32].copy_from_slice(key);
+        let mut word = 8usize;
+        while word < 60 {
+            let prev = (word - 1) * 4;
+            let mut t = [w[prev], w[prev + 1], w[prev + 2], w[prev + 3]];
+            if word % 8 == 0 {
+                let x = t[0];
+                t[0] = t[1];
+                t[1] = t[2];
+                t[2] = t[3];
+                t[3] = x;
+                for b in &mut t {
+                    *b = SBOX[*b as usize];
+                }
+                t[0] ^= RCON[word / 8 - 1];
+            } else if word % 8 == 4 {
+                for b in &mut t {
+                    *b = SBOX[*b as usize];
+                }
+            }
+            let src = (word - 8) * 4;
+            let dst = word * 4;
+            for j in 0..4 {
+                w[dst + j] = w[src + j] ^ t[j];
+            }
+            word += 1;
+        }
+        let mut round = [[0u8; 16]; 15];
+        for r in 0..15 {
+            round[r].copy_from_slice(&w[r * 16..r * 16 + 16]);
+        }
+        Self { round }
+    }
+
+    pub fn encrypt_block(&self, block: &[u8; 16]) -> [u8; 16] {
+        let mut s = *block;
+        add_round(&mut s, &self.round[0]);
+        for r in 1..14 {
+            sub(&mut s, &SBOX);
+            shift_rows(&mut s);
+            mix(&mut s);
+            add_round(&mut s, &self.round[r]);
+        }
+        sub(&mut s, &SBOX);
+        shift_rows(&mut s);
+        add_round(&mut s, &self.round[14]);
+        s
+    }
+
+    pub fn decrypt_block(&self, block: &[u8; 16]) -> [u8; 16] {
+        let mut s = *block;
+        add_round(&mut s, &self.round[14]);
+        for r in (1..14).rev() {
+            inv_shift_rows(&mut s);
+            sub(&mut s, &INV_SBOX);
+            add_round(&mut s, &self.round[r]);
+            inv_mix(&mut s);
+        }
+        inv_shift_rows(&mut s);
+        sub(&mut s, &INV_SBOX);
+        add_round(&mut s, &self.round[0]);
+        s
+    }
+}
+
 fn add_round(s: &mut [u8; 16], key: &[u8; 16]) {
     for i in 0..16 {
         s[i] ^= key[i];
@@ -216,6 +289,19 @@ mod tests {
         let plain = hex16("00112233445566778899aabbccddeeff");
         let cipher = hex16("69c4e0d86a7b0430d8cdb78070b4c55a");
         let aes = Aes128::new(&key);
+        assert_eq!(aes.encrypt_block(&plain), cipher);
+        assert_eq!(aes.decrypt_block(&cipher), plain);
+    }
+
+    #[test]
+    fn fips_197_c3_aes256() {
+        let mut key = [0u8; 32];
+        for (i, b) in key.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        let plain = hex16("00112233445566778899aabbccddeeff");
+        let cipher = hex16("8ea2b7ca516745bfeafc49904b496089");
+        let aes = Aes256::new(&key);
         assert_eq!(aes.encrypt_block(&plain), cipher);
         assert_eq!(aes.decrypt_block(&cipher), plain);
     }
