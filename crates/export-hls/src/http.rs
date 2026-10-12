@@ -930,6 +930,43 @@ mod tests {
     }
 
     #[test]
+    fn sixteen_ranges_with_a_4097_gap_do_not_coalesce() {
+        let mut https_playlist = String::from("#EXTM3U\n");
+        for index in 0..16 {
+            let offset = index * (32_768 + 4097);
+            https_playlist.push_str(&format!("#EXTINF:1,\n#EXT-X-BYTERANGE:32768@{offset}\n"));
+            if index == 15 {
+                https_playlist.push_str("https://cdn.example/a.ts\n");
+            } else {
+                https_playlist.push_str("a.ts\n");
+            }
+        }
+        assert_eq!(
+            parse_media_playlist(&https_playlist),
+            Err(Error::Unsupported)
+        );
+        let mut text = String::from("#EXTM3U\n");
+        for index in 0..16 {
+            let offset = index * (32_768 + 4097);
+            text.push_str(&format!(
+                "#EXTINF:1,\n#EXT-X-BYTERANGE:32768@{offset}\na.ts\n"
+            ));
+        }
+        let playlist = parse_media_playlist(&text).unwrap();
+        assert_eq!(playlist.spans.len(), 16);
+        let mut payload = 0u64;
+        for (index, span) in playlist.spans.iter().enumerate() {
+            let range = span.byte_range.expect("range");
+            assert_eq!(range.length, 32_768);
+            assert_eq!(range.offset, (index as u64) * (32_768 + 4097));
+            assert_eq!(span.segments, vec![index]);
+            payload += range.length;
+        }
+        assert_eq!(payload, 524_288);
+        assert_eq!(Fetcher::default().get_spans(&playlist), Err(Error::BadTag));
+    }
+
+    #[test]
     fn coalesced_span_is_one_range_get() {
         assert_eq!(
             parse_media_playlist(

@@ -2,8 +2,8 @@
 //!
 //! Parse timings and the bulk local-stack GETs run on one thread. The
 //! one-segment, two-segment, four-segment, eight-segment, sixteen-segment,
-//! coalesced-range, and split-range fetches call the library client and use
-//! one local accept thread beside the client.
+//! sixteen-range, coalesced-range, and split-range fetches call the library
+//! client and use one local accept thread beside the client.
 //! Loopback GETs run only here, on 127.0.0.1. They are not CDN downloads.
 
 use std::io::{ErrorKind, Read, Write};
@@ -112,6 +112,14 @@ fn main() {
         Ok(report) => println!("{report}"),
         Err(err) => {
             eprintln!("local stack sixteen-segment GET failed: {err}");
+            std::process::exit(1);
+        }
+    }
+
+    match local_stack_sixteen_range_rows() {
+        Ok(report) => println!("{report}"),
+        Err(err) => {
+            eprintln!("local stack sixteen-range GET failed: {err}");
             std::process::exit(1);
         }
     }
@@ -752,6 +760,210 @@ fn local_stack_sixteen_segment_row() -> Result<String, Box<dyn std::error::Error
     Ok(format!(
         "local stack sixteen-segment GET connections=1 bytes={COMBINED_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
     ))
+}
+
+/// Sixteen `#EXT-X-BYTERANGE` rows of the same URI, each 32768 bytes, with a
+/// 4097-byte gap. They must not coalesce. The hole is not fetched. One sample
+/// is all sixteen `Range` GETs, either on one connection or on sixteen.
+///
+/// Loopback is allowed only here. `check_hop` still runs inside the client
+/// before the connect and again on any redirect. The bodies are raw text,
+/// not a transcode.
+fn local_stack_sixteen_range_rows() -> Result<String, Box<dyn std::error::Error>> {
+    const COUNT: usize = 16;
+    const RANGE_BYTES: usize = 32 * 1024;
+    const GAP_BYTES: usize = 4097;
+    let mut ranges = Vec::with_capacity(COUNT);
+    let mut parts = Vec::with_capacity(COUNT);
+    let mut resource = Vec::new();
+    for index in 0..COUNT {
+        let offset = index * (RANGE_BYTES + GAP_BYTES);
+        ranges.push(ByteRange {
+            offset: offset as u64,
+            length: RANGE_BYTES as u64,
+        });
+        let part = vec![b'a' + index as u8; RANGE_BYTES];
+        resource.extend_from_slice(&part);
+        parts.push(part);
+        if index + 1 != COUNT {
+            resource.extend(std::iter::repeat(b'h').take(GAP_BYTES));
+        }
+    }
+    let separate = time_sixteen_ranges(true, &ranges, &parts, resource.len())?;
+    let shared = time_sixteen_ranges(false, &ranges, &parts, resource.len())?;
+    Ok(format!("{separate}\n{shared}"))
+}
+
+fn time_sixteen_ranges(
+    separate_connections: bool,
+    ranges: &[ByteRange],
+    parts: &[Vec<u8>],
+    resource_len: usize,
+) -> Result<String, Box<dyn std::error::Error>> {
+    const PAYLOAD_BYTES: usize = 32 * 1024 * 16;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let segment_url = format!("http://127.0.0.1:{port}/seg.ts");
+    if check_hop(&segment_url, ConnectPolicy::default()) != Err(Error::Blocked) {
+        return Err("loopback segment was accepted without the bench opt-in".into());
+    }
+    let mut playlist_text = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n");
+    for range in ranges {
+        playlist_text.push_str(&format!(
+            "#EXTINF:1.0,\n#EXT-X-BYTERANGE:{}@{}\n{segment_url}\n",
+            range.length, range.offset
+        ));
+    }
+    playlist_text.push_str("#EXT-X-ENDLIST\n");
+    let playlist = parse_media_playlist(&playlist_text)?;
+    if playlist.spans.len() != ranges.len() || playlist.segments.len() != ranges.len() {
+        return Err("4097-byte gaps coalesced".into());
+    }
+    for (index, span) in playlist.spans.iter().enumerate() {
+        if span.byte_range != Some(ranges[index]) || span.segments != [index] {
+            return Err("a 4097-byte gap was merged".into());
+        }
+    }
+    let fetcher = Fetcher {
+        policy: ConnectPolicy::new(true),
+        timeout: Duration::from_secs(2),
+        max_redirects: 5,
+        max_body_bytes: 8 * 1024 * 1024,
+    };
+    let warmup = 5;
+    let iters = 100;
+    let requests_per_connection = if separate_connections {
+        1
+    } else {
+        ranges.len()
+    };
+    let connections = if separate_connections {
+        ranges.len() * (warmup + iters)
+    } else {
+        warmup + iters
+    };
+    let connection_count = if separate_connections {
+        ranges.len()
+    } else {
+        1
+    };
+    let samples = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            serve_unmerged_ranges(
+                listener,
+                parts,
+                ranges,
+                resource_len,
+                requests_per_connection,
+                connections,
+            );
+        });
+        let mut samples = Vec::with_capacity(iters);
+        for index in 0..(warmup + iters) {
+            let started = Instant::now();
+            let got = if separate_connections {
+                let mut bodies = Vec::with_capacity(ranges.len());
+                for span_index in 0..ranges.len() {
+                    bodies.push(
+                        fetcher
+                            .get_span(&playlist, span_index)
+                            .expect("separate cleartext range"),
+                    );
+                }
+                bodies
+            } else {
+                fetcher
+                    .get_spans(&playlist)
+                    .expect("shared cleartext ranges")
+            };
+            let elapsed = started.elapsed().as_nanos() as f64;
+            let payload: usize = got.iter().map(Vec::len).sum();
+            assert_eq!(got.len(), ranges.len());
+            for (part, body) in got.iter().zip(parts.iter()) {
+                assert_eq!(part, body);
+            }
+            assert_eq!(payload, PAYLOAD_BYTES);
+            if index >= warmup {
+                samples.push(elapsed);
+            }
+            std::hint::black_box(payload);
+        }
+        samples
+    });
+    let mut sorted = samples;
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let p50 = percentile(&sorted, 0.50);
+    let p99 = percentile(&sorted, 0.99);
+    let label = if separate_connections {
+        "separate"
+    } else {
+        "shared"
+    };
+    Ok(format!(
+        "local stack sixteen-range {label} GET connections={connection_count} bytes={PAYLOAD_BYTES} p50_ns={p50:.0} p99_ns={p99:.0} accept_thread=1 (not a CDN download)"
+    ))
+}
+
+fn serve_unmerged_ranges(
+    listener: TcpListener,
+    parts: &[Vec<u8>],
+    ranges: &[ByteRange],
+    resource_len: usize,
+    requests_per_connection: usize,
+    connections: usize,
+) {
+    listener.set_nonblocking(true).expect("nonblocking accept");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut served = 0;
+    let headers: Vec<String> = ranges.iter().copied().map(range_header).collect();
+    while served < connections && Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut sock, _)) => {
+                sock.set_nonblocking(false).expect("blocking socket");
+                sock.set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read timeout");
+                sock.set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("write timeout");
+                for request_index in 0..requests_per_connection {
+                    let request = read_http_request(&mut sock).expect("range did not arrive");
+                    assert!(
+                        request.starts_with("GET /seg.ts "),
+                        "range fetch used an unexpected path"
+                    );
+                    let last = request_index + 1 == requests_per_connection;
+                    if last || requests_per_connection == 1 {
+                        assert!(
+                            request.contains("Connection: close\r\n"),
+                            "range connection was not closed"
+                        );
+                    } else {
+                        assert!(
+                            request.contains("Connection: keep-alive\r\n"),
+                            "shared range connection closed early"
+                        );
+                    }
+                    let position = headers
+                        .iter()
+                        .position(|header| request.contains(header))
+                        .expect("4097-byte gap was fetched as one range");
+                    let body = &parts[position];
+                    let range = ranges[position];
+                    let inclusive_end = range.end().expect("range end") - 1;
+                    let persistence = if last { "close" } else { "keep-alive" };
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{inclusive_end}/{resource_len}\r\nConnection: {persistence}\r\nContent-Type: text/plain\r\n\r\n",
+                        body.len(),
+                        range.offset
+                    );
+                    sock.write_all(header.as_bytes()).expect("range header");
+                    sock.write_all(body).expect("range body");
+                }
+                served += 1;
+            }
+            Err(err) if waited(&err) => std::hint::spin_loop(),
+            Err(err) => panic!("sixteen-range accept failed: {err}"),
+        }
+    }
 }
 
 fn serve_four_cleartext_segments(listener: TcpListener, bodies: &[Vec<u8>], connections: usize) {
