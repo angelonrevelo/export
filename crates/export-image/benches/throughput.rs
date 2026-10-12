@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_image::{
-    decode_png, decode_webp, decode_webp_animation, encode_jpeg, encode_png, encode_webp_animation,
-    encode_webp_lossless, encode_webp_lossy,
+    decode_png, decode_webp, decode_webp_animation, encode_jpeg, encode_png, encode_svg,
+    encode_webp_animation, encode_webp_lossless, encode_webp_lossy, rasterize_svg,
     resize, restore_lossless_all, shrink_png, thumbnail_jpeg, Filter, Raster, ShrinkCache,
 };
 
@@ -1066,5 +1066,40 @@ fn main() {
         mb_s(first4_pixels * 3.0, p99),
         mb_s(anim4_720.len() as f64, p50),
         allocs as f64 / (first4_pixels / 1_000_000.0),
+    );
+
+    // One 16×16 black square on white, encoded as an SVG rect.
+    // The PNG, JPEG, and WebP rows above are unchanged.
+    let mut square = vec![255u8; 16 * 16 * 3];
+    for y in 4..12 {
+        for x in 4..12 {
+            let i = (y * 16 + x) * 3;
+            square[i] = 0;
+            square[i + 1] = 0;
+            square[i + 2] = 0;
+        }
+    }
+    let tile = Raster::new(16, 16, 3, square).unwrap();
+    for _ in 0..2 {
+        let _ = encode_svg(&tile).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_svg(black_box(&tile)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let svg = encode_svg(&tile).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let back = rasterize_svg(&svg).unwrap();
+    let pixels_match = back.width == 16
+        && back.height == 16
+        && back.channels == 3
+        && back.x == 0
+        && back.y == 0
+        && back.pixels == tile.pixels;
+    println!(
+        "svg_rect_encode 16x16 out_bytes={} samples=40 p50_ns={p50} p99_ns={p99} p50_us={:.3} p99_us={:.3} allocs={allocs} pixels_match={pixels_match}",
+        svg.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
     );
 }

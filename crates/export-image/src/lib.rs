@@ -1,6 +1,7 @@
 //! PNG decode, measured JPEG shrink-to-bytes, and simple WebP.
 //!
-//! Nothing in this crate calls Pillow, ImageMagick, ffmpeg, rembg, or libwebp.
+//! Nothing in this crate calls Pillow, ImageMagick, ffmpeg, rembg, libwebp,
+//! Cairo, vtracer, or resvg. The SVG path does not start a thread.
 //! Inflate, PNG filters, the baseline JPEG Huffman/DCT path, VP8L, the VP8
 //! keyframe subset, and the resampler are local. There is no dependency.
 //!
@@ -15,8 +16,11 @@
 //! 1280×720 file, it returns the first frame. Every other animation stays an
 //! error on [`decode_webp`].
 //! Alpha-only (`ALPH`) and other extended features stay errors.
-//! Thumbnail and shrink do not take WebP. Not in this crate: HEIC, AVIF, TIFF,
-//! SVG, RAW, JPEG XL, background removal, and vectorization. A file that
+//! Thumbnail and shrink do not take WebP. [`encode_svg`] writes one 16×16
+//! black square on white as a single `rect`, and [`rasterize_svg`] paints that
+//! file back. A path, a curve, text, and any other picture stay unsupported.
+//! Not in this crate: HEIC, AVIF, TIFF, RAW, JPEG XL, background removal, and
+//! vectorization. A file that
 //! cannot be restored exactly is an error and is counted by
 //! [`restore_lossless_all`].
 //!
@@ -41,6 +45,7 @@ mod resize;
 mod sha256;
 mod shrink;
 mod sniff;
+mod svg;
 mod thumb;
 mod vp8;
 mod vp8_tab;
@@ -55,8 +60,12 @@ pub use resize::{resize, Filter};
 pub use sha256::{sha256, Sha256};
 pub use shrink::{shrink_png, Probe, ShrinkCache, ShrinkOutcome};
 pub use sniff::{sniff, Format};
+pub use svg::{encode_svg, rasterize_svg};
 pub use thumb::{thumbnail_jpeg, Thumbnail, THUMB_LONG_EDGE, THUMB_QUALITY, THUMB_READ_LIMIT};
-pub use webp::{decode_webp, decode_webp_animation, encode_webp_animation, encode_webp_lossless, encode_webp_lossy};
+pub use webp::{
+    decode_webp, decode_webp_animation, encode_webp_animation, encode_webp_lossless,
+    encode_webp_lossy,
+};
 
 /// Decompressed pixel cap. Matches the product limit of 64 million pixels.
 pub const MAX_PIXELS: u64 = 64_000_000;

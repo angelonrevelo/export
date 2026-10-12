@@ -1,6 +1,6 @@
 # export-image
 
-Standalone crate. Its `Cargo.toml` has an empty `[dependencies]` list, and the library does not shell out to Pillow, ImageMagick, ffmpeg, rembg, or libwebp. Release and bench builds use `opt-level = 3`, `lto = "thin"`, and `codegen-units = 1`.
+Standalone crate. Its `Cargo.toml` has an empty `[dependencies]` list, and the library does not shell out to Pillow, ImageMagick, ffmpeg, rembg, libwebp, Cairo, vtracer, or resvg. The SVG path does not start a thread. Release and bench builds use `opt-level = 3`, `lto = "thin"`, and `codegen-units = 1`.
 
 ## Paths that work
 
@@ -41,9 +41,13 @@ The VP8 bool decoder zero-fills a coefficient partition that ends early, which i
 
 `thumbnail_jpeg` and `shrink_png` do not take WebP. A WebP buffer is `Unsupported` on the thumbnail path, and shrink still requires a PNG.
 
+## SVG rect
+
+`encode_svg` accepts one picture: a 16×16 RGB canvas that is white except for one solid black square. It writes a single `<rect>`. `rasterize_svg` fills that canvas white and paints the black square. Those pixels match the source. A path, circle, ellipse, line, polygon, polyline, rounded corner (`rx` or `ry`), text node, or any other picture is `Unsupported`. Cairo, vtracer, and resvg are not on this path.
+
 ## Not in this crate
 
-HEIC, AVIF, TIFF, SVG, RAW, JPEG XL, background removal, and vectorization.
+HEIC, AVIF, TIFF, RAW, JPEG XL, background removal, and vectorization.
 
 Progressive JPEG (SOF2), arithmetic JPEG, and unknown markers stay `Unsupported`. They are not decoded.
 
