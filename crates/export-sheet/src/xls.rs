@@ -46,6 +46,11 @@ pub fn generated_biff_xls_sum_cache() -> Vec<u8> {
     wrap_ole(&workbook_sum_cache())
 }
 
+/// A1 = 8, B1 = 9, C1 = SUM of those cells with no cached number.
+pub fn generated_biff_xls_sum_uncached() -> Vec<u8> {
+    wrap_ole(&workbook_sum_uncached())
+}
+
 pub(crate) fn to_delim<R: BufRead, W: Write>(
     mut input: R,
     output: &mut W,
@@ -141,6 +146,46 @@ fn formula_sum_cached(row: u16, col: u16, cached: f64) -> Vec<u8> {
     data.extend_from_slice(&col.to_le_bytes());
     data.extend_from_slice(&0u16.to_le_bytes());
     data.extend_from_slice(&cached.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
+    data.extend_from_slice(&rgce);
+    data
+}
+
+fn workbook_sum_uncached() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = dimensions();
+    dims[10..12].copy_from_slice(&3u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    push_rec(&mut out, 0x0203, &number_cell(0, 0, 8.0));
+    push_rec(&mut out, 0x0203, &number_cell(0, 1, 9.0));
+    push_rec(&mut out, 0x0006, &formula_sum_uncached(0, 2));
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
+/// Same SUM(A1,B1) expression as [`formula_sum_cached`], with an empty formula value.
+fn formula_sum_uncached(row: u16, col: u16) -> Vec<u8> {
+    let rgce = [
+        0x44, 0x00, 0x00, 0x00, 0x00, // PtgRef value, A1
+        0x44, 0x00, 0x00, 0x01, 0x00, // PtgRef value, B1
+        0x42, 0x02, 0x04, 0x00, // PtgFuncVar value, 2 args, SUM
+    ];
+    let mut data = Vec::with_capacity(22 + rgce.len());
+    data.extend_from_slice(&row.to_le_bytes());
+    data.extend_from_slice(&col.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF]);
     data.extend_from_slice(&0u16.to_le_bytes());
     data.extend_from_slice(&0u32.to_le_bytes());
     data.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
@@ -524,12 +569,13 @@ fn parse_workbook(stream: &[u8]) -> Result<Vec<Vec<String>>> {
                     return Err(Error::new("xls formula record has no cached number"));
                 }
                 let marker = u16::from_le_bytes(data[12..14].try_into().unwrap());
-                if marker == 0xFFFF {
-                    return Err(Error::new("xls formula record has no cached number"));
-                }
                 let row = u16::from_le_bytes(data[0..2].try_into().unwrap());
                 let col = u16::from_le_bytes(data[2..4].try_into().unwrap());
-                let value = f64::from_le_bytes(data[6..14].try_into().unwrap());
+                let value = if marker == 0xFFFF {
+                    sum_two_numeric_cells(data, &rows)?
+                } else {
+                    f64::from_le_bytes(data[6..14].try_into().unwrap())
+                };
                 place(&mut rows, row, col, number_text(value)?)?;
             }
             0x00FD if in_sheet => {
@@ -605,6 +651,56 @@ fn parse_sst(data: &[u8]) -> Result<Vec<String>> {
         return Err(Error::new("xls shared string table has trailing bytes"));
     }
     Ok(out)
+}
+
+/// SUM of two value-class cell refs, and nothing else. Other expressions stay refused.
+fn sum_two_numeric_cells(data: &[u8], rows: &[Vec<String>]) -> Result<f64> {
+    if data.len() < 22 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    let cce = u16::from_le_bytes(data[20..22].try_into().unwrap()) as usize;
+    if data.len() != 22 + cce || cce != 14 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    let rgce = &data[22..];
+    if rgce[0] != 0x44 || rgce[5] != 0x44 || rgce[10] != 0x42 || rgce[11] != 2 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    if u16::from_le_bytes(rgce[12..14].try_into().unwrap()) != 4 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    let left = cell_number(
+        rows,
+        u16::from_le_bytes(rgce[1..3].try_into().unwrap()),
+        u16::from_le_bytes(rgce[3..5].try_into().unwrap()),
+    )?;
+    let right = cell_number(
+        rows,
+        u16::from_le_bytes(rgce[6..8].try_into().unwrap()),
+        u16::from_le_bytes(rgce[8..10].try_into().unwrap()),
+    )?;
+    let sum = left + right;
+    if !sum.is_finite() {
+        return Err(Error::new("xls sum is not finite"));
+    }
+    Ok(sum)
+}
+
+fn cell_number(rows: &[Vec<String>], row: u16, col: u16) -> Result<f64> {
+    if col > 255 {
+        return Err(Error::new("xls sum cell is not a number"));
+    }
+    let text = rows
+        .get(row as usize)
+        .and_then(|line| line.get(col as usize))
+        .ok_or_else(|| Error::new("xls sum cell is missing"))?;
+    let value: f64 = text
+        .parse()
+        .map_err(|_| Error::new("xls sum cell is not a number"))?;
+    if !value.is_finite() {
+        return Err(Error::new("xls sum cell is not a number"));
+    }
+    Ok(value)
 }
 
 fn number_text(value: f64) -> Result<String> {
@@ -868,6 +964,35 @@ mod tests {
             rows,
             vec![vec!["2".to_string(), "3".to_string(), "5".to_string()]]
         );
+    }
+
+    #[test]
+    fn uncached_sum_adds_the_two_numeric_cells() {
+        let stream = workbook_sum_uncached();
+        let formula = record(&stream, 0x0006);
+        assert_eq!(formula[6], 0x03);
+        assert_eq!(
+            u16::from_le_bytes(formula[12..14].try_into().unwrap()),
+            0xFFFF
+        );
+        let rows = parse_workbook(&stream).unwrap();
+        assert_eq!(
+            rows,
+            vec![vec!["8".to_string(), "9".to_string(), "17".to_string()]]
+        );
+        let mut other = stream.clone();
+        let mut i = 0;
+        while i + 4 <= other.len() {
+            let op = u16::from_le_bytes(other[i..i + 2].try_into().unwrap());
+            if op == 0x0006 {
+                other[i + 4 + 22 + 12] = 5;
+                break;
+            }
+            let len = u16::from_le_bytes(other[i + 2..i + 4].try_into().unwrap()) as usize;
+            i += 4 + len;
+        }
+        let err = parse_workbook(&other).unwrap_err();
+        assert!(err.message().contains("no cached number"), "{err}");
     }
 
     fn records(stream: &[u8], op: u16) -> Vec<&[u8]> {

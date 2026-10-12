@@ -73,6 +73,16 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 575 ns |
 
+When that SUM has no cached number, the reader adds the two numeric cells and
+does not parse any other expression. A1 = 8 and B1 = 9, so the value is **17**.
+`xls → csv` prints `8,9,17`.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 669 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
