@@ -1069,4 +1069,74 @@ mod tests {
         assert!(fourth_at < fifth_at && fifth_at < sixth_at && sixth_at < seventh_at);
         assert!(seventh_at < eighth_at);
     }
+
+    #[test]
+    fn nine_item_book_stays_63798_in_and_61026_out() {
+        let first = part("First");
+        let second = part("Second");
+        let third = part("Third");
+        let fourth = part("Fourth");
+        let fifth = part("Fifth");
+        let sixth = part("Sixth");
+        let seventh = part("Seventh");
+        let eighth = part("Eighth");
+        let ninth = part("Ninth");
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Notes</dc:title></metadata>
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+    <item id="extra" href="extra.xhtml" media-type="application/xhtml+xml"/>
+    <item id="again" href="again.xhtml" media-type="application/xhtml+xml"/>
+    <item id="rest" href="rest.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+    <itemref idref="extra"/>
+    <itemref idref="again"/>
+    <itemref idref="rest"/>
+  </spine>
+</package>
+"#;
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/chapter.xhtml", first.as_bytes()),
+            ("OEBPS/next.xhtml", second.as_bytes()),
+            ("OEBPS/more.xhtml", third.as_bytes()),
+            ("OEBPS/tail.xhtml", fourth.as_bytes()),
+            ("OEBPS/end.xhtml", fifth.as_bytes()),
+            ("OEBPS/last.xhtml", sixth.as_bytes()),
+            ("OEBPS/extra.xhtml", seventh.as_bytes()),
+            ("OEBPS/again.xhtml", eighth.as_bytes()),
+            ("OEBPS/rest.xhtml", ninth.as_bytes()),
+        ]);
+        assert_eq!(bytes.len(), 63798);
+        let html = html_of(&bytes).unwrap();
+        assert_eq!(html.len(), 61026);
+        let text = std::str::from_utf8(&html).unwrap();
+        let first_at = text.find("First paragraph 0").unwrap();
+        let second_at = text.find("Second paragraph 0").unwrap();
+        let third_at = text.find("Third paragraph 0").unwrap();
+        let fourth_at = text.find("Fourth paragraph 0").unwrap();
+        let fifth_at = text.find("Fifth paragraph 0").unwrap();
+        let sixth_at = text.find("Sixth paragraph 0").unwrap();
+        let seventh_at = text.find("Seventh paragraph 0").unwrap();
+        let eighth_at = text.find("Eighth paragraph 0").unwrap();
+        let ninth_at = text.find("Ninth paragraph 0").unwrap();
+        assert!(first_at < second_at && second_at < third_at && third_at < fourth_at);
+        assert!(fourth_at < fifth_at && fifth_at < sixth_at && sixth_at < seventh_at);
+        assert!(seventh_at < eighth_at && eighth_at < ninth_at);
+    }
 }
