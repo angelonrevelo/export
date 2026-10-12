@@ -1626,10 +1626,9 @@ mod tests {
     fn one_text_and_four_eight_bit_pictures_become_pdf() {
         let text = four_indexed_picture_text();
         let file = ppt_text_four_indexed_document(&text).unwrap();
-        for banned in [2560, 5632, 6656, 7168, 7680, 8704, 9216, 9728, 14336, 14848, 21504] {
-            assert_ne!(file.len(), banned);
-        }
+        assert_eq!(file.len(), 27648);
         let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        assert_eq!(pdf.len(), 3978);
         let got = crate::pdf::plain_text(&pdf).unwrap();
         assert!(got.contains(&text), "{got}");
         let (width, height, first_rgb) = expected_indexed_rgb_add(0);
