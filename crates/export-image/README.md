@@ -12,7 +12,7 @@ Standalone crate. Its `Cargo.toml` has an empty `[dependencies]` list, and the l
 
 ## WebP, and the limit
 
-The sniffer accepts a RIFF container whose form type is `WEBP`. Decode and encode cover one still frame.
+The sniffer accepts a RIFF container whose form type is `WEBP`. Decode and encode cover one still frame, plus one two-frame animation whose frames are existing lossy keyframes.
 
 **Lossless (`VP8L`).** `encode_webp_lossless` writes one prefix-code group of literal pixels: no predictor, color transform, palette, color cache, or meta-Huffman image. `decode_webp` of that file restores the original RGB or RGBA samples. The reader also accepts a VP8L stream that uses those transforms. A meta-Huffman image with more than 64 prefix groups is `Unsupported`.
 
@@ -27,12 +27,14 @@ The sniffer accepts a RIFF container whose form type is `WEBP`. Decode and encod
 
 Color conversion is limited-range BT.601. `decode_webp(encode_webp_lossy(image))` matches the BT.601 reconstruction of the source samples. That reconstruction is not the source RGB when a channel is saturated, so a lossy round-trip is not a promise that the original bytes come back. A flat color’s YUV samples match an independent decode of the same frame. Two neighboring gray macroblocks stay within 2 levels of the source.
 
+**Two-frame animation.** `encode_webp_animation` takes exactly two RGB frames of equal size, each with sides a multiple of 16. It calls the same lossy keyframe encoder twice and wraps the payloads in `VP8X`, `ANIM`, and two `ANMF` chunks. That container is not an entropy coder. `decode_webp_animation` returns both frame rasters. `decode_webp` still returns `Unsupported` for those bytes, because it returns one raster. A frame that does not cover the canvas, an `ALPH` subchunk, and ICC, EXIF, or XMP stay `Unsupported`. There is no compositor and no loop filter.
+
 **Errors.**
 
 - Not `RIFF`, or `RIFF` whose form is not `WEBP`: `Invalid`.
 - A VP8 sync other than `9d 01 2a`, or a VP8L signature other than `0x2f`: `Invalid`.
 - A RIFF size, chunk size, or VP8 partition length that runs past the buffer: `Truncated`. A VP8 payload shorter than the 10-byte frame header is `Truncated`.
-- `VP8X`, `ALPH`, `ANIM`, `ANMF`, and any other chunk: `Unsupported`. Animation, alpha-only, and extended WebP are not round-tripped.
+- `decode_webp` rejects `VP8X`, `ALPH`, `ANIM`, and `ANMF` with `Unsupported`. Alpha-only and other extended WebP stay errors. The two-frame path above is the animation that round-trips.
 - Interframes, a version other than 0, segmentation, a loop filter, more than one coefficient partition, a scaling bit, a size that is not a multiple of 16, or a prediction mode other than DC: `Unsupported`.
 
 The VP8 bool decoder zero-fills a coefficient partition that ends early, which is what the frame format specifies. That shortfall is not reported as `Truncated`. Truncation is decided from the container and the frame header.
@@ -80,7 +82,13 @@ Encode rows are a later release run of the same 640×480 gradient. The decode ro
 | VP8 encode 640×480, quantizer index 8 (output 16,288 bytes) | 40 | 4,926.1 µs | 5,178.9 µs | 187.08 (p99 177.95) | file MB/s p50 3.31; 30 allocs; 97.66 allocs/MP |
 | WebP encode miss, 8×8 lossy (`Unsupported`) | 80 | 30 ns | 60 ns | — | 0 allocs |
 
-An 8×8 frame is not a multiple of 16, so `encode_webp_lossy` returns before the DCT. The encoder is still DC prediction only, with the loop filter off and no animation.
+An 8×8 frame is not a multiple of 16, so `encode_webp_lossy` returns before the DCT. Those encode rows were not replaced.
+
+Two-frame animation, a later release run. Each frame is 16×16, which the lossy encoder already accepts. `decode_webp_animation` returned both frames, and each frame matched `decode_webp` of that frame encoded alone. `decode_webp` on the animation file still returns `Unsupported`.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| two-frame VP8 animation encode, 16×16 (output 182 bytes) | 40 | 17.8 µs | 20.0 µs | 86.31 (p99 76.63) | file MB/s p50 10.23; 33 allocs; 64,453.12 allocs/MP |
 
 ## Huffman lookup
 
