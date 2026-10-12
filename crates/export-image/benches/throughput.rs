@@ -517,4 +517,45 @@ fn main() {
         decoded256.len(),
         decode_webp(&anim256).is_err(),
     );
+
+    // Appended 640×480 two-frame animation. The rows above are unchanged.
+    let mut flipped = image.pixels.clone();
+    for px in flipped.chunks_exact_mut(3) {
+        px[0] = px[0].wrapping_add(80);
+    }
+    let pair = [
+        image.clone(),
+        Raster::new(w, h, 3, flipped).unwrap(),
+    ];
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&pair).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&pair)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim_hd = encode_webp_animation(&pair).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim_hd_pixels = (w as f64) * (h as f64) * 2.0;
+    println!(
+        "webp_anim640_encode {w}x{h} frames=2 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim_hd.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim_hd_pixels * 3.0, p50),
+        mb_s(anim_hd_pixels * 3.0, p99),
+        mb_s(anim_hd.len() as f64, p50),
+        allocs as f64 / (anim_hd_pixels / 1_000_000.0),
+    );
+    let decoded_hd = decode_webp_animation(&anim_hd).unwrap();
+    let still_hd_a = decode_webp(&encode_webp_lossy(&pair[0]).unwrap()).unwrap();
+    let still_hd_b = decode_webp(&encode_webp_lossy(&pair[1]).unwrap()).unwrap();
+    let both_hd = decoded_hd.len() == 2
+        && decoded_hd[0].pixels == still_hd_a.pixels
+        && decoded_hd[1].pixels == still_hd_b.pixels;
+    println!(
+        "webp_anim640_decode frames={} both_frames={both_hd} still_match={both_hd} single_raster_errors={}",
+        decoded_hd.len(),
+        decode_webp(&anim_hd).is_err(),
+    );
 }
