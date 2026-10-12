@@ -103,6 +103,15 @@ pub fn encode_fourth_frame() -> Result<Vec<u8>, Error> {
     encode_frame_following(&crate::third_frame_pcm(), &crate::fourth_frame_pcm())
 }
 
+/// Flush after the four tone frames. Not a fifth sine.
+///
+/// The left half is [`crate::fourth_frame_pcm`]. The right half is silence.
+/// Overlap-add against the fourth frame's history emits that sine, which the
+/// fourth frame itself still delays.
+pub fn encode_flush_frame() -> Result<Vec<u8>, Error> {
+    encode_frame_following(&crate::fourth_frame_pcm(), &[0.0; FRAME_SAMPLES])
+}
+
 /// Decode one AAC-LC ADTS frame to 1024 mono PCM samples.
 ///
 /// Overlap history is zero, so a lone frame does not reconstruct its input.
@@ -198,6 +207,23 @@ pub fn decode_fourth_frame(
 ) -> Result<[f32; FRAME_SAMPLES], Error> {
     let mut tail = overlap_tail_after_third(first, second, third)?;
     decode_frame_with_tail(fourth, &mut tail)
+}
+
+/// Decode `flush` overlap-added against the tail left by `fourth`.
+///
+/// Earlier frames are decoded only to prime that tail. With the recorded
+/// series, the samples are [`crate::fourth_frame_pcm`], the sine the fourth
+/// frame delays. They are not silence.
+pub fn decode_flush_frame(
+    first: &[u8],
+    second: &[u8],
+    third: &[u8],
+    fourth: &[u8],
+    flush: &[u8],
+) -> Result<[f32; FRAME_SAMPLES], Error> {
+    let mut tail = overlap_tail_after_third(first, second, third)?;
+    decode_frame_with_tail(fourth, &mut tail)?;
+    decode_frame_with_tail(flush, &mut tail)
 }
 
 fn spectrum(bytes: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
@@ -773,6 +799,80 @@ mod tests {
         let sbr = fill_frame(EXT_SBR_DATA);
         assert_eq!(
             decode_fourth_frame(&first, &second, &third, &sbr).unwrap_err(),
+            Error::Unsupported
+        );
+    }
+
+    #[test]
+    fn silent_prime_emits_silence() {
+        let sine = crate::fourth_frame_pcm();
+        let delayed = crate::third_frame_pcm();
+        let silence = [0.0f32; FRAME_SAMPLES];
+        let prime = encode_frame(&silence).unwrap();
+        let next = encode_frame_following(&silence, &sine).unwrap();
+        let out = decode_second_frame(&prime, &next).unwrap();
+        let mut own = 0.0f32;
+        let mut late = 0.0f32;
+        let mut peak = 0.0f32;
+        for i in 0..FRAME_SAMPLES {
+            own = own.max((out[i] - sine[i]).abs());
+            late = late.max((out[i] - delayed[i]).abs());
+            peak = peak.max(out[i].abs());
+        }
+        assert!(
+            (peak - 0.0024040816).abs() < 1e-7,
+            "silent prime peak {peak}"
+        );
+        assert!(
+            (own - 0.5004582).abs() < 1e-6,
+            "silent prime vs its sine {own}"
+        );
+        assert!(
+            (late - 0.50055003).abs() < 1e-6,
+            "silent prime vs the delayed sine {late}"
+        );
+    }
+
+    #[test]
+    fn flush_frame_emits_the_delayed_sine() {
+        let fourth_pcm = crate::fourth_frame_pcm();
+        let first = encode_frame(&crate::one_frame_pcm()).unwrap();
+        let second = encode_second_frame().unwrap();
+        let third = encode_third_frame().unwrap();
+        let fourth = encode_fourth_frame().unwrap();
+        let flush = encode_flush_frame().unwrap();
+        assert_eq!(first.len(), 513);
+        assert_eq!(second.len(), 68);
+        assert_eq!(third.len(), 94);
+        assert_eq!(fourth.len(), 60);
+        let out = decode_flush_frame(&first, &second, &third, &fourth, &flush).unwrap();
+        let mut vs_sine = 0.0f32;
+        let mut vs_silence = 0.0f32;
+        let mut peak = 0.0f32;
+        for i in 0..FRAME_SAMPLES {
+            vs_sine = vs_sine.max((out[i] - fourth_pcm[i]).abs());
+            vs_silence = vs_silence.max(out[i].abs());
+            peak = peak.max(out[i].abs());
+        }
+        eprintln!(
+            "flush_bytes={} vs_delayed_sine={vs_sine} vs_silence={vs_silence} peak={peak}",
+            flush.len()
+        );
+        assert!(peak > 0.4, "flush still emits silence, peak {peak}");
+        assert!(
+            vs_sine <= crate::RECORDED_FLUSH_MAX_ABS_ERROR,
+            "flush vs delayed sine {vs_sine}"
+        );
+        assert!(vs_silence > 0.4, "flush vs silence {vs_silence}");
+        let mut truncated = flush.clone();
+        truncated.pop();
+        assert_eq!(
+            decode_flush_frame(&first, &second, &third, &fourth, &truncated).unwrap_err(),
+            Error::Truncated
+        );
+        let sbr = fill_frame(EXT_SBR_DATA);
+        assert_eq!(
+            decode_flush_frame(&first, &second, &third, &fourth, &sbr).unwrap_err(),
             Error::Unsupported
         );
     }

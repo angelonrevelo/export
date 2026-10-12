@@ -101,6 +101,28 @@ frame. It is still one frame late. 200 calls, same profile.
 | --- | --- | --- |
 | decode, tail ready | 5.055 ms (5055180 ns) | 8.760 ms (8760302 ns) |
 
+## Silent prime
+
+A silent frame placed before the sine that frame 4 delays emits silence.
+Peak 0.0024040816. Max abs error versus that sine is 0.5004582. Versus the
+third frame's sine it is 0.50055003. The sine does not land on its own
+samples.
+
+## Flush frame, release
+
+The flush is not a new sine. Its left half is the fourth frame's PCM. Its
+right half is silence. Overlap-add against the fourth frame's history emits
+the half-scale 440 Hz sine that frame 4 delays.
+
+Max abs error versus that delayed sine is 0.0025660098. Max abs error versus
+silence is 0.5008244.
+
+Same profile, 200 calls. Not a throughput number for a song.
+
+| | p50 | p99 | output bytes |
+| --- | --- | --- | --- |
+| encode | 5.893 ms (5893053 ns) | 7.643 ms (7642850 ns) | 945 |
+
 ## Build
 
 ```

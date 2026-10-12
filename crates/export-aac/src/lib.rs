@@ -2,7 +2,8 @@
 //!
 //! This is not a song encoder. [`encode_frame`] starts from a zero history and
 //! does not keep overlap. Later frames of the same sine each overlap-add one
-//! frame late.
+//! frame late. A flush of silence after the fourth frame emits the sine that
+//! frame still delays.
 //! HE-AAC, SBR, and parametric stereo return [`Error::Unsupported`].
 
 #![forbid(unsafe_code)]
@@ -13,9 +14,10 @@ mod huff;
 mod mdct;
 
 pub use codec::{
-    decode_fourth_frame, decode_frame, decode_frame_with_tail, decode_second_frame,
-    decode_third_frame, encode_fourth_frame, encode_frame, encode_frame_following,
-    encode_second_frame, encode_third_frame, overlap_tail_after_third, Error, OverlapTail,
+    decode_flush_frame, decode_fourth_frame, decode_frame, decode_frame_with_tail,
+    decode_second_frame, decode_third_frame, encode_flush_frame, encode_fourth_frame, encode_frame,
+    encode_frame_following, encode_second_frame, encode_third_frame, overlap_tail_after_third,
+    Error, OverlapTail,
 };
 
 /// PCM samples in one AAC long-window frame.
@@ -57,6 +59,14 @@ pub const RECORDED_THIRD_FRAME_MAX_ABS_ERROR: f32 = 0.001;
 /// overlap-add emits the third frame's sine, not [`fourth_frame_pcm`]. The
 /// bound is that measurement, padded only enough to stay stable.
 pub const RECORDED_FOURTH_FRAME_MAX_ABS_ERROR: f32 = 0.0014;
+
+/// Recorded maximum absolute PCM error of [`decode_flush_frame`] against
+/// [`fourth_frame_pcm`]. Full scale is 1.0.
+///
+/// Measured max was 0.0025660098. The flush frame's own samples are silence.
+/// Overlap-add against the fourth frame emits the sine that frame delays.
+/// The bound is that measurement, padded only enough to stay stable.
+pub const RECORDED_FLUSH_MAX_ABS_ERROR: f32 = 0.0027;
 
 /// Half-scale 440 Hz sine, 1024 samples at 44.1 kHz. This is the one frame
 /// the recorded error bound refers to.
