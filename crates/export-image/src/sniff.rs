@@ -3,7 +3,7 @@
 pub enum Format {
     Png,
     Jpeg,
-    /// RIFF/WEBP. Simple `VP8L` and `VP8 ` stills decode; extended and animated files do not.
+    /// RIFF/WEBP. Stills decode with `decode_webp`. A two-frame animation decodes with `decode_webp_animation`.
     Webp,
     Unknown,
 }

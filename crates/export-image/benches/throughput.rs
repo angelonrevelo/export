@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_image::{
-    decode_png, decode_webp, encode_jpeg, encode_png, encode_webp_lossless, encode_webp_lossy,
+    decode_png, decode_webp, decode_webp_animation, encode_jpeg, encode_png, encode_webp_animation,
+    encode_webp_lossless, encode_webp_lossy,
     resize, restore_lossless_all, shrink_png, thumbnail_jpeg, Filter, Raster, ShrinkCache,
 };
 
@@ -347,5 +348,49 @@ fn main() {
     println!(
         "webp_encode_miss odd_size=8x8 samples=80 p50_ns={} p99_ns={} error={miss_err} allocs={allocs}",
         p50, p99,
+    );
+
+    // Appended two-frame animation. The 640×480 encode rows above are unchanged.
+    let mut red = vec![0u8; 16 * 16 * 3];
+    for px in red.chunks_exact_mut(3) {
+        px.copy_from_slice(&[220, 40, 60]);
+    }
+    let mut green = vec![0u8; 16 * 16 * 3];
+    for px in green.chunks_exact_mut(3) {
+        px.copy_from_slice(&[20, 180, 90]);
+    }
+    let frame_a = Raster::new(16, 16, 3, red).unwrap();
+    let frame_b = Raster::new(16, 16, 3, green).unwrap();
+    let frames = [frame_a, frame_b];
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&frames).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&frames)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim = encode_webp_animation(&frames).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim_pixels = 16.0 * 16.0 * 2.0;
+    println!(
+        "webp_anim_encode 16x16 frames=2 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim_pixels * 3.0, p50),
+        mb_s(anim_pixels * 3.0, p99),
+        mb_s(anim.len() as f64, p50),
+        allocs as f64 / (anim_pixels / 1_000_000.0),
+    );
+    let decoded = decode_webp_animation(&anim).unwrap();
+    let still_a = decode_webp(&encode_webp_lossy(&frames[0]).unwrap()).unwrap();
+    let still_b = decode_webp(&encode_webp_lossy(&frames[1]).unwrap()).unwrap();
+    let both = decoded.len() == 2
+        && decoded[0].pixels == still_a.pixels
+        && decoded[1].pixels == still_b.pixels;
+    println!(
+        "webp_anim_decode frames={} both_frames={both} single_raster_errors={}",
+        decoded.len(),
+        decode_webp(&anim).is_err(),
     );
 }
