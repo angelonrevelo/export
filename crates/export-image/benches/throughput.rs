@@ -850,4 +850,36 @@ fn main() {
         mb_s(anim_placed.len() as f64, p50),
         allocs as f64 / (one_pixels / 1_000_000.0),
     );
+
+    // decode_webp of the origin-zero partial only. The (16, 32) row above is unchanged.
+    for _ in 0..2 {
+        let _ = decode_webp(&anim_part).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(decode_webp(black_box(&anim_part)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let origin = decode_webp(&anim_part).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let origin_pixels = 64.0 * 64.0;
+    let canvas_match = origin.width == 64
+        && origin.height == 64
+        && origin.x == 0
+        && origin.y == 0
+        && origin.pixels == decoded_part[1].pixels;
+    let placed_same = decode_webp(&anim_placed).unwrap().pixels == one.pixels;
+    let still_same = decode_webp(&encode_webp_lossy(&partial[0]).unwrap())
+        .unwrap()
+        .pixels
+        == still_canvas.pixels;
+    let full_errors = decode_webp(&anim64).is_err();
+    println!(
+        "webp_anim64_origin0_decode canvas=64x64 origin=0,0 tile=16x16 samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2} canvas_match={canvas_match} placed_same={placed_same} still_same={still_same} full_errors={full_errors}",
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(origin_pixels * 3.0, p50),
+        mb_s(origin_pixels * 3.0, p99),
+        mb_s(anim_part.len() as f64, p50),
+        allocs as f64 / (origin_pixels / 1_000_000.0),
+    );
 }
