@@ -93,6 +93,14 @@ frame late. 200 calls, same profile.
 | --- | --- | --- |
 | decode | 20.838 ms (20837888 ns) | 22.949 ms (22949440 ns) |
 
+The row above includes reading the earlier three frames. With that overlap
+tail already built, `decode_frame_with_tail` times only the 60-byte fourth
+frame. It is still one frame late. 200 calls, same profile.
+
+| | p50 | p99 |
+| --- | --- | --- |
+| decode, tail ready | 5.055 ms (5055180 ns) | 8.760 ms (8760302 ns) |
+
 ## Build
 
 ```

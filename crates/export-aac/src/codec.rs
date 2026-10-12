@@ -143,6 +143,48 @@ pub fn decode_third_frame(
     Ok(pcm_f32(&mdct::synthesis_overlap(&spec2, &mut overlap)))
 }
 
+/// Overlap tail left by earlier AAC-LC frames.
+///
+/// [`decode_frame_with_tail`] reads it and replaces it with the decoded
+/// frame's tail. Copy the value to decode again against the same history.
+#[derive(Clone, Copy)]
+pub struct OverlapTail {
+    samples: [f64; FRAME_SAMPLES],
+}
+
+/// Overlap tail left after the third frame.
+///
+/// `first` and `second` are decoded only to prime that tail. The fourth
+/// frame adds against it. [`decode_fourth_frame`] builds this tail itself
+/// before it reads the fourth frame.
+pub fn overlap_tail_after_third(
+    first: &[u8],
+    second: &[u8],
+    third: &[u8],
+) -> Result<OverlapTail, Error> {
+    let spec0 = spectrum(first)?;
+    let mut overlap = [0.0; FRAME_SAMPLES];
+    let _ = mdct::synthesis_overlap(&spec0, &mut overlap);
+    let spec1 = spectrum(second)?;
+    let _ = mdct::synthesis_overlap(&spec1, &mut overlap);
+    let spec2 = spectrum(third)?;
+    let _ = mdct::synthesis_overlap(&spec2, &mut overlap);
+    Ok(OverlapTail { samples: overlap })
+}
+
+/// Decode one AAC-LC ADTS frame overlap-added against an existing tail.
+///
+/// `tail` is replaced with this frame's tail. With the tail from
+/// [`overlap_tail_after_third`] and the recorded fourth frame, the samples
+/// match [`decode_fourth_frame`]: still one frame late.
+pub fn decode_frame_with_tail(
+    bytes: &[u8],
+    tail: &mut OverlapTail,
+) -> Result<[f32; FRAME_SAMPLES], Error> {
+    let spec = spectrum(bytes)?;
+    Ok(pcm_f32(&mdct::synthesis_overlap(&spec, &mut tail.samples)))
+}
+
 /// Decode `fourth` overlap-added against the tail left by `third`.
 ///
 /// Earlier frames are decoded only to prime that tail. With the recorded
@@ -154,15 +196,8 @@ pub fn decode_fourth_frame(
     third: &[u8],
     fourth: &[u8],
 ) -> Result<[f32; FRAME_SAMPLES], Error> {
-    let spec0 = spectrum(first)?;
-    let mut overlap = [0.0; FRAME_SAMPLES];
-    let _ = mdct::synthesis_overlap(&spec0, &mut overlap);
-    let spec1 = spectrum(second)?;
-    let _ = mdct::synthesis_overlap(&spec1, &mut overlap);
-    let spec2 = spectrum(third)?;
-    let _ = mdct::synthesis_overlap(&spec2, &mut overlap);
-    let spec3 = spectrum(fourth)?;
-    Ok(pcm_f32(&mdct::synthesis_overlap(&spec3, &mut overlap)))
+    let mut tail = overlap_tail_after_third(first, second, third)?;
+    decode_frame_with_tail(fourth, &mut tail)
 }
 
 fn spectrum(bytes: &[u8]) -> Result<[f64; FRAME_SAMPLES], Error> {
@@ -726,6 +761,9 @@ mod tests {
             own > 0.4,
             "fourth frame vs its own input {own} is not one frame late"
         );
+        let tail = overlap_tail_after_third(&first, &second, &third).unwrap();
+        let mut primed = tail;
+        assert_eq!(decode_frame_with_tail(&fourth, &mut primed).unwrap(), out);
         let mut truncated = fourth.clone();
         truncated.pop();
         assert_eq!(

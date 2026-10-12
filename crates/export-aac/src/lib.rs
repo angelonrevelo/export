@@ -13,9 +13,9 @@ mod huff;
 mod mdct;
 
 pub use codec::{
-    decode_fourth_frame, decode_frame, decode_second_frame, decode_third_frame,
-    encode_fourth_frame, encode_frame, encode_frame_following, encode_second_frame,
-    encode_third_frame, Error,
+    decode_fourth_frame, decode_frame, decode_frame_with_tail, decode_second_frame,
+    decode_third_frame, encode_fourth_frame, encode_frame, encode_frame_following,
+    encode_second_frame, encode_third_frame, overlap_tail_after_third, Error, OverlapTail,
 };
 
 /// PCM samples in one AAC long-window frame.
