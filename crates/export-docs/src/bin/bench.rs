@@ -11,7 +11,8 @@ use std::time::Instant;
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
     pdf_split, pdf_text, pdf_watermark, ppt_four_text_document, ppt_text_document,
-    ppt_text_picture_document, ppt_three_text_document, ppt_two_text_document, pptx_raster_slide,
+    ppt_text_indexed_document, ppt_text_picture_document, ppt_three_text_document,
+    ppt_two_text_document, pptx_raster_slide,
     pptx_raster_stored_pdf, word97_document,
 };
 
@@ -1841,6 +1842,120 @@ fn ppt_picture_text() -> String {
     text
 }
 
+fn report_ppt_pdf_indexed() {
+    let (north, east, south, west) = ppt_html_four_texts();
+    let four = ppt_four_text_document(&north, &east, &south, &west).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let four_pdf = convert("ppt", "pdf", &four).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if four.len() != 7680 || four_pdf.len() != 6710 {
+        eprintln!(
+            "ppt four-shape pdf size changed: input_b={} output_b={}",
+            four.len(),
+            four_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let one_text = ppt_html_text();
+    let one = ppt_text_document(&one_text).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let one_pdf = convert("ppt", "pdf", &one).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if one.len() != 5632 || one_pdf.len() != 3981 {
+        eprintln!(
+            "ppt one-shape pdf size changed: input_b={} output_b={}",
+            one.len(),
+            one_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let picture_text = ppt_picture_text();
+    let picture = ppt_text_picture_document(&picture_text).unwrap_or_else(|err| {
+        eprintln!("ppt 24-bit picture fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let picture_pdf = convert("ppt", "pdf", &picture).unwrap_or_else(|err| {
+        eprintln!("ppt 24-bit picture pdf changed: {err}");
+        std::process::exit(1);
+    });
+    if picture.len() != 14336 || picture_pdf.len() != 1991 {
+        eprintln!(
+            "ppt 24-bit picture size changed: input_b={} output_b={}",
+            picture.len(),
+            picture_pdf.len()
+        );
+        std::process::exit(1);
+    }
+    let text = ppt_indexed_text();
+    let file = ppt_text_indexed_document(&text).unwrap_or_else(|err| {
+        eprintln!("ppt 8-bit picture fixture failed: {err}");
+        std::process::exit(1);
+    });
+    if file.len() == 14336 || file.len() == 5632 || file.len() == 7680 {
+        eprintln!("ppt 8-bit fixture collided with a published file: {}", file.len());
+        std::process::exit(1);
+    }
+    match convert("ppt", "pdf", &file) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("ppt→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            let image = pdf.windows(15).any(|w| w == b"/Subtype /Image")
+                && pdf.windows(9).any(|w| w == b"/Width 80")
+                && pdf.windows(10).any(|w| w == b"/Height 64");
+            if extracted.contains(&text) && image {
+                let sample = measure(|| ready_bytes("ppt", "pdf", &file));
+                emit_ready("ppt→pdf indexed", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→pdf indexed p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                eprintln!("8-bit picture was not extracted into the pdf");
+                emit_untimed(
+                    "ppt→pdf indexed",
+                    file.len() as u64,
+                    Some(pdf.len() as u64),
+                    &format!(
+                        "MISS: pdf text or picture is missing (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("8-bit picture could not be extracted: {err}");
+        }
+    }
+}
+
+fn ppt_indexed_text() -> String {
+    let mut text = String::new();
+    for i in 0..12 {
+        text.push_str(&format!(
+            "Indexed picture sentence {i} of the generated PowerPoint file. "
+        ));
+    }
+    text
+}
+
 fn ppt_html_four_texts() -> (String, String, String, String) {
     let mut north = String::new();
     let mut east = String::new();
@@ -2364,6 +2479,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_pdf_picture();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-pdf-pic8") {
+        println!("export-docs ppt 8-bit picture pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_pdf_indexed();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {

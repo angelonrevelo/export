@@ -48,9 +48,9 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
 }
 
 /// A generated one-shape file, and four text shapes, become a text PDF when the
-/// extracted text contains those strings. One text shape plus one DIB picture
-/// becomes a text PDF with that picture as an image. The published 2,560-byte
-/// one-shape file stays a miss. Every other file stays a miss.
+/// extracted text contains those strings. One text shape plus one 24-bit or
+/// 8-bit DIB picture becomes a text PDF with that picture as an image. Other
+/// bit depths stay a miss. The published 2,560-byte one-shape file stays a miss.
 pub fn ppt_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let (input_bytes, bytes) = load_file(src)?;
     let texts = match parse_ppt(&bytes) {
@@ -286,7 +286,13 @@ fn dib_rgb(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let planes = u16::from_le_bytes(dib[12..14].try_into().ok()?);
     let bits = u16::from_le_bytes(dib[14..16].try_into().ok()?);
     let compression = u32::from_le_bytes(dib[16..20].try_into().ok()?);
-    if planes != 1 || bits != 24 || compression != 0 {
+    if planes != 1 || compression != 0 {
+        return None;
+    }
+    if bits == 8 {
+        return dib8_rgb(dib, width as usize, height as usize);
+    }
+    if bits != 24 {
         return None;
     }
     let width = width as usize;
@@ -305,6 +311,31 @@ fn dib_rgb(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
             rgb[d] = row[s + 2];
             rgb[d + 1] = row[s + 1];
             rgb[d + 2] = row[s];
+        }
+    }
+    Some((width as u32, height as u32, rgb))
+}
+
+fn dib8_rgb(dib: &[u8], width: usize, height: usize) -> Option<(u32, u32, Vec<u8>)> {
+    let colors = u32::from_le_bytes(dib[32..36].try_into().ok()?);
+    if colors != 0 && colors != 256 {
+        return None;
+    }
+    let stride = width.div_ceil(4) * 4;
+    let pixels_at = 40 + 256 * 4;
+    if dib.len() != pixels_at + stride * height {
+        return None;
+    }
+    let mut rgb = vec![0u8; width * height * 3];
+    for y in 0..height {
+        let src_y = height - 1 - y;
+        let row = &dib[pixels_at + src_y * stride..pixels_at + src_y * stride + width];
+        for (x, &index) in row.iter().enumerate() {
+            let quad = 40 + index as usize * 4;
+            let d = (y * width + x) * 3;
+            rgb[d] = dib[quad + 2];
+            rgb[d + 1] = dib[quad + 1];
+            rgb[d + 2] = dib[quad];
         }
     }
     Some((width as u32, height as u32, rgb))
@@ -360,6 +391,46 @@ fn encode_dib(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
             dib[d] = rgb[s + 2];
             dib[d + 1] = rgb[s + 1];
             dib[d + 2] = rgb[s];
+        }
+    }
+    Some(dib)
+}
+
+fn palette_entry(index: u8) -> [u8; 3] {
+    [
+        index,
+        index.wrapping_mul(3).wrapping_add(20),
+        180u8.wrapping_sub(index),
+    ]
+}
+
+fn encode_dib8(width: u32, height: u32) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 || width > 4096 || height > 255 {
+        return None;
+    }
+    let width = width as usize;
+    let height = height as usize;
+    let stride = width.div_ceil(4) * 4;
+    let pixels_at = 40 + 256 * 4;
+    let mut dib = vec![0u8; pixels_at + stride * height];
+    dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+    dib[4..8].copy_from_slice(&(width as u32).to_le_bytes());
+    dib[8..12].copy_from_slice(&(height as u32).to_le_bytes());
+    dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&8u16.to_le_bytes());
+    dib[20..24].copy_from_slice(&((stride * height) as u32).to_le_bytes());
+    for i in 0..256u16 {
+        let [r, g, b] = palette_entry(i as u8);
+        let at = 40 + i as usize * 4;
+        dib[at] = b;
+        dib[at + 1] = g;
+        dib[at + 2] = r;
+    }
+    for y in 0..height {
+        let src_y = height - 1 - y;
+        let index = y as u8;
+        for x in 0..width {
+            dib[pixels_at + src_y * stride + x] = index;
         }
     }
     Some(dib)
@@ -433,6 +504,19 @@ pub fn ppt_text_picture_document(text: &str) -> Result<Vec<u8>> {
     }
     let (width, height, rgb) = picture_rgb();
     let blip = blip_dib(width, height, &rgb).ok_or_else(|| Error::new("picture is not a dib"))?;
+    pack_cfb(&document_with_picture(text.as_bytes(), &blip))
+}
+
+/// Compound file with one text shape and one 8-bit DIB picture.
+pub fn ppt_text_indexed_document(text: &str) -> Result<Vec<u8>> {
+    if !plain_shape(text) {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    let dib = encode_dib8(80, 64).ok_or_else(|| Error::new("picture is not a dib"))?;
+    let mut blip = vec![0u8; 17];
+    blip[0] = 0xA1;
+    blip[16] = 0xFF;
+    blip.extend(dib);
     pack_cfb(&document_with_picture(text.as_bytes(), &blip))
 }
 
@@ -1018,6 +1102,46 @@ mod tests {
     }
 
     #[test]
+    fn one_text_and_eight_bit_picture_become_pdf() {
+        let text = indexed_slide_text();
+        let file = ppt_text_indexed_document(&text).unwrap();
+        assert_ne!(file.len(), 14336);
+        assert_ne!(file.len(), 5632);
+        assert_ne!(file.len(), 7680);
+        let pdf = crate::convert::convert("ppt", "pdf", &file).unwrap();
+        let got = crate::pdf::plain_text(&pdf).unwrap();
+        assert!(got.contains(&text), "{got}");
+        let (width, height, rgb) = expected_indexed_rgb();
+        assert!(crate::pdf::contains_image(&pdf, width, height, &rgb).unwrap());
+        assert!(pdf.windows(15).any(|w| w == b"/Subtype /Image"));
+        let twenty_four = ppt_text_picture_document(&picture_slide_text()).unwrap();
+        let twenty_four_pdf = crate::convert::convert("ppt", "pdf", &twenty_four).unwrap();
+        assert_eq!(twenty_four.len(), 14336);
+        assert_eq!(twenty_four_pdf.len(), 1991);
+    }
+
+    #[test]
+    fn four_bit_picture_stays_a_miss() {
+        let mut dib = vec![0u8; 40];
+        dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&8u32.to_le_bytes());
+        dib[8..12].copy_from_slice(&8u32.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&4u16.to_le_bytes());
+        let mut blip = vec![0u8; 17];
+        blip[16] = 0xFF;
+        blip.extend(dib);
+        let stream = document_with_picture(b"Four bit picture stays a miss.", &blip);
+        let file = pack_cfb(&stream).unwrap();
+        let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(
+            err.message.contains("not one, two, three, or four text shapes"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn broken_picture_stays_the_old_miss() {
         let stream = document_with_picture(b"Generated legacy PowerPoint picture.", &[0u8; 8]);
         let file = pack_cfb(&stream).unwrap();
@@ -1034,6 +1158,32 @@ mod tests {
         for i in 0..12 {
             text.push_str(&format!(
                 "Picture shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        text
+    }
+
+    fn expected_indexed_rgb() -> (u32, u32, Vec<u8>) {
+        let width = 80u32;
+        let height = 64u32;
+        let mut rgb = vec![0u8; (width * height * 3) as usize];
+        for y in 0..height as usize {
+            let [r, g, b] = palette_entry(y as u8);
+            for x in 0..width as usize {
+                let d = (y * width as usize + x) * 3;
+                rgb[d] = r;
+                rgb[d + 1] = g;
+                rgb[d + 2] = b;
+            }
+        }
+        (width, height, rgb)
+    }
+
+    fn indexed_slide_text() -> String {
+        let mut text = String::new();
+        for i in 0..12 {
+            text.push_str(&format!(
+                "Indexed picture sentence {i} of the generated PowerPoint file. "
             ));
         }
         text
