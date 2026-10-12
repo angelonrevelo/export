@@ -16,6 +16,7 @@ mod container;
 mod convert;
 mod crc;
 mod deflate;
+mod doc;
 mod docx;
 mod epub;
 mod error;
@@ -38,4 +39,5 @@ pub use convert::{
 };
 pub use error::{Error, Result};
 pub use stats::RunStats;
+pub use doc::word97_document;
 pub use zip::{pack_deflated, pack_stored};

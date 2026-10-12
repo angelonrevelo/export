@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
-    pdf_split, pdf_watermark,
+    pdf_split, pdf_watermark, word97_document,
 };
 
 const WARMUP: usize = 4;
@@ -432,6 +432,54 @@ fn rtf_pict() -> Vec<u8> {
     b"{\\rtf1\\ansi{\\pict hello}\\par}".to_vec()
 }
 
+fn report_doc() {
+    let text = doc_paragraph();
+    let doc = word97_document(&[&text]).unwrap_or_else(|err| {
+        eprintln!("word97 fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let sample = measure(|| ready_bytes("doc", "html", &doc));
+    emit_ready("doc→html para", doc.len() as u64, &sample);
+    if !cfg!(debug_assertions) {
+        println!(
+            "doc→html para p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+            sample.p50_ns / 1_000,
+            sample.p99_ns / 1_000,
+            mb_per_s(doc.len() as u64, sample.p50_ns),
+            sample.allocs_p50,
+            sample.alloc_bytes_p50,
+            doc.len(),
+            sample.output_bytes,
+        );
+    }
+    let two = word97_document(&["One", "Two"]).unwrap_or_else(|err| {
+        eprintln!("word97 two-paragraph fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("doc", "html", &two) {
+        Ok(_) => {
+            eprintln!("two-paragraph doc produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", two.len()))
+            {
+                eprintln!("doc miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("doc→html two", two.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn doc_paragraph() -> String {
+    let mut s = String::new();
+    for i in 0..400 {
+        s.push_str(&format!("Sentence {i} of the generated Word 97 paragraph. "));
+    }
+    s
+}
+
 fn shrink_pdf_fixture() -> Vec<u8> {
     let mut md = String::from("# Notes\n\nA **word** and a list.\n\n- one\n- two\n\n");
     for i in 0..80 {
@@ -505,6 +553,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_rtf();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--doc") {
+        println!("export-docs doc byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_doc();
         return;
     }
     let xml = docx_xml(2500);

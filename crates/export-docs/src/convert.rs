@@ -57,6 +57,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "rtf", target: "html", ready: false, note: "MISS: only a generated rtf of paragraphs and bold converts; other files stay a miss" },
     Pair { source: "epub", target: "html", ready: false, note: "MISS: only a generated epub whose spine is one xhtml file converts; other packages stay a miss" },
     Pair { source: "pptx", target: "html", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
+    Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file with one paragraph in WordDocument converts; other files stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: legacy .doc has no reader; LibreOffice was the only hop" },
     Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
@@ -93,6 +94,9 @@ pub fn convert_to<R: Read + Seek, W: Write>(
     }
     if source == "rtf" && target == "html" {
         return crate::rtf::rtf_to_html(input, output);
+    }
+    if source == "doc" && target == "html" {
+        return crate::doc::doc_to_html(input, output);
     }
     if !pair_ready(&source, &target) {
         let note = PAIRS
