@@ -1452,6 +1452,265 @@ fn report_epub_eight() {
     }
 }
 
+fn report_epub_nine() {
+    let four = epub_four_book();
+    match convert("epub", "html", &four) {
+        Ok(html) if four.len() == 28808 && html.len() == 27096 => {}
+        Ok(html) => {
+            eprintln!(
+                "four-item epub size changed input_b={} output_b={}",
+                four.len(),
+                html.len()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("four-item epub failed: {err}");
+            std::process::exit(1);
+        }
+    }
+    let five = epub_five_book();
+    match convert("epub", "html", &five) {
+        Ok(html) if five.len() == 35728 && html.len() == 33810 => {}
+        Ok(html) => {
+            eprintln!(
+                "five-item epub size changed input_b={} output_b={}",
+                five.len(),
+                html.len()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("five-item epub failed: {err}");
+            std::process::exit(1);
+        }
+    }
+    let six = epub_six_book();
+    match convert("epub", "html", &six) {
+        Ok(html) if six.len() == 42653 && html.len() == 40524 => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("First paragraph 0"),
+                text.find("Second paragraph 0"),
+                text.find("Third paragraph 0"),
+                text.find("Fourth paragraph 0"),
+                text.find("Fifth paragraph 0"),
+                text.find("Sixth paragraph 0"),
+            ) {
+                (Some(first), Some(second), Some(third), Some(fourth), Some(fifth), Some(sixth)) => {
+                    first < second && second < third && third < fourth && fourth < fifth && fifth < sixth
+                }
+                _ => false,
+            };
+            if !ordered {
+                eprintln!("six-item epub order changed");
+                std::process::exit(1);
+            }
+        }
+        Ok(html) => {
+            eprintln!(
+                "six-item epub size changed input_b={} output_b={}",
+                six.len(),
+                html.len()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("six-item epub failed: {err}");
+            std::process::exit(1);
+        }
+    }
+    let seven = epub_seven_book();
+    match convert("epub", "html", &seven) {
+        Ok(html) if seven.len() == 49823 && html.len() == 47478 => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("First paragraph 0"),
+                text.find("Second paragraph 0"),
+                text.find("Third paragraph 0"),
+                text.find("Fourth paragraph 0"),
+                text.find("Fifth paragraph 0"),
+                text.find("Sixth paragraph 0"),
+                text.find("Seventh paragraph 0"),
+            ) {
+                (
+                    Some(first),
+                    Some(second),
+                    Some(third),
+                    Some(fourth),
+                    Some(fifth),
+                    Some(sixth),
+                    Some(seventh),
+                ) => {
+                    first < second
+                        && second < third
+                        && third < fourth
+                        && fourth < fifth
+                        && fifth < sixth
+                        && sixth < seventh
+                }
+                _ => false,
+            };
+            if !ordered {
+                eprintln!("seven-item epub order changed");
+                std::process::exit(1);
+            }
+        }
+        Ok(html) => {
+            eprintln!(
+                "seven-item epub size changed input_b={} output_b={}",
+                seven.len(),
+                html.len()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("seven-item epub failed: {err}");
+            std::process::exit(1);
+        }
+    }
+    let eight = epub_eight_book();
+    match convert("epub", "html", &eight) {
+        Ok(html) if eight.len() == 56873 && html.len() == 54312 => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("First paragraph 0"),
+                text.find("Second paragraph 0"),
+                text.find("Third paragraph 0"),
+                text.find("Fourth paragraph 0"),
+                text.find("Fifth paragraph 0"),
+                text.find("Sixth paragraph 0"),
+                text.find("Seventh paragraph 0"),
+                text.find("Eighth paragraph 0"),
+            ) {
+                (
+                    Some(first),
+                    Some(second),
+                    Some(third),
+                    Some(fourth),
+                    Some(fifth),
+                    Some(sixth),
+                    Some(seventh),
+                    Some(eighth),
+                ) => {
+                    first < second
+                        && second < third
+                        && third < fourth
+                        && fourth < fifth
+                        && fifth < sixth
+                        && sixth < seventh
+                        && seventh < eighth
+                }
+                _ => false,
+            };
+            if !ordered {
+                eprintln!("eight-item epub order changed");
+                std::process::exit(1);
+            }
+        }
+        Ok(html) => {
+            eprintln!(
+                "eight-item epub size changed input_b={} output_b={}",
+                eight.len(),
+                html.len()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("eight-item epub failed: {err}");
+            std::process::exit(1);
+        }
+    }
+    let small = epub_six_spine();
+    if small.len() != 2603 {
+        eprintln!("small six-item spine is {} bytes", small.len());
+        std::process::exit(1);
+    }
+    match convert("epub", "html", &small) {
+        Ok(_) => {
+            eprintln!("2603-byte six-item spine produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains("input_b=2603") {
+                eprintln!("epub six miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html six", small.len() as u64, None, &err.message);
+        }
+    }
+    let book = epub_nine_book();
+    match convert("epub", "html", &book) {
+        Ok(html) => {
+            let text = String::from_utf8_lossy(&html);
+            let ordered = match (
+                text.find("First paragraph 0"),
+                text.find("Second paragraph 0"),
+                text.find("Third paragraph 0"),
+                text.find("Fourth paragraph 0"),
+                text.find("Fifth paragraph 0"),
+                text.find("Sixth paragraph 0"),
+                text.find("Seventh paragraph 0"),
+                text.find("Eighth paragraph 0"),
+                text.find("Ninth paragraph 0"),
+            ) {
+                (
+                    Some(first),
+                    Some(second),
+                    Some(third),
+                    Some(fourth),
+                    Some(fifth),
+                    Some(sixth),
+                    Some(seventh),
+                    Some(eighth),
+                    Some(ninth),
+                ) => {
+                    first < second
+                        && second < third
+                        && third < fourth
+                        && fourth < fifth
+                        && fifth < sixth
+                        && sixth < seventh
+                        && seventh < eighth
+                        && eighth < ninth
+                }
+                _ => false,
+            };
+            if !ordered {
+                emit_untimed(
+                    "epub→html nine book",
+                    book.len() as u64,
+                    Some(html.len() as u64),
+                    "MISS: spine order does not match",
+                );
+                return;
+            }
+            let sample = measure(|| ready_bytes("epub", "html", &book));
+            emit_ready("epub→html nine book", book.len() as u64, &sample);
+            if !cfg!(debug_assertions) {
+                println!(
+                    "epub→html nine book p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                    sample.p50_ns / 1_000,
+                    sample.p99_ns / 1_000,
+                    mb_per_s(book.len() as u64, sample.p50_ns),
+                    sample.allocs_p50,
+                    sample.alloc_bytes_p50,
+                    book.len(),
+                    sample.output_bytes,
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", book.len()))
+            {
+                eprintln!("epub nine book hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("epub→html nine book", book.len() as u64, None, &err.message);
+        }
+    }
+}
+
 fn epub_part(label: &str) -> String {
     let mut body = String::from(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
@@ -1855,6 +2114,60 @@ fn epub_eight_book() -> Vec<u8> {
         ("OEBPS/last.xhtml", sixth.as_bytes()),
         ("OEBPS/extra.xhtml", seventh.as_bytes()),
         ("OEBPS/again.xhtml", eighth.as_bytes()),
+    ])
+}
+
+fn epub_nine_book() -> Vec<u8> {
+    let first = epub_part("First");
+    let second = epub_part("Second");
+    let third = epub_part("Third");
+    let fourth = epub_part("Fourth");
+    let fifth = epub_part("Fifth");
+    let sixth = epub_part("Sixth");
+    let seventh = epub_part("Seventh");
+    let eighth = epub_part("Eighth");
+    let ninth = epub_part("Ninth");
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Notes</dc:title></metadata>
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+    <item id="extra" href="extra.xhtml" media-type="application/xhtml+xml"/>
+    <item id="again" href="again.xhtml" media-type="application/xhtml+xml"/>
+    <item id="rest" href="rest.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+    <itemref idref="extra"/>
+    <itemref idref="again"/>
+    <itemref idref="rest"/>
+  </spine>
+</package>
+"#;
+    let container = epub_container();
+    pack_stored(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/chapter.xhtml", first.as_bytes()),
+        ("OEBPS/next.xhtml", second.as_bytes()),
+        ("OEBPS/more.xhtml", third.as_bytes()),
+        ("OEBPS/tail.xhtml", fourth.as_bytes()),
+        ("OEBPS/end.xhtml", fifth.as_bytes()),
+        ("OEBPS/last.xhtml", sixth.as_bytes()),
+        ("OEBPS/extra.xhtml", seventh.as_bytes()),
+        ("OEBPS/again.xhtml", eighth.as_bytes()),
+        ("OEBPS/rest.xhtml", ninth.as_bytes()),
     ])
 }
 
@@ -6631,6 +6944,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_epub_eight();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--epub-nine") {
+        println!("export-docs epub nine-item byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_epub_nine();
         return;
     }
     if std::env::args().any(|arg| arg == "--rtf") {

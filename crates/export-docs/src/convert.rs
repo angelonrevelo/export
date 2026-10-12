@@ -55,7 +55,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "pdf", target: "docx", ready: false, note: "MISS: pdf2docx layout rebuild is not implemented" },
     Pair { source: "pdf", target: "png", ready: false, note: "MISS: rasterize is out of scope" },
     Pair { source: "rtf", target: "html", ready: false, note: "MISS: only a generated rtf of paragraphs and bold converts; other files stay a miss" },
-    Pair { source: "epub", target: "html", ready: false, note: "MISS: only a generated epub whose spine is one, two, three, four, five, six, seven, or eight xhtml files converts; the 2603-byte six-item file and other packages stay a miss" },
+    Pair { source: "epub", target: "html", ready: false, note: "MISS: only a generated epub whose spine is one, two, three, four, five, six, seven, eight, or nine xhtml files converts; the 2603-byte six-item file and other packages stay a miss" },
     Pair { source: "pptx", target: "html", ready: false, note: "MISS: only a generated ppt/slides deck of text shapes converts; other decks stay a miss" },
     Pair { source: "pptx", target: "pdf", ready: false, note: "MISS: text-shape decks convert, and one generated PNG slide converts only when the image XObject PDF is smaller than the stored pixels; other decks stay a miss" },
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
