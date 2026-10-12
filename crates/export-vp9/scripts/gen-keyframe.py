@@ -1,0 +1,696 @@
+#!/usr/bin/env python3
+"""Write one IVF keyframe this crate decodes.
+
+The picture is 8x8 through 2048x2048, profile 0, 8-bit 4:2:0, lossless, DC predicted.
+On the 8x8 and 16x16 frames, each 8x8 block's first luma 4x4 carries a
+positive FOUR token. The 32x32 frame is one keyframe as well: four of its
+8x8 blocks carry that token and the other twelve are skipped. The 64x64
+frame is one keyframe: four blocks are coded and the rest are skipped.
+The 128x128 frame is one keyframe too, four superblocks, four coded blocks.
+The 256x256 frame is one keyframe: sixteen superblocks, four coded blocks.
+The 512x512 frame is one keyframe: sixty-four superblocks, four coded blocks.
+The 1024x1024 frame is one keyframe: two hundred fifty-six superblocks, four
+coded blocks. The 2048x2048 frame is one keyframe: one thousand twenty-four
+superblocks, four coded blocks. Loop filter, segmentation, and probability
+updates are off. Default size 8 keeps the original file bytes.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+
+class BitWriter:
+    def __init__(self) -> None:
+        self.bits: list[int] = []
+
+    def f(self, n: int, value: int) -> None:
+        for i in range(n - 1, -1, -1):
+            self.bits.append((value >> i) & 1)
+
+    def align(self) -> None:
+        while len(self.bits) & 7:
+            self.bits.append(0)
+
+    def bytes(self) -> bytes:
+        out = bytearray()
+        for i in range(0, len(self.bits), 8):
+            byte = 0
+            for bit in self.bits[i : i + 8]:
+                byte = (byte << 1) | bit
+            out.append(byte)
+        return bytes(out)
+
+
+class BoolEncoder:
+    def __init__(self) -> None:
+        self.range = 255
+        self.bottom = 0
+        self.bit_count = 24
+        self.out = bytearray()
+
+    def _add_one(self) -> None:
+        index = len(self.out)
+        while index > 0 and self.out[index - 1] == 255:
+            self.out[index - 1] = 0
+            index -= 1
+        if index == 0:
+            raise RuntimeError("carry past the start of the partition")
+        self.out[index - 1] += 1
+
+    def write(self, prob: int, bit: int) -> None:
+        split = 1 + (((self.range - 1) * prob) >> 8)
+        if bit:
+            self.bottom += split
+            self.range -= split
+        else:
+            self.range = split
+        while self.range < 128:
+            self.range <<= 1
+            if self.bottom & (1 << 31):
+                self._add_one()
+            self.bottom = (self.bottom << 1) & 0xFFFFFFFF
+            self.bit_count -= 1
+            if self.bit_count == 0:
+                self.out.append((self.bottom >> 24) & 255)
+                self.bottom &= (1 << 24) - 1
+                self.bit_count = 8
+
+    def flush(self) -> bytes:
+        count = self.bit_count
+        value = self.bottom
+        if value & (1 << (32 - count)):
+            self._add_one()
+        value = (value << (count & 7)) & 0xFFFFFFFF
+        count >>= 3
+        while count > 0:
+            count -= 1
+            value = (value << 8) & 0xFFFFFFFF
+        for _ in range(4):
+            self.out.append((value >> 24) & 255)
+            value = (value << 8) & 0xFFFFFFFF
+        return bytes(self.out)
+
+
+def compressed_header() -> bytes:
+    encoder = BoolEncoder()
+    encoder.write(128, 0)
+    encoder.write(128, 0)
+    encoder.write(252, 0)
+    encoder.write(252, 0)
+    encoder.write(252, 0)
+    return encoder.flush()
+
+
+def write_dc_tokens(encoder: BoolEncoder) -> None:
+    # Band 0, context 0 luma probabilities, and the Pareto values for node >= 2
+    # at probability 183. Later end-of-block contexts are 1, 1, 0.
+    # Chroma ends at context 0.
+    y0 = (195, 29, 183)
+    y_eob = {0: 195, 1: 84, 3: 8}
+    uv0 = 214
+    encoder.write(y0[0], 1)
+    encoder.write(y0[1], 1)
+    encoder.write(y0[2], 1)
+    encoder.write(242, 0)
+    encoder.write(179, 1)
+    encoder.write(195, 1)
+    encoder.write(128, 0)
+    encoder.write(y_eob[3], 0)
+    for ctx in (1, 1, 0):
+        encoder.write(y_eob[ctx], 0)
+    encoder.write(uv0, 0)
+    encoder.write(uv0, 0)
+
+
+def write_block(encoder: BoolEncoder) -> None:
+    # 8x8 partition none uses context 0. Skip and DC modes use the no-neighbor
+    # probabilities on the 8x8 and 16x16 frames.
+    encoder.write(158, 0)
+    encoder.write(192, 0)
+    encoder.write(137, 0)
+    encoder.write(144, 0)
+    write_dc_tokens(encoder)
+
+
+def write_coded(encoder: BoolEncoder, skip_prob: int, part_prob: int = 158) -> None:
+    encoder.write(part_prob, 0)
+    encoder.write(skip_prob, 0)
+    encoder.write(137, 0)
+    encoder.write(144, 0)
+    write_dc_tokens(encoder)
+
+
+def write_skipped(encoder: BoolEncoder, skip_prob: int, part_prob: int = 158) -> None:
+    encoder.write(part_prob, 0)
+    encoder.write(skip_prob, 1)
+    encoder.write(137, 0)
+    encoder.write(144, 0)
+
+
+def write_split(encoder: BoolEncoder, probs: tuple[int, int, int]) -> None:
+    for prob in probs:
+        encoder.write(prob, 1)
+
+
+KF_PARTITION = (
+    (158, 97, 94),
+    (93, 24, 99),
+    (85, 119, 44),
+    (62, 59, 67),
+    (149, 53, 53),
+    (94, 20, 48),
+    (83, 53, 24),
+    (52, 18, 18),
+    (150, 40, 39),
+    (78, 12, 26),
+    (67, 33, 11),
+    (24, 7, 5),
+    (174, 35, 49),
+    (68, 11, 27),
+    (57, 15, 9),
+    (12, 3, 3),
+)
+SKIP_PROB = (192, 128, 64)
+# Top-left 8x8 of each 32x32 quadrant.
+CODED_64 = {(0, 0), (0, 4), (4, 0), (4, 4)}
+
+
+def write_tile_64(encoder: BoolEncoder) -> None:
+    """One intra 64x64. Splits follow the same context rules as the decoder."""
+    above = [0] * 8
+    left = [0] * 8
+    skips = [[0] * 8 for _ in range(8)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 8 or col >= 8:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 8
+        has_cols = col + half < 8
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_64:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    walk(0, 0, 64)
+
+
+# Top-left 8x8 of each 64x64 superblock.
+CODED_128 = {(0, 0), (0, 8), (8, 0), (8, 8)}
+
+
+def write_tile_128(encoder: BoolEncoder) -> None:
+    """One intra 128x128. Four superblocks, still a single keyframe."""
+    above = [0] * 16
+    left = [0] * 16
+    skips = [[0] * 16 for _ in range(16)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 16 or col >= 16:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 16
+        has_cols = col + half < 16
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_128:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in (0, 8):
+        for i in range(16):
+            left[i] = 0
+        for sb_col in (0, 8):
+            walk(sb_row, sb_col, 64)
+
+
+# Top-left 8x8 of each quadrant of superblocks.
+CODED_256 = {(0, 0), (0, 16), (16, 0), (16, 16)}
+
+
+def write_tile_256(encoder: BoolEncoder) -> None:
+    """One intra 256x256. Sixteen superblocks, still a single keyframe."""
+    above = [0] * 32
+    left = [0] * 32
+    skips = [[0] * 32 for _ in range(32)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 32 or col >= 32:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 32
+        has_cols = col + half < 32
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_256:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in (0, 8, 16, 24):
+        for i in range(32):
+            left[i] = 0
+        for sb_col in (0, 8, 16, 24):
+            walk(sb_row, sb_col, 64)
+
+
+# Top-left 8x8 of each quadrant.
+CODED_512 = {(0, 0), (0, 32), (32, 0), (32, 32)}
+
+
+def write_tile_512(encoder: BoolEncoder) -> None:
+    """One intra 512x512. Sixty-four superblocks, still a single keyframe."""
+    above = [0] * 64
+    left = [0] * 64
+    skips = [[0] * 64 for _ in range(64)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 64 or col >= 64:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 64
+        has_cols = col + half < 64
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_512:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in range(0, 64, 8):
+        for i in range(64):
+            left[i] = 0
+        for sb_col in range(0, 64, 8):
+            walk(sb_row, sb_col, 64)
+
+
+# Top-left 8x8 of each quadrant.
+CODED_1024 = {(0, 0), (0, 64), (64, 0), (64, 64)}
+
+
+def write_tile_1024(encoder: BoolEncoder) -> None:
+    """One intra 1024x1024. Two hundred fifty-six superblocks, still one keyframe."""
+    above = [0] * 128
+    left = [0] * 128
+    skips = [[0] * 128 for _ in range(128)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 128 or col >= 128:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 128
+        has_cols = col + half < 128
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_1024:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in range(0, 128, 8):
+        for i in range(128):
+            left[i] = 0
+        for sb_col in range(0, 128, 8):
+            walk(sb_row, sb_col, 64)
+
+
+# Top-left 8x8 of each quadrant.
+CODED_2048 = {(0, 0), (0, 128), (128, 0), (128, 128)}
+
+
+def write_tile_2048(encoder: BoolEncoder) -> None:
+    """One intra 2048x2048. One thousand twenty-four superblocks, still one keyframe."""
+    above = [0] * 256
+    left = [0] * 256
+    skips = [[0] * 256 for _ in range(256)]
+    level = {64: 3, 32: 2, 16: 1, 8: 0}
+    wide = {64: 8, 32: 4, 16: 2, 8: 1}
+    child = {64: 32, 32: 16, 16: 8}
+
+    def partition_ctx(bsize: int, row: int, col: int) -> int:
+        num8 = wide[bsize]
+        bsl = level[bsize]
+        boffset = 3 - bsl
+        above_acc = 0
+        left_acc = 0
+        for i in range(num8):
+            above_acc |= above[col + i]
+            left_acc |= left[row + i]
+        above_bit = 1 if above_acc & (1 << boffset) else 0
+        left_bit = 1 if left_acc & (1 << boffset) else 0
+        return bsl * 4 + left_bit * 2 + above_bit
+
+    def walk(row: int, col: int, bsize: int) -> None:
+        if row >= 256 or col >= 256:
+            return
+        num8 = wide[bsize]
+        half = num8 >> 1
+        has_rows = row + half < 256
+        has_cols = col + half < 256
+        if bsize == 8:
+            part = KF_PARTITION[partition_ctx(bsize, row, col)][0]
+            skip_ctx = 0
+            if row > 0:
+                skip_ctx += skips[row - 1][col]
+            if col > 0:
+                skip_ctx += skips[row][col - 1]
+            prob = SKIP_PROB[skip_ctx]
+            if (row, col) in CODED_2048:
+                write_coded(encoder, prob, part)
+                skips[row][col] = 0
+            else:
+                write_skipped(encoder, prob, part)
+                skips[row][col] = 1
+            above[col] = 7
+            left[row] = 7
+            return
+        if has_rows and has_cols:
+            write_split(encoder, KF_PARTITION[partition_ctx(bsize, row, col)])
+        elif has_rows or has_cols:
+            raise RuntimeError("one-sided partition is not generated")
+        walk(row, col, child[bsize])
+        walk(row, col + half, child[bsize])
+        walk(row + half, col, child[bsize])
+        walk(row + half, col + half, child[bsize])
+
+    for sb_row in range(0, 256, 8):
+        for i in range(256):
+            left[i] = 0
+        for sb_col in range(0, 256, 8):
+            walk(sb_row, sb_col, 64)
+
+
+def tile(size: int) -> bytes:
+    encoder = BoolEncoder()
+    encoder.write(128, 0)
+    if size == 32:
+        # The 64x64 split is implied. Context 8 splits the 32x32. The four
+        # 16x16 splits then use contexts 4, 6, 5, and 7.
+        # One coded 8x8 in each quadrant. The other twelve blocks are skipped.
+        # Skip probabilities follow the neighbor skip flags.
+        write_split(encoder, (150, 40, 39))
+        quadrants = (
+            ((149, 53, 53), ((0, 192), (1, 192), (1, 192), (1, 64))),
+            ((83, 53, 24), ((0, 128), (1, 192), (1, 128), (1, 64))),
+            ((94, 20, 48), ((0, 128), (1, 128), (1, 192), (1, 64))),
+            ((52, 18, 18), ((0, 64), (1, 128), (1, 128), (1, 64))),
+        )
+        for probs, blocks in quadrants:
+            write_split(encoder, probs)
+            for skipped, skip_prob in blocks:
+                if skipped:
+                    write_skipped(encoder, skip_prob)
+                else:
+                    write_coded(encoder, skip_prob)
+    elif size == 64:
+        write_tile_64(encoder)
+    elif size == 128:
+        write_tile_128(encoder)
+    elif size == 256:
+        write_tile_256(encoder)
+    elif size == 512:
+        write_tile_512(encoder)
+    elif size == 1024:
+        write_tile_1024(encoder)
+    elif size == 2048:
+        write_tile_2048(encoder)
+    elif size == 16:
+        # Keyframe partition context 4, split: three 1-bits.
+        encoder.write(149, 1)
+        encoder.write(53, 1)
+        encoder.write(53, 1)
+        for _ in range(4):
+            write_block(encoder)
+    else:
+        write_block(encoder)
+    return encoder.flush()
+
+
+def frame(size: int) -> bytes:
+    header = compressed_header()
+    writer = BitWriter()
+    writer.f(2, 2)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(1, 1)
+    writer.f(1, 0)
+    writer.f(8, 0x49)
+    writer.f(8, 0x83)
+    writer.f(8, 0x42)
+    writer.f(3, 2)
+    writer.f(1, 1)
+    writer.f(16, size - 1)
+    writer.f(16, size - 1)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(1, 1)
+    writer.f(2, 0)
+    writer.f(6, 0)
+    writer.f(3, 0)
+    writer.f(1, 0)
+    writer.f(8, 0)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(1, 0)
+    if size in (512, 1024, 2048):
+        # Sb64Cols is 8, 16, or 32. A zero tile-column bit keeps a single column.
+        writer.f(1, 0)
+    writer.f(1, 0)
+    writer.f(16, len(header))
+    writer.align()
+    return writer.bytes() + header + tile(size)
+
+
+def ivf(payload: bytes, size: int) -> bytes:
+    header = bytearray(b"DKIF")
+    header += (0).to_bytes(2, "little")
+    header += (32).to_bytes(2, "little")
+    header += b"VP90"
+    header += size.to_bytes(2, "little")
+    header += size.to_bytes(2, "little")
+    header += (1).to_bytes(4, "little")
+    header += (1).to_bytes(4, "little")
+    header += (1).to_bytes(4, "little")
+    header += (0).to_bytes(4, "little")
+    packet = len(payload).to_bytes(4, "little") + (0).to_bytes(8, "little") + payload
+    return bytes(header) + packet
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    size = 8
+    if args and args[0] == "--size":
+        if len(args) < 2 or args[1] not in (
+            "8",
+            "16",
+            "32",
+            "64",
+            "128",
+            "256",
+            "512",
+            "1024",
+            "2048",
+        ):
+            raise SystemExit(
+                "usage: gen-keyframe.py [--size 8|16|32|64|128|256|512|1024|2048] [path]"
+            )
+        size = int(args[1])
+        args = args[2:]
+    destination = pathlib.Path(args[0]) if args else None
+    data = ivf(frame(size), size)
+    if destination is None:
+        sys.stdout.buffer.write(data)
+    else:
+        destination.write_bytes(data)
+
+
+if __name__ == "__main__":
+    main()
