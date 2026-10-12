@@ -202,8 +202,10 @@ pub fn decode_pair(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
 /// Read the shifted 32×32 pair and return both reconstructions.
 ///
 /// The P-frame uses quarter-pel (16, 0), four luma samples, on the 16×16
-/// vector this encoder already writes. The Annex B bytes are parsed. A stored
-/// buffer is not returned. A B-frame and any other partition are refused.
+/// vector this encoder already writes. The same call reads the pair written
+/// with quarter-pel (−16, 0). That vector is already in the bitstream. The
+/// Annex B bytes are parsed. A stored buffer is not returned. A B-frame and
+/// any other partition are refused.
 pub fn decode_motion(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
     decode::decode_motion(annex_b)
 }

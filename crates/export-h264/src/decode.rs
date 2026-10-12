@@ -67,11 +67,12 @@ pub fn decode_pair(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
     Ok((intra, predicted))
 }
 
-/// Read the shifted 32×32 pair: the I-frame plus quarter-pel (16, 0).
+/// Read the shifted 32×32 pair: the I-frame plus one 16×16 quarter-pel vector.
 ///
-/// Motion is the 16×16 vector this encoder already writes, on a whole chroma
-/// sample. The Annex B bytes are parsed. A stored buffer is not returned.
-/// A B-frame and any other partition are refused.
+/// Motion is the vector this encoder already writes, on a whole chroma sample.
+/// Quarter-pel (16, 0) and (−16, 0) both use this reader. The Annex B bytes are
+/// parsed. A stored buffer is not returned. A B-frame and any other partition
+/// are refused.
 pub fn decode_motion(annex_b: &[u8]) -> Result<(Yuv420, Yuv420), Error> {
     let nals = split_nals(annex_b)?;
     if nals.len() != 6 {

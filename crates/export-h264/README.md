@@ -235,3 +235,12 @@ The existing Annex B pair that moves four luma samples with quarter-pel (16, 0).
 - release p50: 52 µs, p99: 66 µs on the recorded run (51415 ns and 65152 ns). Two later runs on that binary were p50 52–53 µs and p99 65–76 µs
 
 Both pictures match the encoder reconstruction. `scripts/check-decodeshift32.sh` checks those pixels. It does not run ffmpeg.
+
+## Shifted 32×32 pair, quarter-pel (−16, 0)
+
+The existing 32×32 I-frame and the existing shifted picture, written with quarter-pel (−16, 0) on every macroblock. That vector is the one this encoder already uses. The call reads those Annex B bytes. It is not the 304-byte pair. Encode time is outside this timer. 200 calls after 20 warmup.
+
+- output: 655 bytes
+- release p50: 92 µs, p99: 146 µs on the recorded run (91053 ns and 145527 ns). Three later runs on that binary were p50 83–92 µs and p99 107–111 µs
+
+Both pictures match the encoder reconstruction. `scripts/check-decodeshiftright32.sh` checks those pixels. It does not run ffmpeg.

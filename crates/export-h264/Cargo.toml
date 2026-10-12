@@ -42,6 +42,10 @@ name = "decodeshift32"
 path = "src/bin/decodeshift32.rs"
 
 [[bin]]
+name = "decodeshiftright32"
+path = "src/bin/decodeshiftright32.rs"
+
+[[bin]]
 name = "iframe160"
 path = "src/bin/iframe160.rs"
 

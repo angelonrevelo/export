@@ -297,6 +297,68 @@ fn decode_reads_the_shifted_pair() {
 }
 
 #[test]
+fn decode_reads_the_right_vector_pair() {
+    let intra = fixture_32x32();
+    let shifted = fixture_32x32_shifted();
+    let opts = EncodeOptions::default();
+    let alone = encode(&intra, &opts).unwrap();
+    assert_eq!(alone.annex_b.len(), 272);
+    let left = encode_ip_motion(&intra, &shifted, &opts, SHIFTED_MV).unwrap();
+    assert_eq!(left.annex_b.len(), 304);
+    let pair = encode_ip_motion(&intra, &shifted, &opts, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(pair.annex_b.len(), 655);
+    assert!(pair.annex_b.starts_with(&alone.annex_b));
+    assert_eq!(pair.annex_b[0..4], [0, 0, 0, 1]);
+    assert_ne!(pair.annex_b, left.annex_b);
+    let (dec_i, dec_p) = decode_motion(&pair.annex_b).unwrap();
+    assert_eq!(dec_i, pair.intra);
+    assert_eq!(dec_p, pair.predicted);
+    assert_eq!(decode_pair(&pair.annex_b).unwrap_err(), Error::Bytes);
+    let (left_i, left_p) = decode_motion(&left.annex_b).unwrap();
+    assert_eq!(left_i, left.intra);
+    assert_eq!(left_p, left.predicted);
+    let mut changed = false;
+    for i in alone.annex_b.len()..pair.annex_b.len() {
+        let mut flipped = pair.annex_b.clone();
+        flipped[i] ^= 0x1f;
+        match decode_motion(&flipped) {
+            Ok((y, p)) if y == pair.intra && p == pair.predicted => {}
+            _ => {
+                changed = true;
+                break;
+            }
+        }
+    }
+    assert!(changed, "decode ignored the (-16, 0) P-frame bytes");
+    assert_eq!(
+        encode_ip_motion(
+            &intra,
+            &shifted,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            },
+            SPLIT_RIGHT_MV,
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_ip_motion(
+            &intra,
+            &shifted,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            },
+            SPLIT_RIGHT_MV,
+        )
+        .unwrap_err(),
+        Error::SecondPass
+    );
+}
+
+#[test]
 fn shifted_picture_uses_one_motion_vector() {
     let intra = fixture_32x32();
     let shifted = fixture_32x32_shifted();
