@@ -27,6 +27,10 @@ path = "src/bin/tl-pctl.rs"
 name = "export-translate-tl-six"
 path = "src/bin/tl-six.rs"
 
+[[bin]]
+name = "export-translate-tl-twelve"
+path = "src/bin/tl-twelve.rs"
+
 [dependencies]
 
 [profile.release]

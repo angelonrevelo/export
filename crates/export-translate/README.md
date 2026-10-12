@@ -65,6 +65,20 @@ A six-sentence paragraph, also not a stored fixture, uses only lemmas and clause
 
 A second release run of that binary was p50 1,047 ns and p99 1,334 ns. Both medians are within 1.66 µs.
 
+A twelve-sentence paragraph, also not a stored fixture, uses only lemmas and clause shapes already in the crate. Both directions, 2,000 iterations. Each sample is that iteration's time divided by sentences × 2. Nearest-rank percentiles, `cargo run --release --bin export-translate-tl-twelve`:
+
+> The father bought bread yesterday. She wrote a story at school. The boy drank water at home. We can read the book tomorrow. The girl played outside, but the cat is sleeping inside. I think the house is new. He opened the door today. They want to eat rice. The teacher came from the city. We should study the book tomorrow. My friend saw the bird yesterday. The children are playing at school.
+
+> Bumili ang ama ng tinapay kahapon. Sumulat siya ng isang kuwento sa paaralan. Uminom ang lalaki ng tubig sa tahanan. Maaari nating basahin ang aklat bukas. Naglaro ang babae sa labas, pero natutulog ang pusa sa loob. Sa palagay ko na bago ang bahay. Binuksan niya ang pinto ngayon. Gusto silang kumain ng kanin. Dumating ang guro mula sa lungsod. Dapat tayong mag-aral ng aklat bukas. Nakita ng kaibigan ko ang ibon kahapon. Naglalaro ang mga bata sa paaralan.
+
+| | |
+|---|---|
+| sentences | **12** |
+| p50 per sentence | **923 ns** (0.923 µs) |
+| p99 per sentence | **1,253 ns** (1.253 µs) |
+
+A second release run of that binary was p50 924 ns and p99 1,210 ns. Both medians are within 1.16 µs.
+
 The English ↔ Spanish paragraph harness is still `export-translate-paragraph` and was not rewritten. Its paragraph still translates to:
 
 > Ayer yo hablé con mi amigo sobre la reunión. Ella dijo que nosotros necesitamos terminar el informe antes del viernes, pero el tren estaba tarde y nosotros lo perdimos. Yo creo que nosotros podemos enviar las notas mañana.
@@ -76,6 +90,7 @@ cargo test --manifest-path crates/export-translate/Cargo.toml
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-pctl
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-six
+cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-tl-twelve
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-paragraph
 cargo run --release --manifest-path crates/export-translate/Cargo.toml --bin export-translate-bench
 cargo build --release --manifest-path crates/export-translate/Cargo.toml --target wasm32-unknown-unknown --lib
