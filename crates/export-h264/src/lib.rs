@@ -5,6 +5,9 @@
 //! slice, and one QP covers each frame. I-frame prediction is intra DC.
 //! [`encode_ip`] writes one P slice with motion zero and that I-frame as its
 //! only reference. [`encode_ip_motion`] uses one shared 16×16 vector instead.
+//! [`encode_sequence`] writes that I-frame plus up to seven P-frames. Each
+//! P-frame references the previous reconstruction and uses either zero motion
+//! or one shared vector.
 //! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
@@ -252,6 +255,71 @@ pub fn encode_ip_motion(
     })
 }
 
+/// One P-frame in a sequence, with the motion shared by every macroblock.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PredictedFrame {
+    pub picture: Yuv420,
+    pub motion: Motion,
+}
+
+/// Annex B for an I-frame and the P-frames after it, in display order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedSequence {
+    pub annex_b: Vec<u8>,
+    pub reconstructed: Vec<Yuv420>,
+    pub qp: u8,
+}
+
+/// I-frame, then one to seven P-frames.
+///
+/// Each P-frame is predicted from the previous picture's reconstruction.
+/// The last P-frame is not itself a reference. A single P-frame with the same
+/// motion matches [`encode_ip_motion`]. A B-frame and a second pass are refused.
+pub fn encode_sequence(
+    intra: &Yuv420,
+    predicted: &[PredictedFrame],
+    opts: &EncodeOptions,
+) -> Result<EncodedSequence, Error> {
+    intra.check()?;
+    check_common(opts)?;
+    if matches!(opts.picture, Picture::Bipredicted) {
+        return Err(Error::BipredictedFrame);
+    }
+    if predicted.is_empty() || predicted.len() > 7 {
+        return Err(Error::Count);
+    }
+    for frame in predicted {
+        frame.picture.check()?;
+        if frame.picture.width != intra.width || frame.picture.height != intra.height {
+            return Err(Error::Shape);
+        }
+    }
+    let (mut annex_b, mut reference) = encode::encode_iframe(intra, opts.qp)?;
+    let mut reconstructed = Vec::with_capacity(predicted.len() + 1);
+    reconstructed.push(reference.clone());
+    for (i, frame) in predicted.iter().enumerate() {
+        let frame_num = (i + 1) as u32;
+        let is_reference = i + 1 < predicted.len();
+        let (bytes, rec) = encode::encode_pframe_at(
+            &frame.picture,
+            &reference,
+            opts.qp,
+            frame.motion.mvx,
+            frame.motion.mvy,
+            frame_num,
+            is_reference,
+        )?;
+        annex_b.extend(bytes);
+        reference = rec.clone();
+        reconstructed.push(rec);
+    }
+    Ok(EncodedSequence {
+        annex_b,
+        reconstructed,
+        qp: opts.qp,
+    })
+}
+
 /// Deterministic 32×32 4:2:0 pattern used for the published measurement.
 pub fn fixture_32x32() -> Yuv420 {
     let mut y = vec![0u8; 32 * 32];
@@ -309,14 +377,52 @@ fn shift_plane(src: &[u8], width: usize, height: usize, dx: i32, dy: i32) -> Vec
 ///
 /// [`SHIFTED_MV`] predicts this picture from the I-frame.
 pub fn fixture_32x32_shifted() -> Yuv420 {
-    let src = fixture_32x32();
+    shift_frame(&fixture_32x32(), 4)
+}
+
+fn shift_frame(src: &Yuv420, dx_luma: i32) -> Yuv420 {
     Yuv420 {
-        width: 32,
-        height: 32,
-        y: shift_plane(&src.y, 32, 32, 4, 0),
-        u: shift_plane(&src.u, 16, 16, 2, 0),
-        v: shift_plane(&src.v, 16, 16, 2, 0),
+        width: src.width,
+        height: src.height,
+        y: shift_plane(&src.y, src.width as usize, src.height as usize, dx_luma, 0),
+        u: shift_plane(
+            &src.u,
+            (src.width / 2) as usize,
+            (src.height / 2) as usize,
+            dx_luma / 2,
+            0,
+        ),
+        v: shift_plane(
+            &src.v,
+            (src.width / 2) as usize,
+            (src.height / 2) as usize,
+            dx_luma / 2,
+            0,
+        ),
     }
+}
+
+/// Eight 32×32 pictures: the I-frame fixture and seven P-frames.
+///
+/// The first, third, fifth, and seventh P-frames hold still. The others move
+/// four luma samples left and use [`SHIFTED_MV`].
+pub fn fixture_32x32_eight() -> (Yuv420, Vec<PredictedFrame>) {
+    let intra = fixture_32x32();
+    let mut picture = intra.clone();
+    let mut predicted = Vec::with_capacity(7);
+    for index in 0..7 {
+        let motion = if index % 2 == 1 {
+            picture = shift_frame(&picture, 4);
+            SHIFTED_MV
+        } else {
+            Motion { mvx: 0, mvy: 0 }
+        };
+        predicted.push(PredictedFrame {
+            picture: picture.clone(),
+            motion,
+        });
+    }
+    (intra, predicted)
 }
 
 /// Mean absolute error over every Y, U, and V sample.

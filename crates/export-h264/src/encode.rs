@@ -734,16 +734,26 @@ fn mvp_16x16(mvs: &[(i32, i32)], mb_w: usize, mx: usize, my: usize) -> (i32, i32
     )
 }
 
-fn write_p_slice(slice: &Slice<'_>, mvx: i32, mvy: i32) -> Vec<u8> {
+fn write_p_slice(
+    slice: &Slice<'_>,
+    mvx: i32,
+    mvy: i32,
+    frame_num: u32,
+    reference: bool,
+) -> Vec<u8> {
     let mb_w = (slice.width / 16) as usize;
     let mb_h = (slice.height / 16) as usize;
     let mut b = BitWriter::new();
     b.write_ue(0);
     b.write_ue(0);
     b.write_ue(0);
-    b.write_bits(1, 4);
+    b.write_bits(frame_num, 4);
     b.write_bit(0);
     b.write_bit(0);
+    if reference {
+        // Sliding window. max_num_ref_frames is 1, so this picture replaces the previous reference.
+        b.write_bit(0);
+    }
     b.write_se(0);
     b.write_ue(1);
     let mb_count = mb_w * mb_h;
@@ -793,8 +803,8 @@ fn write_p_slice(slice: &Slice<'_>, mvx: i32, mvy: i32) -> Vec<u8> {
         }
     }
     b.rbsp_trailing();
-    // nal_ref_idc 0: this P picture is not itself a reference.
-    nal_unit(0, 1, &b.into_bytes())
+    let ref_idc = if reference { 1 } else { 0 };
+    nal_unit(ref_idc, 1, &b.into_bytes())
 }
 
 /// One P slice after an already-reconstructed I-frame. Motion is zero.
@@ -816,8 +826,25 @@ pub fn encode_pframe_mv(
     mvx: i32,
     mvy: i32,
 ) -> Result<(Vec<u8>, Yuv420), Error> {
+    // frame_num 1 and not a reference: the measured two-picture files.
+    encode_pframe_at(source, reference, qp, mvx, mvy, 1, false)
+}
+
+/// P slice in a longer sequence. `frame_num` is the 4-bit value. `reference` stores the picture for the next P-frame.
+pub fn encode_pframe_at(
+    source: &Yuv420,
+    reference: &Yuv420,
+    qp: u8,
+    mvx: i32,
+    mvy: i32,
+    frame_num: u32,
+    is_reference: bool,
+) -> Result<(Vec<u8>, Yuv420), Error> {
     if source.width != reference.width || source.height != reference.height {
         return Err(Error::Shape);
+    }
+    if frame_num > 15 {
+        return Err(Error::Count);
     }
     if mvx % 8 != 0 || mvy % 8 != 0 || !(-512..=512).contains(&mvx) || !(-512..=512).contains(&mvy)
     {
@@ -913,6 +940,8 @@ pub fn encode_pframe_mv(
         },
         mvx,
         mvy,
+        frame_num,
+        is_reference,
     ));
     Ok((
         out,

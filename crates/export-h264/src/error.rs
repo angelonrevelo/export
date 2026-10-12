@@ -23,6 +23,8 @@ pub enum Error {
     Shape,
     /// The motion vector is not an integer chroma shift.
     Motion,
+    /// A sequence was not one I-frame plus one to seven P-frames.
+    Count,
 }
 
 impl fmt::Display for Error {
@@ -38,6 +40,7 @@ impl fmt::Display for Error {
             Error::TooLarge => "frame exceeds 128 by 128",
             Error::Shape => "the P-frame size does not match the I-frame",
             Error::Motion => "motion must land on a whole chroma sample",
+            Error::Count => "a sequence is one I-frame and one to seven P-frames",
         })
     }
 }

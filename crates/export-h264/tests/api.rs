@@ -1,7 +1,7 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, fixture_32x32, fixture_32x32_predicted,
-    fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
-    Yuv420, SHIFTED_MV,
+    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_32x32, fixture_32x32_eight,
+    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
+    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
 };
 
 #[test]
@@ -114,6 +114,7 @@ fn shifted_picture_uses_one_motion_vector() {
     let moved = encode_ip_motion(&intra, &shifted, &opts, SHIFTED_MV).unwrap();
     assert!(moved.annex_b.starts_with(&alone.annex_b));
     assert_eq!(&moved.annex_b[..272], &alone.annex_b[..]);
+    assert_eq!(moved.annex_b.len(), 304);
     assert_ne!(
         moved.annex_b,
         encode_ip(&intra, &shifted, &opts).unwrap().annex_b
@@ -150,6 +151,82 @@ fn shifted_picture_uses_one_motion_vector() {
         )
         .unwrap_err(),
         Error::PredictedFrame
+    );
+}
+
+#[test]
+fn eight_pictures_keep_the_iframe_prefix() {
+    let intra = fixture_32x32();
+    let opts = EncodeOptions::default();
+    let alone = encode(&intra, &opts).unwrap();
+    let (seq_intra, predicted) = fixture_32x32_eight();
+    assert_eq!(seq_intra, intra);
+    assert_eq!(predicted.len(), 7);
+    let sequence = encode_sequence(&intra, &predicted, &opts).unwrap();
+    assert_eq!(&sequence.annex_b[..272], &alone.annex_b[..]);
+    assert_eq!(sequence.reconstructed.len(), 8);
+    let one = encode_sequence(
+        &intra,
+        &[PredictedFrame {
+            picture: fixture_32x32_predicted(),
+            motion: Motion { mvx: 0, mvy: 0 },
+        }],
+        &opts,
+    )
+    .unwrap();
+    let pair = encode_ip(&intra, &fixture_32x32_predicted(), &opts).unwrap();
+    assert_eq!(one.annex_b, pair.annex_b);
+    let shifted = encode_sequence(
+        &intra,
+        &[PredictedFrame {
+            picture: fixture_32x32_shifted(),
+            motion: SHIFTED_MV,
+        }],
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(
+        shifted.annex_b,
+        encode_ip_motion(&intra, &fixture_32x32_shifted(), &opts, SHIFTED_MV)
+            .unwrap()
+            .annex_b
+    );
+    let mut sum = 0.0;
+    for (src, rec) in predicted.iter().zip(sequence.reconstructed.iter().skip(1)) {
+        sum += mean_absolute_error(&src.picture, rec);
+    }
+    let mae = sum / 7.0;
+    assert!(mae < 8.0, "sequence mae {mae}");
+    assert_eq!(
+        encode_sequence(&intra, &[], &opts).unwrap_err(),
+        Error::Count
+    );
+    let too_many = vec![
+        PredictedFrame {
+            picture: intra.clone(),
+            motion: Motion { mvx: 0, mvy: 0 },
+        };
+        8
+    ];
+    assert_eq!(
+        encode_sequence(&intra, &too_many, &opts).unwrap_err(),
+        Error::Count
+    );
+    let bipred = EncodeOptions {
+        picture: Picture::Bipredicted,
+        ..opts
+    };
+    assert_eq!(
+        encode_sequence(&intra, &predicted, &bipred).unwrap_err(),
+        Error::BipredictedFrame
+    );
+    let second = EncodeOptions {
+        pass: Pass::Second,
+        ..opts
+    };
+    assert_eq!(
+        encode_sequence(&intra, &predicted, &second).unwrap_err(),
+        Error::SecondPass
     );
 }
 
