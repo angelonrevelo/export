@@ -105,8 +105,8 @@ impl Yuv420 {
         if self.width == 0 || self.height == 0 || self.width % 16 != 0 || self.height % 16 != 0 {
             return Err(Error::Size);
         }
-        // 320×240 is 300 macroblocks, inside level 1.1. 32×32 and 160×160 stay inside the same check.
-        if self.width > 320 || self.height > 240 {
+        // 640×480 is 1200 macroblocks, level 3.0. 320×240 stays inside level 1.1.
+        if self.width > 640 || self.height > 480 {
             return Err(Error::TooLarge);
         }
         let y = (self.width as usize) * (self.height as usize);
@@ -437,6 +437,11 @@ pub fn fixture_320x240() -> Yuv420 {
     fixture_pattern(320, 240)
 }
 
+/// Deterministic 640×480 4:2:0 pattern. Same formula as [`fixture_32x32`].
+pub fn fixture_640x480() -> Yuv420 {
+    fixture_pattern(640, 480)
+}
+
 fn fixture_pattern(width: u32, height: u32) -> Yuv420 {
     let w = width as usize;
     let h = height as usize;
@@ -550,6 +555,11 @@ pub fn fixture_320x240_shifted() -> Yuv420 {
 /// The right half is moved four luma samples right, so [`SPLIT_RIGHT_MV`] predicts it.
 pub fn fixture_320x240_split() -> Yuv420 {
     shift_halves(&fixture_320x240())
+}
+
+/// 640×480 fixture with the same left/right shift as [`fixture_320x240_split`].
+pub fn fixture_640x480_split() -> Yuv420 {
+    shift_halves(&fixture_640x480())
 }
 
 /// Four 320×240 pictures. The I-frame is the plain fixture. Each P-frame applies

@@ -3,8 +3,9 @@ use export_h264::{
     fixture_160x160, fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
     fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
     fixture_320x240_split, fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight,
-    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
-    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
+    fixture_32x32_predicted, fixture_32x32_shifted, fixture_640x480, fixture_640x480_split,
+    mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420,
+    SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -264,11 +265,11 @@ fn larger_iframe_is_constrained_baseline() {
         Error::PredictedFrame
     );
     assert!(Yuv420::new(
-        320,
-        256,
-        vec![0; 320 * 256],
-        vec![0; 160 * 128],
-        vec![0; 160 * 128]
+        656,
+        480,
+        vec![0; 656 * 480],
+        vec![0; 328 * 240],
+        vec![0; 328 * 240]
     )
     .is_err());
     let predicted = fixture_160x160_predicted();
@@ -605,6 +606,62 @@ fn qvga_split_sequence_keeps_the_pair() {
         )
         .unwrap_err(),
         Error::SecondPass
+    );
+}
+
+#[test]
+fn vga_split_keeps_the_qvga_rows() {
+    let opts = EncodeOptions::default();
+    let qvga = fixture_320x240();
+    let qvga_i = encode(&qvga, &opts).unwrap();
+    assert_eq!(qvga_i.annex_b.len(), 19337);
+    assert!(qvga_i
+        .annex_b
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x0b]));
+    let pair = encode_ip_split(
+        &qvga,
+        &fixture_320x240_split(),
+        &opts,
+        SHIFTED_MV,
+        SPLIT_RIGHT_MV,
+    )
+    .unwrap();
+    assert_eq!(pair.annex_b.len(), 19954);
+    let (intra, predicted) = fixture_320x240_split_four();
+    assert_eq!(
+        encode_sequence_split(&intra, &predicted, &opts, SHIFTED_MV, SPLIT_RIGHT_MV)
+            .unwrap()
+            .annex_b
+            .len(),
+        20414
+    );
+    let frame = fixture_640x480();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.reconstructed.width, 640);
+    assert_eq!(encoded.reconstructed.height, 480);
+    assert!(encoded
+        .annex_b
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x1e]));
+    let picture = fixture_640x480_split();
+    let vga = encode_ip_split(&frame, &picture, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(vga.annex_b.len(), 80042);
+    assert_eq!(&vga.annex_b[..encoded.annex_b.len()], &encoded.annex_b[..]);
+    let mae = (mean_absolute_error(&frame, &vga.intra)
+        + mean_absolute_error(&picture, &vga.predicted))
+        / 2.0;
+    assert!(mae < 3.4, "vga mae {mae}");
+    assert_eq!(
+        encode(
+            &frame,
+            &EncodeOptions {
+                picture: Picture::Predicted,
+                ..opts
+            }
+        )
+        .unwrap_err(),
+        Error::PredictedFrame
     );
 }
 

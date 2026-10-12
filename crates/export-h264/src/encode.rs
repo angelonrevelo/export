@@ -383,7 +383,15 @@ fn write_sps(width: u32, height: u32) -> Vec<u8> {
     let mut b = BitWriter::new();
     let macroblocks = (width / 16) * (height / 16);
     // Level 1.0 allows 99 macroblocks. 32×32 stays on level 1.0.
-    let level = if macroblocks <= 99 { 10 } else { 11 };
+    // Level 1.1 allows 396. 160×160 and 320×240 stay on level 1.1.
+    // 640×480 is 1200 macroblocks, which fits level 3.0.
+    let level = if macroblocks <= 99 {
+        10
+    } else if macroblocks <= 396 {
+        11
+    } else {
+        30
+    };
     b.write_bits(66, 8);
     b.write_bit(1);
     b.write_bit(1);

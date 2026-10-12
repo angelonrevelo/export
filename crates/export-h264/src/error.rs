@@ -37,7 +37,7 @@ impl fmt::Display for Error {
             Error::Qp => "qp must be a single value from 0 to 51",
             Error::Size => "width and height must be multiples of 16",
             Error::Plane => "planes are not 4:2:0",
-            Error::TooLarge => "frame exceeds 320 by 240",
+            Error::TooLarge => "frame exceeds 640 by 480",
             Error::Shape => "the P-frame size does not match the I-frame",
             Error::Motion => "motion must land on a whole chroma sample",
             Error::Count => "a sequence is one I-frame and one to fifteen P-frames",
