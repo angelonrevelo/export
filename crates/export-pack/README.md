@@ -29,6 +29,20 @@ cargo build --release --bin pack-bench
 
 A debug bench prints `NOT JUDGED` and does not report a speed.
 
+## Measured
+
+Release build, one 32 MiB store entry (`payload.bin`), CRC included. Median of 5 measured passes, each after one warmup pass in the same process. `MB/s` counts 1e6 bytes. `MiB/s` counts 2^20. Write is the payload stream before fsync. Finish is the central directory, fsync, and rename. Read follows write in-process, so the page cache may hold the file. Allocations are process allocations during the timed call, including the chunk buffer.
+
+| | median |
+|---|---|
+| Write | 384.6 MB/s (366.8 MiB/s) |
+| Read | 427.7 MB/s (407.9 MiB/s) |
+| Finish | 52.7 ms |
+| Write allocations | 0.188 / MiB, 2056.7 bytes / MiB |
+| Read allocations | 0.125 / MiB, 4098.8 bytes / MiB |
+
+Write spread across the five passes was 364.7–388.4 MB/s. Read spread was 420.8–437.5 MB/s. Allocation counts did not move.
+
 ## Honest limits
 
 - Store only. Deflate, zip64, encryption, and split archives return an error.
