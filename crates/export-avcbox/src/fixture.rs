@@ -1,3 +1,8 @@
+/// The 29,559-byte 320×240 Annex B file: the I-frame, then three zero-motion P-frames.
+///
+/// Copied as bytes. This crate does not link an H.264 encoder.
+pub static FOUR_320X240: &[u8] = include_bytes!("four_320x240.annexb");
+
 /// The 29,090-byte 320×240 Annex B pair: the I-frame, then one P-frame.
 ///
 /// Copied as bytes. This crate does not link an H.264 encoder.
