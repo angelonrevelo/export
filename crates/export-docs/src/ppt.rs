@@ -1,5 +1,5 @@
 //! Legacy PowerPoint 97 to HTML for one generated compound file.
-//! The `PowerPoint Document` stream holds one, two, three, four, five, or six text-bytes shapes.
+//! The `PowerPoint Document` stream holds one, two, three, four, five, six, or seven text-bytes shapes.
 //! Any other file stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -729,6 +729,37 @@ pub fn ppt_six_text_document(
     ]))
 }
 
+/// Compound file whose `PowerPoint Document` stream is seven text-bytes shapes.
+pub fn ppt_seven_text_document(
+    first: &str,
+    second: &str,
+    third: &str,
+    fourth: &str,
+    fifth: &str,
+    sixth: &str,
+    seventh: &str,
+) -> Result<Vec<u8>> {
+    if !plain_shape(first)
+        || !plain_shape(second)
+        || !plain_shape(third)
+        || !plain_shape(fourth)
+        || !plain_shape(fifth)
+        || !plain_shape(sixth)
+        || !plain_shape(seventh)
+    {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    pack_cfb(&document_stream(&[
+        first.as_bytes(),
+        second.as_bytes(),
+        third.as_bytes(),
+        fourth.as_bytes(),
+        fifth.as_bytes(),
+        sixth.as_bytes(),
+        seventh.as_bytes(),
+    ]))
+}
+
 /// Compound file with one text shape and one 24-bit DIB picture.
 pub fn ppt_text_picture_document(text: &str) -> Result<Vec<u8>> {
     if !plain_shape(text) {
@@ -993,7 +1024,7 @@ fn list_text(body: &[u8]) -> Result<Vec<String>> {
         at += n;
         match rec.ty {
             RT_TEXT_HEADER => {
-                if pending_header || texts.len() >= 6 || rec.ver != 0 || rec.data.len() != 4 {
+                if pending_header || texts.len() >= 7 || rec.ver != 0 || rec.data.len() != 4 {
                     return Err(shape());
                 }
                 pending_header = true;
@@ -2254,7 +2285,82 @@ mod tests {
     }
 
     #[test]
-    fn seven_text_shapes_stay_a_miss() {
+    fn seven_text_shapes_become_html() {
+        let first = "First generated legacy PowerPoint text shape.";
+        let second = "Second generated legacy PowerPoint text shape.";
+        let third = "Third generated legacy PowerPoint text shape.";
+        let fourth = "Fourth generated legacy PowerPoint text shape.";
+        let fifth = "Fifth generated legacy PowerPoint text shape.";
+        let sixth = "Sixth generated legacy PowerPoint text shape.";
+        let seventh = "Seventh generated legacy PowerPoint text shape.";
+        let file =
+            ppt_seven_text_document(first, second, third, fourth, fifth, sixth, seventh).unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!(
+            "<p>{first}</p><p>{second}</p><p>{third}</p><p>{fourth}</p><p>{fifth}</p><p>{sixth}</p><p>{seventh}</p>"
+        );
+        assert!(got.contains(&marked), "{got}");
+        let a = got.find(first).unwrap();
+        let b = got.find(second).unwrap();
+        let c = got.find(third).unwrap();
+        let d = got.find(fourth).unwrap();
+        let e = got.find(fifth).unwrap();
+        let f = got.find(sixth).unwrap();
+        let g = got.find(seventh).unwrap();
+        assert!(a < b && b < c && c < d && d < e && e < f && f < g);
+    }
+
+    #[test]
+    fn seven_shape_strings_are_in_the_html() {
+        let (north, east, south, west, center, inner, outer) = seven_shape_fixture();
+        let file = ppt_seven_text_document(
+            &north, &east, &south, &west, &center, &inner, &outer,
+        )
+        .unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!(
+            "<p>{north}</p><p>{east}</p><p>{south}</p><p>{west}</p><p>{center}</p><p>{inner}</p><p>{outer}</p>"
+        );
+        assert!(got.contains(&marked), "{got}");
+        let n = got.find(&north).unwrap();
+        let e = got.find(&east).unwrap();
+        let s = got.find(&south).unwrap();
+        let w = got.find(&west).unwrap();
+        let c = got.find(&center).unwrap();
+        let i = got.find(&inner).unwrap();
+        let o = got.find(&outer).unwrap();
+        assert!(n < e && e < s && s < w && w < c && c < i && i < o);
+    }
+
+    #[test]
+    fn seven_text_shapes_stay_a_pdf_miss() {
+        let (north, east, south, west, center, inner, outer) = seven_shape_fixture();
+        let file = ppt_seven_text_document(
+            &north, &east, &south, &west, &center, &inner, &outer,
+        )
+        .unwrap();
+        let err = crate::convert::convert("ppt", "pdf", &file).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(err.message.contains("not four text shapes"), "{err}");
+        assert!(
+            err.message.contains(&format!("input_b={}", file.len())),
+            "{err}"
+        );
+    }
+
+    fn seven_shape_fixture() -> (String, String, String, String, String, String, String) {
+        let (north, east, south, west, center, inner) = six_shape_fixture();
+        let mut outer = String::new();
+        for i in 0..25 {
+            outer.push_str(&format!(
+                "Outer shape sentence {i} of the generated PowerPoint file. "
+            ));
+        }
+        (north, east, south, west, center, inner, outer)
+    }
+
+    #[test]
+    fn eight_text_shapes_stay_a_miss() {
         let stream = document_stream(&[
             b"One shape.",
             b"Two shape.",
@@ -2263,6 +2369,7 @@ mod tests {
             b"Five shape.",
             b"Six shape.",
             b"Seven shape.",
+            b"Eight shape.",
         ]);
         let file = pack_cfb(&stream).unwrap();
         let err = html(&file).unwrap_err();

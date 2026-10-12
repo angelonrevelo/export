@@ -11,7 +11,7 @@ use std::time::Instant;
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_image_matches, pdf_merge,
     pdf_rotate, pdf_shrink, pdf_split, pdf_text, pdf_watermark, ppt_five_text_document,
-    ppt_six_text_document,
+    ppt_seven_text_document, ppt_six_text_document,
     ppt_four_text_document,
     ppt_text_document, ppt_text_indexed_document, ppt_text_nibble_document,
     ppt_text_picture_document, ppt_three_text_document, ppt_two_text_document,
@@ -1749,6 +1749,138 @@ fn report_ppt_html_six() {
     }
 }
 
+fn report_ppt_html_seven() {
+    let (north, east, south, west) = ppt_html_four_texts();
+    let four = ppt_four_text_document(&north, &east, &south, &west).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let four_html = convert("ppt", "html", &four).unwrap_or_else(|err| {
+        eprintln!("ppt four-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if four.len() != 7680 || four_html.len() != 5814 {
+        eprintln!(
+            "ppt four-shape html size changed: input_b={} output_b={}",
+            four.len(),
+            four_html.len()
+        );
+        std::process::exit(1);
+    }
+    let (north, east, south, west, center) = ppt_html_five_texts();
+    let five = ppt_five_text_document(&north, &east, &south, &west, &center).unwrap_or_else(|err| {
+        eprintln!("ppt five-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let five_html = convert("ppt", "html", &five).unwrap_or_else(|err| {
+        eprintln!("ppt five-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if five.len() != 9216 || five_html.len() != 7286 {
+        eprintln!(
+            "ppt five-shape html size changed: input_b={} output_b={}",
+            five.len(),
+            five_html.len()
+        );
+        std::process::exit(1);
+    }
+    let (north, east, south, west, center, inner) = ppt_html_six_texts();
+    let six = ppt_six_text_document(&north, &east, &south, &west, &center, &inner).unwrap_or_else(
+        |err| {
+            eprintln!("ppt six-shape fixture failed: {err}");
+            std::process::exit(1);
+        },
+    );
+    let six_html = convert("ppt", "html", &six).unwrap_or_else(|err| {
+        eprintln!("ppt six-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if six.len() != 10752 || six_html.len() != 8733 {
+        eprintln!(
+            "ppt six-shape html size changed: input_b={} output_b={}",
+            six.len(),
+            six_html.len()
+        );
+        std::process::exit(1);
+    }
+    let (north, east, south, west, center, inner, outer) = ppt_html_seven_texts();
+    let file = ppt_seven_text_document(
+        &north, &east, &south, &west, &center, &inner, &outer,
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("ppt seven-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("ppt", "html", &file) {
+        Ok(html) => {
+            let body = String::from_utf8_lossy(&html);
+            let north_p = format!("<p>{north}</p>");
+            let east_p = format!("<p>{east}</p>");
+            let south_p = format!("<p>{south}</p>");
+            let west_p = format!("<p>{west}</p>");
+            let center_p = format!("<p>{center}</p>");
+            let inner_p = format!("<p>{inner}</p>");
+            let outer_p = format!("<p>{outer}</p>");
+            let n = body.find(&north_p);
+            let e = body.find(&east_p);
+            let s = body.find(&south_p);
+            let w = body.find(&west_p);
+            let c = body.find(&center_p);
+            let i = body.find(&inner_p);
+            let o = body.find(&outer_p);
+            let ordered = match (n, e, s, w, c, i, o) {
+                (Some(n), Some(e), Some(s), Some(w), Some(c), Some(i), Some(o)) => {
+                    n < e && e < s && s < w && w < c && c < i && i < o
+                }
+                _ => false,
+            };
+            if body.contains(&north)
+                && body.contains(&east)
+                && body.contains(&south)
+                && body.contains(&west)
+                && body.contains(&center)
+                && body.contains(&inner)
+                && body.contains(&outer)
+                && ordered
+            {
+                let sample = measure(|| ready_bytes("ppt", "html", &file));
+                emit_ready("ppt→html seven", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→html seven p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                emit_untimed(
+                    "ppt→html seven",
+                    file.len() as u64,
+                    Some(html.len() as u64),
+                    &format!(
+                        "MISS: html does not contain all seven text shapes (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains(&format!("input_b={}", file.len()))
+            {
+                eprintln!("ppt seven miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→html seven", file.len() as u64, None, &err.message);
+        }
+    }
+}
+
 fn report_ppt_pdf_four() {
     let (north, east, south, west) = ppt_html_four_texts();
     let file = ppt_four_text_document(&north, &east, &south, &west).unwrap_or_else(|err| {
@@ -3170,6 +3302,17 @@ fn ppt_indexed_text() -> String {
     text
 }
 
+fn ppt_html_seven_texts() -> (String, String, String, String, String, String, String) {
+    let (north, east, south, west, center, inner) = ppt_html_six_texts();
+    let mut outer = String::new();
+    for i in 0..25 {
+        outer.push_str(&format!(
+            "Outer shape sentence {i} of the generated PowerPoint file. "
+        ));
+    }
+    (north, east, south, west, center, inner, outer)
+}
+
 fn ppt_html_six_texts() -> (String, String, String, String, String, String) {
     let (north, east, south, west, center) = ppt_html_five_texts();
     let mut inner = String::new();
@@ -3706,6 +3849,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_html_six();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-html-seven") {
+        println!("export-docs ppt seven-shape html byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_html_seven();
         return;
     }
     if std::env::args().any(|arg| arg == "--ppt-pdf-four") {
