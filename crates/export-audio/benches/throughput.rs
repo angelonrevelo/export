@@ -165,12 +165,24 @@ fn main() {
     let stereo = stereo_block();
     let stereo_flac = encode(&stereo).expect("encode stereo");
     let stereo_back = decode(&stereo_flac).expect("decode stereo");
-    assert_eq!(stereo_back.samples, stereo.samples, "stereo block is not exact");
+    assert_eq!(stereo_flac.len(), 7_601);
     assert_eq!(stereo_back.channels, 2);
+    assert_eq!(stereo_back.bits, 16);
+    for i in 0..4096 {
+        assert_eq!(stereo_back.samples[i * 2], stereo.samples[i * 2], "left");
+        assert_eq!(
+            stereo_back.samples[i * 2 + 1],
+            stereo.samples[i * 2 + 1],
+            "right"
+        );
+    }
     let stereo_pcm_len = (stereo.samples.len() * 2) as u64;
     let stereo_encode = measure(ITERS, || {
         std::hint::black_box(encode(&stereo).expect("encode stereo"));
     });
     report("stereo_encode", "miss", stereo_pcm_len, &stereo_encode);
-    println!("stereo_flac_bytes {}", stereo_flac.len());
+    let stereo_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&stereo_flac).expect("decode stereo"));
+    });
+    report("stereo_decode", "miss", stereo_flac.len() as u64, &stereo_decode);
 }

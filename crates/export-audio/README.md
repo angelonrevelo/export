@@ -102,7 +102,9 @@ formula. The right channel swaps the ramp and the slow term and flips the
 wobble, so the two channels are not copies. Both channels round-trip. The
 encoder writes the channels independently. The encoded file is 7,601 bytes.
 Encode p50 is 0.513 ms and p99 is 0.612 ms (31.92 MB/s on the 16,384 PCM
-bytes), release, 31 iterations after 3 warmup passes.
+bytes), release, 31 iterations after 3 warmup passes. Decode of that file
+back to the samples is p50 0.150 ms and p99 0.186 ms (50.72 MB/s on the
+7,601 FLAC bytes), same iteration count.
 
 ### Reader experiment
 
