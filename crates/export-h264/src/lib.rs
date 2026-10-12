@@ -395,6 +395,21 @@ pub fn fixture_160x160_predicted() -> Yuv420 {
     frame
 }
 
+/// Second 320×240 frame. Brighter than the I-frame, so the P-frame residual is not zero.
+pub fn fixture_320x240_predicted() -> Yuv420 {
+    let mut frame = fixture_320x240();
+    for sample in &mut frame.y {
+        *sample = sample.saturating_add(16);
+    }
+    for sample in &mut frame.u {
+        *sample = sample.saturating_add(4);
+    }
+    for sample in &mut frame.v {
+        *sample = sample.saturating_sub(4);
+    }
+    frame
+}
+
 fn shift_plane(src: &[u8], width: usize, height: usize, dx: i32, dy: i32) -> Vec<u8> {
     let mut out = vec![0u8; width * height];
     for y in 0..height {

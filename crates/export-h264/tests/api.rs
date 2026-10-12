@@ -1,9 +1,9 @@
 use export_h264::{
     encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_160x160_eight,
     fixture_160x160_predicted, fixture_160x160_shifted, fixture_160x160_sixteen, fixture_320x240,
-    fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted,
-    mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420,
-    SHIFTED_MV,
+    fixture_320x240_predicted, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
+    fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
+    PredictedFrame, Yuv420, SHIFTED_MV,
 };
 
 #[test]
@@ -444,6 +444,13 @@ fn qvga_iframe_keeps_the_sixteen_picture_file() {
         .unwrap_err(),
         Error::PredictedFrame
     );
+    let brighter = fixture_320x240_predicted();
+    let pair = encode_ip(&frame, &brighter, &opts).unwrap();
+    assert_eq!(pair.annex_b.len(), 29090);
+    assert!(pair.annex_b.starts_with(&encoded.annex_b));
+    assert_eq!(&pair.annex_b[..19337], &encoded.annex_b[..]);
+    let zero = encode_ip_motion(&frame, &brighter, &opts, Motion { mvx: 0, mvy: 0 }).unwrap();
+    assert_eq!(zero.annex_b, pair.annex_b);
 }
 
 #[test]
