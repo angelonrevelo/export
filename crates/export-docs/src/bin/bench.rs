@@ -568,15 +568,27 @@ fn report_doc_two() {
     }
 }
 
-fn doc_two_paragraphs() -> Vec<u8> {
+fn doc_two_texts() -> (String, String) {
     let mut first = String::new();
     let mut second = String::new();
     for i in 0..200 {
         first.push_str(&format!("Alpha {i} of the first generated paragraph. "));
         second.push_str(&format!("Beta {i} of the second generated paragraph. "));
     }
+    (first, second)
+}
+
+fn doc_two_paragraphs() -> Vec<u8> {
+    let (first, second) = doc_two_texts();
     word97_document(&[&first, &second]).unwrap_or_else(|err| {
         eprintln!("word97 two-paragraph fixture failed: {err}");
+        std::process::exit(1);
+    })
+}
+
+fn doc_three_paragraphs() -> Vec<u8> {
+    word97_document(&["One", "Two", "Three"]).unwrap_or_else(|err| {
+        eprintln!("word97 three-paragraph fixture failed: {err}");
         std::process::exit(1);
     })
 }
@@ -626,19 +638,81 @@ fn report_doc_pdf() {
             emit_untimed("doc→pdf para", doc.len() as u64, None, &err.message);
         }
     }
-    let two = doc_two_paragraphs();
-    match convert("doc", "pdf", &two) {
+    let three = doc_three_paragraphs();
+    match convert("doc", "pdf", &three) {
         Ok(_) => {
-            eprintln!("two-paragraph doc produced pdf");
+            eprintln!("three-paragraph doc produced pdf");
             std::process::exit(1);
         }
         Err(err) => {
-            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", two.len()))
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", three.len()))
             {
                 eprintln!("doc pdf miss hid the input size: {err}");
                 std::process::exit(1);
             }
-            emit_untimed("doc→pdf two", two.len() as u64, None, &err.message);
+            emit_untimed("doc→pdf three", three.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn report_doc_pdf_two() {
+    let (first, second) = doc_two_texts();
+    let doc = word97_document(&[&first, &second]).unwrap_or_else(|err| {
+        eprintln!("word97 two-paragraph fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("doc", "pdf", &doc) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("doc→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            if !extracted.contains(&first) || !extracted.contains(&second) {
+                emit_untimed(
+                    "doc→pdf two",
+                    doc.len() as u64,
+                    Some(pdf.len() as u64),
+                    "MISS: pdf text does not match",
+                );
+            } else {
+                let sample = measure(|| ready_bytes("doc", "pdf", &doc));
+                emit_ready("doc→pdf two", doc.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "doc→pdf two p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(doc.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        doc.len(),
+                        sample.output_bytes,
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", doc.len()))
+            {
+                eprintln!("doc→pdf hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("doc→pdf two", doc.len() as u64, None, &err.message);
+        }
+    }
+    let three = doc_three_paragraphs();
+    match convert("doc", "pdf", &three) {
+        Ok(_) => {
+            eprintln!("three-paragraph doc produced pdf");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", three.len()))
+            {
+                eprintln!("doc pdf miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("doc→pdf three", three.len() as u64, None, &err.message);
         }
     }
 }
@@ -765,6 +839,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_doc_pdf();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--doc-pdf-two") {
+        println!("export-docs doc two-paragraph pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_doc_pdf_two();
         return;
     }
     let xml = docx_xml(2500);

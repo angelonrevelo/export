@@ -1,6 +1,6 @@
 //! Word 97 to HTML when `WordDocument` holds plain 8-bit paragraphs.
-//! Word 97 to PDF only when that stream holds one such paragraph, and only
-//! when the PDF text contains it. Any other file stays a miss.
+//! Word 97 to PDF when that stream holds one or two such paragraphs, and only
+//! when the PDF text contains each of them. Any other file stays a miss.
 //! LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -40,18 +40,21 @@ pub fn doc_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
     })
 }
 
-/// One plain paragraph becomes a text PDF. The PDF is kept only when its
-/// extracted text contains that paragraph. Two paragraphs and every other
-/// shape stay a miss.
+/// One or two plain paragraphs become a text PDF. The PDF is kept only when
+/// its extracted text contains each paragraph. Every other shape stays a miss.
 pub fn doc_to_pdf<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result<RunStats> {
     let (input_bytes, bytes, paras) = load_paragraphs(src)?;
-    if paras.len() != 1 {
-        return Err(miss(input_bytes, "file is not one paragraph"));
+    if paras.is_empty() || paras.len() > 2 {
+        return Err(miss(input_bytes, "file is not one or two paragraphs"));
     }
-    let text = &paras[0];
-    let pdf = one_paragraph_pdf(text).map_err(|err| miss(input_bytes, &err.message))?;
+    let pdf = if paras.len() == 1 {
+        one_paragraph_pdf(&paras[0])
+    } else {
+        two_paragraph_pdf(&paras[0], &paras[1])
+    }
+    .map_err(|err| miss(input_bytes, &err.message))?;
     let extracted = crate::pdf::plain_text(&pdf).map_err(|err| miss(input_bytes, &err.message))?;
-    if !extracted.contains(text) {
+    if !paras.iter().all(|text| extracted.contains(text)) {
         return Err(miss(input_bytes, "pdf text does not match"));
     }
     let mut counted = CountWrite::new(out);
@@ -96,15 +99,24 @@ fn load_paragraphs<R: Read + Seek>(src: &mut R) -> Result<(u64, Vec<u8>, Vec<Str
 }
 
 fn one_paragraph_pdf(text: &str) -> Result<Vec<u8>> {
-    let lines = [crate::pdf::Line {
+    let lines = [pdf_line(text)];
+    crate::pdf::from_lines(&lines)
+}
+
+fn two_paragraph_pdf(first: &str, second: &str) -> Result<Vec<u8>> {
+    let lines = [pdf_line(first), pdf_line(second)];
+    crate::pdf::from_lines(&lines)
+}
+
+fn pdf_line(text: &str) -> crate::pdf::Line {
+    crate::pdf::Line {
         spans: vec![crate::pdf::Span {
             text: text.to_string(),
             font: 0,
             size: 11.0,
         }],
         leading: 14.0,
-    }];
-    crate::pdf::from_lines(&lines)
+    }
 }
 
 /// Compound file whose `WordDocument` text is `paragraphs`, each ended by a paragraph mark.
@@ -664,14 +676,21 @@ mod tests {
         let pdf = crate::convert::convert("doc", "pdf", &doc).unwrap();
         let text = crate::pdf::plain_text(&pdf).unwrap();
         assert!(text.contains(&para), "{text}");
+        assert_eq!(pdf.len(), 20363);
     }
 
     #[test]
-    fn two_paragraphs_stay_a_pdf_miss() {
-        let doc = word97_document(&["One", "Two"]).unwrap();
+    fn two_paragraphs_become_pdf_with_both() {
+        let doc = word97_document(&["One", "Two & three"]).unwrap();
+        let pdf = crate::convert::convert("doc", "pdf", &doc).unwrap();
+        let text = crate::pdf::plain_text(&pdf).unwrap();
+        let one = text.find("One").unwrap();
+        let two = text.find("Two & three").unwrap();
+        assert!(one < two, "{text}");
+        let doc = word97_document(&["One", "Two", "Three"]).unwrap();
         let err = crate::convert::convert("doc", "pdf", &doc).unwrap_err();
         assert!(err.message.starts_with("MISS:"), "{}", err.message);
-        assert!(err.message.contains("not one paragraph"), "{}", err.message);
+        assert!(err.message.contains("not one or two"), "{}", err.message);
         assert!(
             err.message.contains(&format!("input_b={}", doc.len())),
             "{}",
