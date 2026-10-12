@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
-    pdf_split, pdf_text, pdf_watermark, pptx_raster_slide, pptx_raster_stored_pdf, word97_document,
+    pdf_split, pdf_text, pdf_watermark, ppt_text_document, pptx_raster_slide, pptx_raster_stored_pdf,
+    word97_document,
 };
 
 const WARMUP: usize = 4;
@@ -1185,6 +1186,101 @@ fn epub_six_spine() -> Vec<u8> {
     ])
 }
 
+fn report_ppt_html() {
+    let text = ppt_html_text();
+    let file = ppt_text_document(&text).unwrap_or_else(|err| {
+        eprintln!("ppt fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("ppt", "html", &file) {
+        Ok(html) => {
+            let body = String::from_utf8_lossy(&html);
+            if body.contains(&text) {
+                let sample = measure(|| ready_bytes("ppt", "html", &file));
+                emit_ready("ppt→html text", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→html text p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                emit_untimed(
+                    "ppt→html text",
+                    file.len() as u64,
+                    Some(html.len() as u64),
+                    &format!(
+                        "MISS: html does not contain the text (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains(&format!("input_b={}", file.len()))
+            {
+                eprintln!("ppt miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→html text", file.len() as u64, None, &err.message);
+        }
+    }
+    let blob = b"not a ppt";
+    match convert("ppt", "html", blob) {
+        Ok(_) => {
+            eprintln!("unreadable ppt produced html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains("compound document is not readable")
+                || !err.message.contains(&format!("input_b={}", blob.len()))
+            {
+                eprintln!("ppt unreadable miss hid the reason: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→html blob", blob.len() as u64, None, &err.message);
+        }
+    }
+    let word = word97_document(&["Hi"]).unwrap_or_else(|err| {
+        eprintln!("word fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("ppt", "html", &word) {
+        Ok(_) => {
+            eprintln!("word file produced ppt html");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains("has no PowerPoint Document stream")
+                || !err.message.contains(&format!("input_b={}", word.len()))
+            {
+                eprintln!("ppt word miss hid the reason: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→html word", word.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn ppt_html_text() -> String {
+    let mut s = String::new();
+    for i in 0..60 {
+        s.push_str(&format!(
+            "Sentence {i} of the generated PowerPoint text shape. "
+        ));
+    }
+    s
+}
+
 fn report_rtf() {
     let doc = rtf_paragraphs();
     let sample = measure(|| ready_bytes("rtf", "html", &doc));
@@ -1581,6 +1677,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_pptx_raster();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-html") {
+        println!("export-docs ppt html byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_html();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {

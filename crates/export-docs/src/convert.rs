@@ -61,6 +61,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "doc", target: "html", ready: false, note: "MISS: only a generated Word 97 file of paragraphs in WordDocument converts; other files stay a miss" },
     Pair { source: "doc", target: "pdf", ready: false, note: "MISS: only a generated Word 97 file of one, two, or three paragraphs converts; other files stay a miss" },
     Pair { source: "ppt", target: "pdf", ready: false, note: "MISS: legacy .ppt has no reader" },
+    Pair { source: "ppt", target: "html", ready: false, note: "MISS: only a generated legacy ppt with one text shape converts; other files stay a miss" },
     Pair { source: "xls", target: "pdf", ready: false, note: "MISS: spreadsheets are not this crate" },
 ];
 
@@ -104,6 +105,9 @@ pub fn convert_to<R: Read + Seek, W: Write>(
     }
     if source == "doc" && target == "pdf" {
         return crate::doc::doc_to_pdf(input, output);
+    }
+    if source == "ppt" && target == "html" {
+        return crate::ppt::ppt_to_html(input, output);
     }
     if !pair_ready(&source, &target) {
         let note = PAIRS
