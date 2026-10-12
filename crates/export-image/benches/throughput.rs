@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use export_image::{
-    decode_png, encode_jpeg, encode_png, resize, restore_lossless_all, shrink_png, thumbnail_jpeg,
-    Filter, Raster, ShrinkCache,
+    decode_png, decode_webp, encode_jpeg, encode_png, encode_webp_lossless, encode_webp_lossy,
+    resize, restore_lossless_all, shrink_png, thumbnail_jpeg, Filter, Raster, ShrinkCache,
 };
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
@@ -227,5 +227,66 @@ fn main() {
         p99 as f64 / 1_000.0,
         mb_s(pixel_bytes, p50),
         allocs as f64 / (pixels / 1_000_000.0),
+    );
+
+    // Appended WebP measurement. The rows above are unchanged.
+    let lossless = encode_webp_lossless(&image).unwrap();
+    for _ in 0..2 {
+        let _ = decode_webp(&lossless).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        let _ = decode_webp(&lossless).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let decoded = decode_webp(&lossless).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    assert_eq!(decoded.pixels, image.pixels);
+    println!(
+        "webp_vp8l_decode {w}x{h} file_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        lossless.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(pixel_bytes, p50),
+        mb_s(pixel_bytes, p99),
+        mb_s(lossless.len() as f64, p50),
+        allocs as f64 / (pixels / 1_000_000.0),
+    );
+
+    let lossy = encode_webp_lossy(&image).unwrap();
+    for _ in 0..2 {
+        let _ = decode_webp(&lossy).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        let _ = decode_webp(&lossy).unwrap();
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let _ = decode_webp(&lossy).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    println!(
+        "webp_vp8_decode {w}x{h} qindex=8 file_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        lossy.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(pixel_bytes, p50),
+        mb_s(pixel_bytes, p99),
+        mb_s(lossy.len() as f64, p50),
+        allocs as f64 / (pixels / 1_000_000.0),
+    );
+
+    // Bad signature. This is the miss: the call returns Invalid and does not decode.
+    let miss: &[u8] = b"RIFF\x04\x00\x00\x00JPEG";
+    for _ in 0..4 {
+        assert!(decode_webp(miss).is_err());
+    }
+    let (p50, p99) = time_n(80, || {
+        assert!(decode_webp(miss).is_err());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let miss_err = decode_webp(miss).unwrap_err();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    println!(
+        "webp_decode_miss bad_signature samples=80 p50_us={:.1} p99_us={:.1} error={miss_err} allocs={allocs}",
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
     );
 }

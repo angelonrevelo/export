@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.74"
 publish = false
-description = "PNG decode and measured JPEG shrink-to-bytes. No dependencies."
+description = "PNG, baseline JPEG, and simple WebP. No dependencies."
 
 # Deliberately dependency-free, same rule as index-core: the hot crate does not
 # pull a decoder, a C toolchain, or an image crate. Bitstream parsing, inflate,
