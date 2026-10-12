@@ -117,6 +117,17 @@ iterations after 3 warmup passes. Decode of that file back to the samples
 is p50 0.103 ms and p99 0.116 ms (70.93 MB/s on the 7,293 FLAC bytes), same
 iteration count.
 
+### 24-bit stereo block
+
+Separate from the 16-bit stereo row and the 24-bit mono row. One block of
+4,096 samples per channel, 24-bit, 44.1 kHz, interleaved. The left channel
+is the 24-bit mono block. The right channel uses the swapped ramp and slow
+terms, with the low byte flipped, so the channels are not copies. Both
+channels round-trip. The encoded file is 16,025 bytes. Encode p50 is
+0.592 ms and p99 is 0.693 ms (41.50 MB/s on the 24,576 PCM bytes). Decode
+of that file is p50 0.208 ms and p99 0.254 ms (76.95 MB/s on the 16,025
+FLAC bytes). Release, 31 iterations after 3 warmup passes.
+
 ### Reader experiment
 
 Rice quotients were timed two ways, interleaved in one process, 31 rounds,

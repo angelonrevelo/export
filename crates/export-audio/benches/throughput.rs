@@ -137,6 +137,27 @@ fn mono_wide() -> Pcm {
     }
 }
 
+fn stereo_wide() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767);
+        let low = (i as i32) & 255;
+        samples.push((left << 8) + low);
+        samples.push((right << 8) + (255 - low));
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 2,
+        bits: 24,
+        samples,
+    }
+}
+
 fn main() {
     if cfg!(debug_assertions) {
         eprintln!("refusing timing verdict: debug_assertions is on");
@@ -221,4 +242,38 @@ fn main() {
         std::hint::black_box(decode(&wide_flac).expect("decode 24-bit"));
     });
     report("wide_decode", "miss", wide_flac.len() as u64, &wide_decode);
+
+    let wide_stereo = stereo_wide();
+    let wide_stereo_flac = encode(&wide_stereo).expect("encode 24-bit stereo");
+    let wide_stereo_back = decode(&wide_stereo_flac).expect("decode 24-bit stereo");
+    assert_eq!(wide_stereo_flac.len(), 16_025);
+    assert_eq!(wide_stereo_back.bits, 24);
+    assert_eq!(wide_stereo_back.channels, 2);
+    assert_eq!(wide_stereo_back.sample_rate, 44_100);
+    for i in 0..4096 {
+        assert_eq!(
+            wide_stereo_back.samples[i * 2],
+            wide_stereo.samples[i * 2],
+            "left"
+        );
+        assert_eq!(
+            wide_stereo_back.samples[i * 2 + 1],
+            wide_stereo.samples[i * 2 + 1],
+            "right"
+        );
+        assert_ne!(
+            wide_stereo.samples[i * 2],
+            wide_stereo.samples[i * 2 + 1],
+            "channels differ"
+        );
+    }
+    let wide_stereo_pcm = (wide_stereo.samples.len() * 3) as u64;
+    let wide_stereo_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&wide_stereo).expect("encode 24-bit stereo"));
+    });
+    report("wide_stereo_encode", "miss", wide_stereo_pcm, &wide_stereo_encode);
+    let wide_stereo_decode = measure(ITERS, || {
+        std::hint::black_box(decode(&wide_stereo_flac).expect("decode 24-bit stereo"));
+    });
+    report("wide_stereo_decode", "miss", wide_stereo_flac.len() as u64, &wide_stereo_decode);
 }
