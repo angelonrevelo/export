@@ -4,6 +4,8 @@
 //! each edge at most [`RGB_MAX_EDGE`] pixels. Split of that page copies the
 //! samples. Merge still rebuilds text. A 16×16 page is 1417 bytes in and
 //! out. Release split of that page is 8046 ns p50 and 10530 ns p99.
+//! A 32×32 page is 3722 bytes in and out. Release split of that page is
+//! 9060 ns p50 and 9938 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any other image, and fonts
 //! other than the built-in Helvetica are not preserved. A truncated file, an
@@ -17,7 +19,7 @@ pub enum Error {
 }
 
 /// Largest edge, in pixels, of the one uncompressed RGB page this crate keeps.
-pub const RGB_MAX_EDGE: u32 = 16;
+pub const RGB_MAX_EDGE: u32 = 32;
 
 /// One classic-xref page holding one uncompressed 8-bit DeviceRGB image.
 ///
@@ -990,8 +992,9 @@ mod tests {
         );
         assert_eq!(rgb_pdf(0, 1, &[]).unwrap_err(), Error::BadPdf);
         assert_eq!(rgb_pdf(1, 1, &[1, 2]).unwrap_err(), Error::BadPdf);
+        let past_edge = ((RGB_MAX_EDGE + 1) * 3) as usize;
         assert_eq!(
-            rgb_pdf(RGB_MAX_EDGE + 1, 1, &[0; 51]).unwrap_err(),
+            rgb_pdf(RGB_MAX_EDGE + 1, 1, &vec![0; past_edge]).unwrap_err(),
             Error::BadPdf
         );
     }
