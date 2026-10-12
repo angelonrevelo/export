@@ -299,18 +299,24 @@ fn not_a_zip() {
 }
 
 #[test]
-fn deflate_is_refused() {
+fn deflate_huffman_from_python_errors_without_emitting() {
     let dir = Scratch::new();
     let path = dir.path("deflated.zip");
+    let payload = b"hello";
     let script = r#"
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED) as z:
-    z.writestr("a.txt", b"hello hello hello")
+    z.writestr("a.txt", open(sys.argv[2], "rb").read())
 "#;
-    python(script, &[&path]);
+    let raw = dir.path("raw.bin");
+    fs::write(&raw, payload).unwrap();
+    python(script, &[&path, &raw]);
     let mut zip = ZipReader::open(&path).unwrap();
-    let err = zip.copy_entry(0, &mut Vec::new()).unwrap_err();
-    assert!(matches!(err, Error::Unsupported("zip method is not store")));
+    assert_eq!(zip.entries()[0].method(), Method::Deflate);
+    let mut out = Vec::new();
+    let err = zip.copy_entry(0, &mut out).unwrap_err();
+    assert_eq!(err.to_string(), "fixed huffman");
+    assert!(out.is_empty());
 }
 
 // Keep File in scope so a reader can be built from an already-open handle.
