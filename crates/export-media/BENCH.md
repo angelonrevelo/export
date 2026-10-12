@@ -78,3 +78,15 @@ p50 is under 2 ms. `scripts/concat_copies.sh` is a host ffprobe only. It reporte
 | picture_bytes | 230,400 | 5.559 µs | 5.999 µs |
 
 p50 is under 0.30 ms.
+
+## Two picture samples
+
+`cargo bench --bench picture_pair`. Same release profile, 31 iterations, 3 warmup. The rows above were not remeasured. The sample-count ladder stays stopped at two.
+
+`elementary` copies both video samples out of the two-sample file this crate already writes (653,824 bytes). Each sample is the 230,400-byte `raw ` frame. It does not decode the pixels and it does not write a new file.
+
+| path | samples | bytes | p50 | p99 |
+|---|---:|---:|---:|---:|
+| picture_pair | 2 | 460,800 | 11.768 µs | 14.843 µs |
+
+p50 is under 12.2 µs.

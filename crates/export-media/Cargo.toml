@@ -41,6 +41,10 @@ harness = false
 name = "picture_bytes"
 harness = false
 
+[[bench]]
+name = "picture_pair"
+harness = false
+
 [[example]]
 name = "oracle_fixture"
 

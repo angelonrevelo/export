@@ -52,3 +52,35 @@ fn two_copies_of_the_audiogram_are_two_raw_samples() {
     assert_eq!(samples[0], frame.as_slice());
     assert_eq!(samples[1], frame.as_slice());
 }
+
+#[test]
+fn both_picture_samples_are_the_raw_frame() {
+    let one = audiogram(&one_second()).expect("audiogram");
+    assert_eq!(one.bytes, 327_420);
+    let frame = {
+        let movie = parse(&one.data).expect("one");
+        let video = movie
+            .tracks
+            .iter()
+            .find(|t| t.handler == *b"vide")
+            .expect("video");
+        elementary(video, &one.data).expect("frame")[0].to_vec()
+    };
+    assert_eq!(frame.len(), 230_400);
+    let pair = concat_mp4(&one.data, &one.data).expect("pair");
+    assert_eq!(pair.len(), 653_824);
+    let movie = parse(&pair).expect("pair parse");
+    let video = movie
+        .tracks
+        .iter()
+        .find(|t| t.handler == *b"vide")
+        .expect("video");
+    let samples = elementary(video, &pair).expect("pictures");
+    assert_eq!(samples.len(), 2);
+    assert_eq!(samples[0], frame.as_slice());
+    assert_eq!(samples[1], frame.as_slice());
+    let mut out = Vec::with_capacity(frame.len() * 2);
+    out.extend_from_slice(samples[0]);
+    out.extend_from_slice(samples[1]);
+    assert_eq!(out.len(), 460_800);
+}
