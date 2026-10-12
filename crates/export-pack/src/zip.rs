@@ -1,6 +1,7 @@
-//! Store-method zip (method 0). Payload bytes are copied, not wrapped in a
-//! general compressor. Each entry records a CRC-32 of the bytes written.
+//! Store-method zip (method 0) on write. Payload bytes are copied, not wrapped
+//! in a general compressor. Each entry records a CRC-32 of the bytes written.
 //! The finished archive appears under its real name only after rename.
+//! Method 8 is read with the inflater. The writer still emits store.
 
 use crate::crc::Crc32;
 use crate::error::{Error, Result};
@@ -31,15 +32,16 @@ const DOS_DATE: u16 = 33;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
     Store,
+    Deflate,
     Other(u16),
 }
 
 impl Method {
     fn from_u16(value: u16) -> Self {
-        if value == 0 {
-            Self::Store
-        } else {
-            Self::Other(value)
+        match value {
+            0 => Self::Store,
+            8 => Self::Deflate,
+            other => Self::Other(other),
         }
     }
 }
@@ -54,6 +56,7 @@ pub struct Entry {
     local_offset: u64,
     method: Method,
     flags: u16,
+    compressed_size: u64,
 }
 
 impl Entry {
@@ -71,6 +74,10 @@ impl Entry {
 
     pub fn method(&self) -> Method {
         self.method
+    }
+
+    pub fn compressed_size(&self) -> u64 {
+        self.compressed_size
     }
 
     /// Name that is safe to join onto an extraction directory.
@@ -370,7 +377,7 @@ impl<R: Read + Seek> ZipReader<R> {
     /// On [`Error::ChecksumMismatch`] some payload bytes may already have
     /// been written. Discard `out`. [`Self::extract_entry`] does that itself.
     pub fn copy_entry<W: Write>(&mut self, index: usize, mut out: W) -> Result<u64> {
-        let (local_offset, size, expect_crc, method, flags) = {
+        let (local_offset, size, expect_crc, method, flags, comp_size) = {
             let entry = self
                 .entries
                 .get(index)
@@ -381,12 +388,13 @@ impl<R: Read + Seek> ZipReader<R> {
                 entry.crc32,
                 entry.method,
                 entry.flags,
+                entry.compressed_size,
             )
         };
         if flags & 1 != 0 {
             return Err(Error::Unsupported("encrypted zip"));
         }
-        if method != Method::Store {
+        if method != Method::Store && method != Method::Deflate {
             return Err(Error::Unsupported("zip method is not store"));
         }
         self.reader.seek(SeekFrom::Start(local_offset))?;
@@ -395,11 +403,14 @@ impl<R: Read + Seek> ZipReader<R> {
         if read_u32(&hdr[0..4]) != LOCAL_SIG {
             return Err(Error::Format("bad local header"));
         }
-        if Method::from_u16(read_u16(&hdr[8..10])) != Method::Store {
+        if Method::from_u16(read_u16(&hdr[8..10])) != method {
             return Err(Error::Format("local method mismatch"));
         }
         let skip = u64::from(read_u16(&hdr[26..28])) + u64::from(read_u16(&hdr[28..30]));
         self.discard(skip)?;
+        if method == Method::Deflate {
+            return self.copy_deflated(comp_size, size, expect_crc, &mut out);
+        }
         let mut crc = Crc32::new();
         let mut left = size;
         while left > 0 {
@@ -410,6 +421,29 @@ impl<R: Read + Seek> ZipReader<R> {
             left -= n as u64;
         }
         if crc.finish() != expect_crc {
+            return Err(Error::ChecksumMismatch);
+        }
+        Ok(size)
+    }
+
+    fn copy_deflated<W: Write>(
+        &mut self,
+        comp_size: u64,
+        size: u64,
+        expect_crc: u32,
+        out: &mut W,
+    ) -> Result<u64> {
+        let mut limited = (&mut self.reader).take(comp_size);
+        let mut sink = CrcSink {
+            inner: out,
+            crc: Crc32::new(),
+            n: 0,
+        };
+        let produced = crate::deflate::inflate_raw(&mut limited, comp_size, &mut sink, size)?;
+        if produced != size || sink.n != size {
+            return Err(Error::Format("deflate size mismatch"));
+        }
+        if sink.crc.finish() != expect_crc {
             return Err(Error::ChecksumMismatch);
         }
         Ok(size)
@@ -511,6 +545,7 @@ impl<R: Read + Seek> ZipReader<R> {
                 local_offset: u64::from(local_offset),
                 method: Method::from_u16(method),
                 flags,
+                compressed_size: u64::from(comp_size),
             });
         }
         if consumed != cd_size {
@@ -636,6 +671,25 @@ fn sync_parent(path: &Path) {
     };
     if let Ok(dir) = File::open(parent) {
         let _ = dir.sync_all();
+    }
+}
+
+struct CrcSink<'a, W> {
+    inner: &'a mut W,
+    crc: Crc32,
+    n: u64,
+}
+
+impl<W: Write> Write for CrcSink<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write_all(buf)?;
+        self.crc.update(buf);
+        self.n += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }
 

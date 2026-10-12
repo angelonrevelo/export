@@ -101,6 +101,135 @@ fn main() {
     println!("note=write is CRC plus local header plus payload, before fsync");
     println!("note=finish is central directory plus fsync plus rename");
     println!("note=read follows write in-process, so the page cache may hold the file");
+    bench_inflate();
+    bench_pdf(&dir);
+    bench_font();
+}
+
+fn bench_inflate() {
+    let raw = payload(PAYLOAD);
+    let wrapped = export_pack::zlib_store(&raw);
+    let _ = export_pack::inflate_zlib(&wrapped).expect("inflate warmup");
+    let mut rates = Vec::with_capacity(PASSES);
+    let mut allocs = Vec::with_capacity(PASSES);
+    let mut alloc_bytes = Vec::with_capacity(PASSES);
+    for _ in 0..PASSES {
+        reset();
+        let t0 = Instant::now();
+        let out = export_pack::inflate_zlib(black_box(&wrapped)).expect("inflate");
+        let dur = t0.elapsed();
+        let (a, b) = snapshot();
+        assert_eq!(out.len(), raw.len());
+        black_box(out);
+        rates.push(mb_s(raw.len() as u64, dur));
+        allocs.push(a as f64 / (raw.len() as f64 / 1024.0 / 1024.0));
+        alloc_bytes.push(b as f64 / (raw.len() as f64 / 1024.0 / 1024.0));
+    }
+    println!("inflate_bytes={}", raw.len());
+    println!("inflate_kind=stored-deflate-blocks");
+    println!("inflate_passes={PASSES}");
+    print_spread("inflate_mb_s", &rates);
+    print_spread("inflate_allocs_per_mib", &allocs);
+    print_spread("inflate_alloc_bytes_per_mib", &alloc_bytes);
+    println!("note=inflate is zlib_store output, CMF/FLG 0x78 0x01, not a Huffman stream");
+    println!("note=timed region is inflate_zlib only, including the Adler-32 check");
+}
+
+fn bench_pdf(dir: &std::path::Path) {
+    const PAGES: usize = 8;
+    const WIDTH: u32 = 2048;
+    const HEIGHT: u32 = 1024;
+    let rgb = vec![0x7Fu8; (WIDTH as usize) * (HEIGHT as usize) * 3];
+    let png = export_pack::encode_png_rgb(WIDTH, HEIGHT, &rgb).expect("png");
+    let cbz = dir.join("bench.cbz");
+    let pdf = dir.join("bench.pdf");
+    let _ = fs::remove_file(&cbz);
+    let mut zip = export_pack::ZipWriter::create(&cbz).expect("cbz");
+    for i in 0..PAGES {
+        let name = format!("page-{i}.png");
+        zip.write_bytes(&name, &png).expect("page");
+    }
+    zip.finish().expect("cbz finish");
+    let pixel_bytes = (PAGES as u64) * (WIDTH as u64) * (HEIGHT as u64) * 3;
+    let _ = export_pack::cbz_to_pdf(&cbz, &pdf).expect("pdf warmup");
+    let _ = fs::remove_file(&pdf);
+    let mut rates = Vec::with_capacity(PASSES);
+    let mut allocs = Vec::with_capacity(PASSES);
+    let mut alloc_bytes = Vec::with_capacity(PASSES);
+    for _ in 0..PASSES {
+        let _ = fs::remove_file(&pdf);
+        reset();
+        let t0 = Instant::now();
+        let info = export_pack::cbz_to_pdf(&cbz, &pdf).expect("pdf");
+        let dur = t0.elapsed();
+        let (a, b) = snapshot();
+        assert_eq!(info.pages, PAGES);
+        assert_eq!(info.pixel_bytes, pixel_bytes);
+        let mib = pixel_bytes as f64 / 1024.0 / 1024.0;
+        rates.push(mb_s(pixel_bytes, dur));
+        allocs.push(a as f64 / mib);
+        alloc_bytes.push(b as f64 / mib);
+    }
+    println!("pdf_pages={PAGES}");
+    println!("pdf_png=stored-zlib");
+    println!("pdf_pixel_bytes={pixel_bytes}");
+    println!("pdf_passes={PASSES}");
+    print_spread("pdf_mb_s", &rates);
+    print_spread("pdf_allocs_per_mib", &allocs);
+    print_spread("pdf_alloc_bytes_per_mib", &alloc_bytes);
+    println!("note=pdf rate counts decoded RGB bytes, not the CBZ size");
+    println!(
+        "note=cbz_to_pdf includes zip read, stored-block inflate, pdf write, fsync, and rename"
+    );
+    println!("note=the CBZ stays in the page cache after the warmup pass");
+    let _ = fs::remove_file(&cbz);
+    let _ = fs::remove_file(&pdf);
+}
+
+fn bench_font() {
+    const REPEATS: u64 = 5_000;
+    let ttf = export_pack::tiny_ttf();
+    let _ = export_pack::convert_font(&ttf, export_pack::FontContainer::Otf).expect("font warmup");
+    let bytes = (ttf.len() as u64).saturating_mul(REPEATS);
+    let mut rates = Vec::with_capacity(PASSES);
+    let mut allocs = Vec::with_capacity(PASSES);
+    let mut alloc_bytes = Vec::with_capacity(PASSES);
+    for _ in 0..PASSES {
+        reset();
+        let t0 = Instant::now();
+        for _ in 0..REPEATS {
+            black_box(
+                export_pack::convert_font(black_box(&ttf), export_pack::FontContainer::Otf)
+                    .expect("font"),
+            );
+        }
+        let dur = t0.elapsed();
+        let (a, b) = snapshot();
+        let mib = bytes as f64 / 1024.0 / 1024.0;
+        rates.push(mb_s(bytes, dur));
+        allocs.push(a as f64 / mib);
+        alloc_bytes.push(b as f64 / mib);
+    }
+    println!("font_bytes={}", ttf.len());
+    println!("font_repeats={REPEATS}");
+    println!("font_passes={PASSES}");
+    print_spread("font_mb_s", &rates);
+    print_spread("font_allocs_per_mib", &allocs);
+    print_spread("font_alloc_bytes_per_mib", &alloc_bytes);
+    println!("note=font rate is a repeated tiny-font container copy, not a bulk font benchmark");
+}
+
+const PASSES: usize = 5;
+
+fn print_spread(name: &str, values: &[f64]) {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let median = sorted[sorted.len() / 2];
+    let min = sorted[0];
+    let max = sorted[sorted.len() - 1];
+    println!("{name}_median={median:.1}");
+    println!("{name}_min={min:.1}");
+    println!("{name}_max={max:.1}");
 }
 
 fn run(data: &[u8], dir: &std::path::Path) -> Sample {
