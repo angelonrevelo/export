@@ -1,5 +1,6 @@
 use export_sheet::{
     convert_bytes, generated_biff_xls, generated_biff_xls_numeric_column,
+    generated_biff_xls_numeric_column_eight_thousand,
     generated_biff_xls_numeric_column_four_thousand,
     generated_biff_xls_numeric_column_two_thousand, generated_biff_xls_sum_cache,
     generated_biff_xls_sum_uncached, generated_biff_xls_sum_uncached_area,
@@ -69,6 +70,20 @@ fn four_thousand_numeric_rows_read_back() {
     assert_eq!(stats.lossy, 0);
     let mut lines = csv.split(|b| *b == b'\n');
     for i in 0..4000 {
+        assert_eq!(lines.next().unwrap(), i.to_string().as_bytes());
+    }
+    assert_eq!(lines.next(), Some(&[][..]));
+    assert_eq!(lines.next(), None);
+}
+
+#[test]
+fn eight_thousand_numeric_rows_read_back() {
+    let file = generated_biff_xls_numeric_column_eight_thousand();
+    let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
+    assert_eq!(stats.rows, 8000);
+    assert_eq!(stats.lossy, 0);
+    let mut lines = csv.split(|b| *b == b'\n');
+    for i in 0..8000 {
         assert_eq!(lines.next().unwrap(), i.to_string().as_bytes());
     }
     assert_eq!(lines.next(), Some(&[][..]));

@@ -50,6 +50,11 @@ pub fn generated_biff_xls_numeric_column_four_thousand() -> Vec<u8> {
     wrap_ole_two_fat(&workbook_numeric_column_four_thousand())
 }
 
+/// The same numeric column at the next count after 4 000: 8 000 rows, values 0 through 7999.
+pub fn generated_biff_xls_numeric_column_eight_thousand() -> Vec<u8> {
+    wrap_ole_three_fat(&workbook_numeric_column_eight_thousand())
+}
+
 /// A1 = 2, B1 = 3, C1 = a SUM formula whose cached value is 5.
 /// The expression is not evaluated.
 pub fn generated_biff_xls_sum_cache() -> Vec<u8> {
@@ -569,6 +574,28 @@ fn workbook_numeric_column_four_thousand() -> Vec<u8> {
     out
 }
 
+fn workbook_numeric_column_eight_thousand() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = [0u8; 14];
+    dims[4..8].copy_from_slice(&8000u32.to_le_bytes());
+    dims[10..12].copy_from_slice(&1u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    for row in 0..8000u16 {
+        push_rec(&mut out, 0x0203, &number_cell(row, 0, f64::from(row)));
+    }
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
 fn bof(dt: u16) -> [u8; 16] {
     let mut data = [0u8; 16];
     data[0..2].copy_from_slice(&0x0600u16.to_le_bytes());
@@ -808,6 +835,65 @@ fn wrap_ole_two_fat(workbook: &[u8]) -> Vec<u8> {
     free_dir(&mut file[dir + 256..dir + 384]);
     free_dir(&mut file[dir + 384..dir + 512]);
     file[2048..2048 + workbook.len()].copy_from_slice(workbook);
+    file
+}
+
+/// Three FAT sectors, all named in the header. `num_difat` stays 0.
+/// The 4 000-row file stays on [`wrap_ole_two_fat`].
+fn wrap_ole_three_fat(workbook: &[u8]) -> Vec<u8> {
+    let data_sectors = workbook.len().div_ceil(512);
+    // Sectors 0, 1, and 2 are the FAT. Sector 3 is the directory. Data starts at 4.
+    let total_sectors = 4 + data_sectors;
+    let mut file = vec![0u8; 512 * (1 + total_sectors)];
+    file[..8].copy_from_slice(&OLE_MAGIC);
+    put_u16(&mut file, 0x18, 0x003E);
+    put_u16(&mut file, 0x1A, 0x0003);
+    put_u16(&mut file, 0x1C, 0xFFFE);
+    put_u16(&mut file, 0x1E, 9);
+    put_u16(&mut file, 0x20, 6);
+    put_u32(&mut file, 0x2C, 3);
+    put_u32(&mut file, 0x30, 3);
+    put_u32(&mut file, 0x38, 4096);
+    put_u32(&mut file, 0x3C, ENDOFCHAIN);
+    put_u32(&mut file, 0x40, 0);
+    put_u32(&mut file, 0x44, ENDOFCHAIN);
+    put_u32(&mut file, 0x4C, 0);
+    put_u32(&mut file, 0x50, 1);
+    put_u32(&mut file, 0x54, 2);
+    for i in 3..109 {
+        put_u32(&mut file, 0x4C + i * 4, FREESECT);
+    }
+
+    for i in 0..384 {
+        put_u32(&mut file, 512 + i * 4, FREESECT);
+    }
+    put_u32(&mut file, 512, FATSECT);
+    put_u32(&mut file, 512 + 4, FATSECT);
+    put_u32(&mut file, 512 + 8, FATSECT);
+    put_u32(&mut file, 512 + 12, ENDOFCHAIN);
+    for i in 0..data_sectors {
+        let sid = 4 + i;
+        let next = if i + 1 == data_sectors {
+            ENDOFCHAIN
+        } else {
+            (sid + 1) as u32
+        };
+        put_u32(&mut file, 512 + sid * 4, next);
+    }
+
+    let dir = 2048;
+    write_dir(&mut file[dir..dir + 128], "Root Entry", 5, 1, ENDOFCHAIN, 0);
+    write_dir(
+        &mut file[dir + 128..dir + 256],
+        "Workbook",
+        2,
+        NOSTREAM,
+        4,
+        workbook.len() as u64,
+    );
+    free_dir(&mut file[dir + 256..dir + 384]);
+    free_dir(&mut file[dir + 384..dir + 512]);
+    file[2560..2560 + workbook.len()].copy_from_slice(workbook);
     file
 }
 
@@ -1594,6 +1680,39 @@ mod tests {
         assert_eq!(u32::from_le_bytes(file[0x48..0x4C].try_into().unwrap()), 0);
         let rows = read_biff8(&file).unwrap();
         assert_eq!(rows.len(), 4000);
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row, &[i.to_string()]);
+        }
+    }
+
+    #[test]
+    fn numeric_column_eight_thousand_reads_every_row() {
+        assert_eq!(generated_biff_xls_numeric_column().len(), 19_968);
+        assert_eq!(
+            generated_biff_xls_numeric_column_two_thousand().len(),
+            37_888
+        );
+        assert_eq!(
+            generated_biff_xls_numeric_column_four_thousand().len(),
+            74_240
+        );
+        let stream = workbook_numeric_column_eight_thousand();
+        assert!(records(&stream, 0x0006).is_empty());
+        let numbers = records(&stream, 0x0203);
+        assert_eq!(numbers.len(), 8000);
+        assert_eq!(
+            f64::from_le_bytes(numbers[0][6..14].try_into().unwrap()),
+            0.0
+        );
+        assert_eq!(
+            f64::from_le_bytes(numbers[7999][6..14].try_into().unwrap()),
+            7999.0
+        );
+        let file = generated_biff_xls_numeric_column_eight_thousand();
+        assert_eq!(u32::from_le_bytes(file[0x2C..0x30].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(file[0x48..0x4C].try_into().unwrap()), 0);
+        let rows = read_biff8(&file).unwrap();
+        assert_eq!(rows.len(), 8000);
         for (i, row) in rows.iter().enumerate() {
             assert_eq!(row, &[i.to_string()]);
         }
