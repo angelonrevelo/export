@@ -864,17 +864,19 @@ fn time_sixteen_ranges(
             let got = if separate_connections {
                 let mut bodies = Vec::with_capacity(ranges.len());
                 for span_index in 0..ranges.len() {
-                    bodies.push(
-                        fetcher
-                            .get_span(&playlist, span_index)
-                            .expect("separate cleartext range"),
-                    );
+                    match fetcher.get_span(&playlist, span_index) {
+                        Ok(body) => bodies.push(body),
+                        Err(err) => panic!(
+                            "separate cleartext range index={index} span={span_index} port={port}: {err}"
+                        ),
+                    }
                 }
                 bodies
             } else {
-                fetcher
-                    .get_spans(&playlist)
-                    .expect("shared cleartext ranges")
+                match fetcher.get_spans(&playlist) {
+                    Ok(bodies) => bodies,
+                    Err(err) => panic!("shared cleartext ranges index={index} port={port}: {err}"),
+                }
             };
             let elapsed = started.elapsed().as_nanos() as f64;
             let payload: usize = got.iter().map(Vec::len).sum();
@@ -913,7 +915,7 @@ fn serve_unmerged_ranges(
     connections: usize,
 ) {
     listener.set_nonblocking(true).expect("nonblocking accept");
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(120);
     let mut served = 0;
     let headers: Vec<String> = ranges.iter().copied().map(range_header).collect();
     while served < connections && Instant::now() < deadline {
@@ -924,6 +926,7 @@ fn serve_unmerged_ranges(
                     .expect("read timeout");
                 sock.set_write_timeout(Some(Duration::from_secs(2)))
                     .expect("write timeout");
+                sock.set_nodelay(true).expect("nodelay");
                 for request_index in 0..requests_per_connection {
                     let request = read_http_request(&mut sock).expect("range did not arrive");
                     assert!(
@@ -963,6 +966,11 @@ fn serve_unmerged_ranges(
             Err(err) if waited(&err) => std::hint::spin_loop(),
             Err(err) => panic!("sixteen-range accept failed: {err}"),
         }
+    }
+    if served < connections {
+        panic!(
+            "sixteen-range server stopped early served={served} connections={connections} requests_per_connection={requests_per_connection}"
+        );
     }
 }
 

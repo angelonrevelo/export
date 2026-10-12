@@ -148,6 +148,8 @@ impl Fetcher {
                 stream
                     .set_write_timeout(Some(self.timeout))
                     .map_err(io_err)?;
+                // A kept-alive socket would otherwise hold the next small Range write.
+                stream.set_nodelay(true).map_err(io_err)?;
                 *live = Some(LiveConn {
                     stream,
                     addr: hop.addr,
@@ -370,6 +372,7 @@ fn tcp_exchange(
     let mut stream = TcpStream::connect_timeout(&hop.addr, timeout).map_err(io_err)?;
     stream.set_read_timeout(Some(timeout)).map_err(io_err)?;
     stream.set_write_timeout(Some(timeout)).map_err(io_err)?;
+    stream.set_nodelay(true).map_err(io_err)?;
     write_http_get(&mut stream, &hop.url, range)?;
     stream.flush().map_err(io_err)?;
     read_http_message(&mut stream, max_body)
