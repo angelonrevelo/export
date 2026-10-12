@@ -151,20 +151,108 @@ pub fn encode_stereo_frame(left: &[f32], right: &[f32]) -> Result<Vec<u8>, Error
     wrap_adts_stereo(&payload)
 }
 
+/// Encode a stereo frame whose long windows start with `previous_left` and
+/// `previous_right`.
+///
+/// Those histories are prior PCM, not decoded overlap tails. The library does
+/// not store them. Mid-side stereo stays off. The window is the same long
+/// sine window as [`encode_stereo_frame`].
+pub fn encode_stereo_frame_following(
+    previous_left: &[f32],
+    previous_right: &[f32],
+    left: &[f32],
+    right: &[f32],
+) -> Result<Vec<u8>, Error> {
+    if previous_left.len() != FRAME_SAMPLES
+        || previous_right.len() != FRAME_SAMPLES
+        || left.len() != FRAME_SAMPLES
+        || right.len() != FRAME_SAMPLES
+    {
+        return Err(Error::Invalid);
+    }
+    if previous_left
+        .iter()
+        .chain(previous_right.iter())
+        .chain(left.iter())
+        .chain(right.iter())
+        .any(|sample| !sample.is_finite())
+    {
+        return Err(Error::Invalid);
+    }
+    let left_spec = window_spectrum(previous_left, left);
+    let right_spec = window_spectrum(previous_right, right);
+    let (left_gain, left_q) = quantize(&left_spec);
+    let (right_gain, right_q) = quantize(&right_spec);
+    let payload = write_cpe(left_gain, &left_q, right_gain, &right_q)?;
+    wrap_adts_stereo(&payload)
+}
+
+/// The recorded second stereo frame.
+///
+/// Left continues the half-scale 440 Hz sine. Right stays silence. Overlap-add
+/// against the first stereo frame emits that frame's left sine, one frame
+/// late.
+pub fn encode_second_stereo_frame() -> Result<Vec<u8>, Error> {
+    encode_stereo_frame_following(
+        &crate::one_frame_pcm(),
+        &[0.0; FRAME_SAMPLES],
+        &crate::second_frame_pcm(),
+        &[0.0; FRAME_SAMPLES],
+    )
+}
+
 /// Decode one stereo AAC-LC ADTS frame.
 ///
 /// Overlap history is zero, so a lone frame does not reconstruct its input.
 /// A mono frame is [`Error::Invalid`].
 pub fn decode_stereo_frame(bytes: &[u8]) -> Result<StereoPcm, Error> {
-    let adts = parse_adts(bytes)?;
-    if adts.channel != 2 {
-        return Err(Error::Invalid);
-    }
-    let (left, right) = read_stereo_block(adts.payload)?;
+    let (left, right) = stereo_spectra(bytes)?;
     Ok(StereoPcm {
         left: pcm_f32(&mdct::synthesis_one_frame(&left)),
         right: pcm_f32(&mdct::synthesis_one_frame(&right)),
     })
+}
+
+/// Decode `second` overlap-added against the tails of `first`.
+///
+/// With the recorded pair, the left samples are [`crate::one_frame_pcm`], one
+/// frame late. They are not [`crate::second_frame_pcm`]. The right samples
+/// stay silence.
+pub fn decode_second_stereo_frame(first: &[u8], second: &[u8]) -> Result<StereoPcm, Error> {
+    let (left0, right0) = stereo_spectra(first)?;
+    let mut left_tail = [0.0; FRAME_SAMPLES];
+    let mut right_tail = [0.0; FRAME_SAMPLES];
+    let _ = mdct::synthesis_overlap(&left0, &mut left_tail);
+    let _ = mdct::synthesis_overlap(&right0, &mut right_tail);
+    let (left1, right1) = stereo_spectra(second)?;
+    Ok(StereoPcm {
+        left: pcm_f32(&mdct::synthesis_overlap(&left1, &mut left_tail)),
+        right: pcm_f32(&mdct::synthesis_overlap(&right1, &mut right_tail)),
+    })
+}
+
+fn stereo_spectra(bytes: &[u8]) -> Result<([f64; FRAME_SAMPLES], [f64; FRAME_SAMPLES]), Error> {
+    let adts = parse_adts(bytes)?;
+    if adts.channel != 2 {
+        return Err(Error::Invalid);
+    }
+    read_stereo_block(adts.payload)
+}
+
+fn window_spectrum(previous: &[f32], samples: &[f32]) -> [f64; FRAME_SAMPLES] {
+    if previous
+        .iter()
+        .chain(samples.iter())
+        .all(|sample| *sample == 0.0)
+    {
+        return [0.0; FRAME_SAMPLES];
+    }
+    let mut block = [0.0f64; 2048];
+    for i in 0..FRAME_SAMPLES {
+        block[i] = f64::from(previous[i]);
+        block[FRAME_SAMPLES + i] = f64::from(samples[i]);
+    }
+    mdct::analysis(&block)
 }
 
 fn first_window_spectrum(samples: &[f32]) -> [f64; FRAME_SAMPLES] {
@@ -1130,9 +1218,31 @@ mod tests {
         );
         assert!(right_peak <= 0.01, "right peak {right_peak}");
         assert_eq!(decode_frame(&frame).unwrap_err(), Error::Invalid);
+        assert_eq!(frame.len(), 517);
         assert_eq!(encode_frame(&left_pcm).unwrap().len(), 513);
         assert_eq!(encode_second_frame().unwrap().len(), 68);
         assert_eq!(encode_third_frame().unwrap().len(), 94);
+    }
+
+    #[test]
+    fn second_stereo_frame_emits_the_delayed_sine() {
+        let delayed = crate::one_frame_pcm();
+        let silence = [0.0f32; FRAME_SAMPLES];
+        let first = encode_stereo_frame(&delayed, &silence).unwrap();
+        let second = encode_second_stereo_frame().unwrap();
+        assert_eq!(first.len(), 517);
+        let pcm = decode_second_stereo_frame(&first, &second).unwrap();
+        let mut left_err = 0.0f32;
+        let mut right_peak = 0.0f32;
+        for ((left, src), right) in pcm.left.iter().zip(delayed.iter()).zip(pcm.right.iter()) {
+            left_err = left_err.max((left - src).abs());
+            right_peak = right_peak.max(right.abs());
+        }
+        assert!(
+            left_err <= 0.01,
+            "second stereo left vs delayed sine {left_err}"
+        );
+        assert!(right_peak <= 0.01, "second stereo right peak {right_peak}");
     }
 
     #[test]

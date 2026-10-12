@@ -149,6 +149,25 @@ Same profile, 200 calls. Not a throughput number for a song.
 | --- | --- | --- | --- |
 | encode | 5.690 ms (5690457 ns) | 7.035 ms (7035148 ns) | 517 |
 
+## Second stereo frame, release
+
+The second frame continues that pair. Left is the next 1024 samples of the
+same half-scale 440 Hz sine. Right stays silence. Same long sine window.
+Mid-side stereo stays off. Not SBR or parametric stereo, and not a song
+encoder.
+
+Overlap-add against the first stereo frame emits that frame's left sine, one
+frame late. Max abs error versus that delayed sine is 0.0018240213. Right
+peak is 0. Host FFmpeg 6.1.1 decodes the two-frame ADTS file as AAC-LC,
+44100 Hz, stereo, 2048 samples per channel. The second hop matches this
+error and a right peak of 0.
+
+Same profile, 200 calls of this frame only. Not a throughput number for a song.
+
+| | p50 | p99 | output bytes |
+| --- | --- | --- | --- |
+| encode | 5.598 ms (5597749 ns) | 5.911 ms (5910809 ns) | 71 |
+
 ## Build
 
 ```
