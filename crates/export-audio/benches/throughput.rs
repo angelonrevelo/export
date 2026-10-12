@@ -98,6 +98,26 @@ fn fixture() -> Pcm {
     }
 }
 
+fn stereo_block() -> Pcm {
+    let n = 4096usize;
+    let mut samples = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let ramp = ((i % 256) as i32) - 128;
+        let slow = ((i / 64) % 512) as i32 - 256;
+        let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+        let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+        let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767);
+        samples.push(left);
+        samples.push(right);
+    }
+    Pcm {
+        sample_rate: 44_100,
+        channels: 2,
+        bits: 16,
+        samples,
+    }
+}
+
 fn main() {
     if cfg!(debug_assertions) {
         eprintln!("refusing timing verdict: debug_assertions is on");
@@ -141,4 +161,16 @@ fn main() {
         std::hint::black_box(decode(&torn).err());
     });
     report("truncated", "miss", torn.len() as u64, &truncated);
+
+    let stereo = stereo_block();
+    let stereo_flac = encode(&stereo).expect("encode stereo");
+    let stereo_back = decode(&stereo_flac).expect("decode stereo");
+    assert_eq!(stereo_back.samples, stereo.samples, "stereo block is not exact");
+    assert_eq!(stereo_back.channels, 2);
+    let stereo_pcm_len = (stereo.samples.len() * 2) as u64;
+    let stereo_encode = measure(ITERS, || {
+        std::hint::black_box(encode(&stereo).expect("encode stereo"));
+    });
+    report("stereo_encode", "miss", stereo_pcm_len, &stereo_encode);
+    println!("stereo_flac_bytes {}", stereo_flac.len());
 }

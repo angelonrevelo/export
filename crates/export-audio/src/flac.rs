@@ -1643,6 +1643,51 @@ mod tests {
         round_trip(&pcm);
     }
 
+    fn stereo_block() -> Pcm {
+        let n = 4096usize;
+        let mut samples = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let ramp = ((i % 256) as i32) - 128;
+            let slow = ((i / 64) % 512) as i32 - 256;
+            let wobble = ((i.wrapping_mul(i) >> 12) & 63) as i32;
+            let left = (slow * 40 + ramp * 8 + wobble).clamp(-32_768, 32_767);
+            let right = (ramp * 40 + slow * 8 - wobble).clamp(-32_768, 32_767);
+            samples.push(left);
+            samples.push(right);
+        }
+        Pcm {
+            sample_rate: 44_100,
+            channels: 2,
+            bits: 16,
+            samples,
+        }
+    }
+
+    #[test]
+    fn stereo_block_round_trips_both_channels() {
+        let pcm = stereo_block();
+        assert_eq!(pcm.samples.len(), 8192);
+        let bytes = encode(&pcm).unwrap();
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.channels, 2);
+        assert_eq!(back.bits, 16);
+        assert_eq!(back.sample_rate, 44_100);
+        assert_eq!(back.samples.len(), pcm.samples.len());
+        let mut left = Vec::with_capacity(4096);
+        let mut right = Vec::with_capacity(4096);
+        let mut back_left = Vec::with_capacity(4096);
+        let mut back_right = Vec::with_capacity(4096);
+        for i in 0..4096 {
+            left.push(pcm.samples[i * 2]);
+            right.push(pcm.samples[i * 2 + 1]);
+            back_left.push(back.samples[i * 2]);
+            back_right.push(back.samples[i * 2 + 1]);
+        }
+        assert_eq!(back_left, left);
+        assert_eq!(back_right, right);
+        assert_ne!(left, right);
+    }
+
     #[test]
     fn stereo_eight_and_twentyfour() {
         let stereo: Vec<i32> = (0..8000)

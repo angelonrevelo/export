@@ -94,6 +94,16 @@ built per frame. That cost is inside the 37.23 MB/s figure. Encode p50 is
 79.0 ms with the single LPC candidate above. The wider search that produced
 940,154 bytes is not in this table.
 
+### Stereo block
+
+Separate from the mono row above. One block of 4,096 samples per channel,
+16-bit, 44.1 kHz, interleaved. The left channel uses the mono fixture
+formula. The right channel swaps the ramp and the slow term and flips the
+wobble, so the two channels are not copies. Both channels round-trip. The
+encoder writes the channels independently. The encoded file is 7,601 bytes.
+Encode p50 is 0.513 ms and p99 is 0.612 ms (31.92 MB/s on the 16,384 PCM
+bytes), release, 31 iterations after 3 warmup passes.
+
 ### Reader experiment
 
 Rice quotients were timed two ways, interleaved in one process, 31 rounds,
