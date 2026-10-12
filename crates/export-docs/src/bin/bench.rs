@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
-    pdf_split, pdf_text, pdf_watermark, ppt_text_document, pptx_raster_slide, pptx_raster_stored_pdf,
-    word97_document,
+    pdf_split, pdf_text, pdf_watermark, ppt_text_document, ppt_two_text_document, pptx_raster_slide,
+    pptx_raster_stored_pdf, word97_document,
 };
 
 const WARMUP: usize = 4;
@@ -1271,6 +1271,91 @@ fn report_ppt_html() {
     }
 }
 
+fn report_ppt_html_two() {
+    let one = ppt_text_document(&ppt_html_text()).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    let one_html = convert("ppt", "html", &one).unwrap_or_else(|err| {
+        eprintln!("ppt one-shape html failed: {err}");
+        std::process::exit(1);
+    });
+    if one.len() != 5632
+        || one_html.len() != 3193
+        || !String::from_utf8_lossy(&one_html).contains(&ppt_html_text())
+    {
+        eprintln!(
+            "ppt one-shape size changed: input_b={} output_b={}",
+            one.len(),
+            one_html.len()
+        );
+        std::process::exit(1);
+    }
+    let (first, second) = ppt_html_two_texts();
+    let file = ppt_two_text_document(&first, &second).unwrap_or_else(|err| {
+        eprintln!("ppt two-shape fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("ppt", "html", &file) {
+        Ok(html) => {
+            let body = String::from_utf8_lossy(&html);
+            let first_p = format!("<p>{first}</p>");
+            let second_p = format!("<p>{second}</p>");
+            let ordered = body.find(&first_p).zip(body.find(&second_p));
+            if body.contains(&first) && body.contains(&second) && ordered.is_some_and(|(a, b)| a < b)
+            {
+                let sample = measure(|| ready_bytes("ppt", "html", &file));
+                emit_ready("ppt→html two", file.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "ppt→html two p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(file.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        file.len(),
+                        sample.output_bytes,
+                    );
+                }
+            } else {
+                emit_untimed(
+                    "ppt→html two",
+                    file.len() as u64,
+                    Some(html.len() as u64),
+                    &format!(
+                        "MISS: html does not contain both text shapes (input_b={})",
+                        file.len()
+                    ),
+                );
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:")
+                || !err.message.contains(&format!("input_b={}", file.len()))
+            {
+                eprintln!("ppt two miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("ppt→html two", file.len() as u64, None, &err.message);
+        }
+    }
+}
+
+fn ppt_html_two_texts() -> (String, String) {
+    let mut first = String::new();
+    let mut second = String::new();
+    for i in 0..40 {
+        first.push_str(&format!(
+            "First shape sentence {i} of the generated PowerPoint file. "
+        ));
+        second.push_str(&format!(
+            "Second shape sentence {i} of the generated PowerPoint file. "
+        ));
+    }
+    (first, second)
+}
+
 fn ppt_html_text() -> String {
     let mut s = String::new();
     for i in 0..60 {
@@ -1686,6 +1771,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_ppt_html();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ppt-html-two") {
+        println!("export-docs ppt two-shape html byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_ppt_html_two();
         return;
     }
     if std::env::args().any(|arg| arg == "--epub") {

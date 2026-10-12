@@ -1,5 +1,5 @@
 //! Legacy PowerPoint 97 to HTML for one generated compound file.
-//! The `PowerPoint Document` stream holds one text-bytes shape.
+//! The `PowerPoint Document` stream holds one or two text-bytes shapes.
 //! Any other file stays a miss. LibreOffice and pandoc are not called.
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -41,16 +41,18 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
     if let Err(err) = src.read_to_end(&mut bytes) {
         return Err(miss(input_bytes, &err.to_string()));
     }
-    let text = parse_ppt(&bytes).map_err(|err| {
+    let texts = parse_ppt(&bytes).map_err(|err| {
         if err.message.starts_with("MISS:") {
             err
         } else {
             miss(input_bytes, &err.message)
         }
     })?;
-    let html = html_of(&text);
-    if !html.contains(&text) {
-        return Err(miss(input_bytes, "html does not contain the text"));
+    let html = html_of(&texts);
+    for text in &texts {
+        if !html.contains(text) {
+            return Err(miss(input_bytes, "html does not contain the text"));
+        }
     }
     let mut counted = CountWrite::new(out);
     counted
@@ -65,11 +67,22 @@ pub fn ppt_to_html<R: Read + Seek, W: Write>(src: &mut R, out: &mut W) -> Result
 
 /// Compound file whose `PowerPoint Document` stream is one text-bytes shape.
 pub fn ppt_text_document(text: &str) -> Result<Vec<u8>> {
-    if text.is_empty() || text.len() > MAX_TEXT || !text.bytes().all(allowed_text) {
+    if !plain_shape(text) {
         return Err(Error::new("text shape is not plain text"));
     }
-    let stream = document_stream(text.as_bytes());
-    pack_cfb(&stream)
+    pack_cfb(&document_stream(&[text.as_bytes()]))
+}
+
+/// Compound file whose `PowerPoint Document` stream is two text-bytes shapes.
+pub fn ppt_two_text_document(first: &str, second: &str) -> Result<Vec<u8>> {
+    if !plain_shape(first) || !plain_shape(second) {
+        return Err(Error::new("text shape is not plain text"));
+    }
+    pack_cfb(&document_stream(&[first.as_bytes(), second.as_bytes()]))
+}
+
+fn plain_shape(text: &str) -> bool {
+    !text.is_empty() && text.len() <= MAX_TEXT && text.bytes().all(allowed_text)
 }
 
 fn miss(input_bytes: u64, why: &str) -> Error {
@@ -81,28 +94,33 @@ fn unreadable() -> Error {
 }
 
 fn shape() -> Error {
-    Error::new("file is not one text shape")
+    Error::new("file is not one or two text shapes")
 }
 
 fn allowed_text(b: u8) -> bool {
     (0x20..=0x7E).contains(&b) && !matches!(b, b'&' | b'<' | b'>' | b'"')
 }
 
-fn html_of(text: &str) -> String {
-    let mut out = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><p>");
-    out.push_str(text);
-    out.push_str("</p></body></html>");
+fn html_of(texts: &[String]) -> String {
+    let mut out = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
+    for text in texts {
+        out.push_str("<p>");
+        out.push_str(text);
+        out.push_str("</p>");
+    }
+    out.push_str("</body></html>");
     out
 }
 
-fn document_stream(text: &[u8]) -> Vec<u8> {
+fn document_stream(texts: &[&[u8]]) -> Vec<u8> {
     let mut atom = vec![0u8; 40];
     put_u32(&mut atom, 0, 5760);
     put_u32(&mut atom, 4, 4320);
-    let header = record(0, 0, RT_TEXT_HEADER, &4u32.to_le_bytes());
-    let bytes = record(0, 0, RT_TEXT_BYTES, text);
-    let mut list_body = header;
-    list_body.extend(bytes);
+    let mut list_body = Vec::new();
+    for text in texts {
+        list_body.extend(record(0, 0, RT_TEXT_HEADER, &4u32.to_le_bytes()));
+        list_body.extend(record(0, 0, RT_TEXT_BYTES, text));
+    }
     let list = record(0xF, 0, RT_SLIDE_LIST, &list_body);
     let atom_rec = record(1, 0, RT_DOCUMENT_ATOM, &atom);
     let mut body = atom_rec;
@@ -120,20 +138,19 @@ fn record(ver: u8, instance: u16, ty: u16, data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn parse_ppt(file: &[u8]) -> Result<String> {
+fn parse_ppt(file: &[u8]) -> Result<Vec<String>> {
     let stream = read_stream(file)?;
-    let text = text_shape(&stream)?;
-    Ok(text)
+    text_shape(&stream)
 }
 
-fn text_shape(stream: &[u8]) -> Result<String> {
+fn text_shape(stream: &[u8]) -> Result<Vec<String>> {
     let (doc, used) = next_record(stream)?;
     if used != stream.len() || doc.ty != RT_DOCUMENT || doc.ver != 0xF || doc.instance != 0 {
         return Err(shape());
     }
     let mut at = 0usize;
     let mut saw_atom = false;
-    let mut text = None;
+    let mut texts = None;
     while at < doc.data.len() {
         let (rec, n) = next_record(&doc.data[at..])?;
         at += n;
@@ -145,10 +162,10 @@ fn text_shape(stream: &[u8]) -> Result<String> {
                 saw_atom = true;
             }
             RT_SLIDE_LIST => {
-                if text.is_some() || rec.ver != 0xF {
+                if texts.is_some() || rec.ver != 0xF {
                     return Err(shape());
                 }
-                text = Some(list_text(rec.data)?);
+                texts = Some(list_text(rec.data)?);
             }
             _ => return Err(shape()),
         }
@@ -156,25 +173,25 @@ fn text_shape(stream: &[u8]) -> Result<String> {
     if at != doc.data.len() || !saw_atom {
         return Err(shape());
     }
-    text.ok_or_else(shape)
+    texts.ok_or_else(shape)
 }
 
-fn list_text(body: &[u8]) -> Result<String> {
+fn list_text(body: &[u8]) -> Result<Vec<String>> {
     let mut at = 0usize;
-    let mut saw_header = false;
-    let mut text = None;
+    let mut pending_header = false;
+    let mut texts = Vec::new();
     while at < body.len() {
         let (rec, n) = next_record(&body[at..])?;
         at += n;
         match rec.ty {
             RT_TEXT_HEADER => {
-                if saw_header || rec.ver != 0 || rec.data.len() != 4 {
+                if pending_header || texts.len() >= 2 || rec.ver != 0 || rec.data.len() != 4 {
                     return Err(shape());
                 }
-                saw_header = true;
+                pending_header = true;
             }
             RT_TEXT_BYTES => {
-                if text.is_some() || rec.ver != 0 || !saw_header {
+                if !pending_header || rec.ver != 0 {
                     return Err(shape());
                 }
                 if rec.data.is_empty() || !rec.data.iter().copied().all(allowed_text) {
@@ -184,15 +201,16 @@ fn list_text(body: &[u8]) -> Result<String> {
                 for &b in rec.data {
                     owned.push(char::from(b));
                 }
-                text = Some(owned);
+                texts.push(owned);
+                pending_header = false;
             }
             _ => return Err(shape()),
         }
     }
-    if at != body.len() || !saw_header {
+    if at != body.len() || pending_header || texts.is_empty() {
         return Err(shape());
     }
-    text.ok_or_else(shape)
+    Ok(texts)
 }
 
 struct Rec<'a> {
@@ -596,6 +614,45 @@ mod tests {
         let got = html(&file).unwrap();
         assert!(got.contains(text), "{got}");
         assert!(got.contains("<p>Generated legacy PowerPoint text shape.</p>"), "{got}");
+    }
+
+    #[test]
+    fn one_shape_stays_the_published_size() {
+        let mut text = String::new();
+        for i in 0..60 {
+            text.push_str(&format!(
+                "Sentence {i} of the generated PowerPoint text shape. "
+            ));
+        }
+        let file = ppt_text_document(&text).unwrap();
+        assert_eq!(file.len(), 5632);
+        let got = html(&file).unwrap();
+        assert_eq!(got.len(), 3193);
+        assert!(got.contains(&text), "{got}");
+    }
+
+    #[test]
+    fn two_text_shapes_become_html() {
+        let first = "First generated legacy PowerPoint text shape.";
+        let second = "Second generated legacy PowerPoint text shape.";
+        let file = ppt_two_text_document(first, second).unwrap();
+        let got = html(&file).unwrap();
+        let marked = format!("<p>{first}</p><p>{second}</p>");
+        assert!(got.contains(&marked), "{got}");
+        assert!(got.find(first).unwrap() < got.find(second).unwrap());
+    }
+
+    #[test]
+    fn three_text_shapes_stay_a_miss() {
+        let stream = document_stream(&[b"One shape.", b"Two shape.", b"Three shape."]);
+        let file = pack_cfb(&stream).unwrap();
+        let err = html(&file).unwrap_err();
+        assert!(err.message.starts_with("MISS:"), "{err}");
+        assert!(err.message.contains("not one or two text shapes"), "{err}");
+        assert!(
+            err.message.contains(&format!("input_b={}", file.len())),
+            "{err}"
+        );
     }
 
     #[test]
