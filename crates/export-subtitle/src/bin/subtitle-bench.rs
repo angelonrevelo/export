@@ -23,6 +23,7 @@ fn main() {
     }
     measure_one_bold();
     measure_one_italic();
+    measure_one_underline();
 }
 
 /// Release latency for one bold dialogue line and one plain cue.
@@ -112,6 +113,53 @@ Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Plain cue\n\
     let p99 = percentile(&mut samples, 99.0);
     println!(
         "ass italic bytes in {} bytes out {} p50 {:.0} ns p99 {:.0} ns",
+        input.len(),
+        written.len(),
+        p50,
+        p99
+    );
+}
+
+/// Release latency for one underline dialogue line and one plain cue.
+fn measure_one_underline() {
+    let input = "\
+[Script Info]\n\
+ScriptType: v4.00+\n\
+\n\
+[Events]\n\
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,Hello {\\u1}there{\\u0} {\\s1}pal{\\s0}\n\
+Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Plain cue\n\
+";
+    let cues = parse_ass(input).expect("ass");
+    assert_eq!(cues[0].text, "Hello {\\u1}there{\\u0} pal");
+    assert_eq!(cues[1].text, "Plain cue");
+    let written = cues_to_ass(&cues);
+    assert!(written.contains("{\\u1}there{\\u0}"));
+    let again = parse_ass(&written).expect("round trip");
+    assert_eq!(again[0].text, cues[0].text);
+    assert_eq!(again[1].text, "Plain cue");
+    if cfg!(debug_assertions) {
+        println!("ass underline: NOT JUDGED (debug build)");
+        return;
+    }
+    const WARMUP: usize = 50;
+    const SAMPLES: usize = 500;
+    let mut sink = 0usize;
+    for _ in 0..WARMUP {
+        sink = sink.wrapping_add(pass(input));
+    }
+    let mut samples = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let start = Instant::now();
+        sink = sink.wrapping_add(pass(input));
+        samples.push(start.elapsed().as_nanos() as f64);
+    }
+    std::hint::black_box(sink);
+    let p50 = percentile(&mut samples, 50.0);
+    let p99 = percentile(&mut samples, 99.0);
+    println!(
+        "ass underline bytes in {} bytes out {} p50 {:.0} ns p99 {:.0} ns",
         input.len(),
         written.len(),
         p50,
