@@ -3,8 +3,9 @@
 //! A still is `VP8L` or `VP8 `. `decode_webp` rejects `VP8X`, `ALPH`, `ANIM`,
 //! and `ANMF`. A two-frame or four-frame animation is a `VP8X`/`ANIM`/`ANMF`
 //! wrapper around `VP8 ` keyframes from the existing encoder. That wrapper is not an
-//! entropy coder. Alpha, ICC, EXIF, XMP, and a frame that does not cover the
-//! canvas stay errors.
+//! entropy coder. The first frame is the canvas. A later frame may be a smaller
+//! rectangle at the origin and comes back at that size. A non-zero origin, alpha,
+//! ICC, EXIF, and XMP stay errors. There is no compositor.
 
 use crate::error::{Error, INVALID, TRUNCATED, UNSUPPORTED};
 use crate::raster::Raster;
@@ -62,32 +63,32 @@ const ANIMATION: u8 = 0x02;
 const NO_BLEND: u8 = 0x02;
 const FRAME_MS: u32 = 100;
 
-/// Two-frame or four-frame lossy animation. Every frame must be the same
-/// size, and each one must be a frame the lossy encoder already accepts: RGB,
-/// sides a multiple of 16. Each `ANMF` payload is that keyframe. There is no
-/// second entropy coder.
+/// Two-frame or four-frame lossy animation. The first frame is the canvas.
+/// A later frame may be smaller and is stored at the origin. Each frame must
+/// be one the lossy encoder already accepts: RGB, sides a multiple of 16.
+/// Each `ANMF` payload is that keyframe. There is no second entropy coder.
 pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     if frames.len() != 2 && frames.len() != 4 {
         return Err(UNSUPPORTED);
     }
-    let width = frames[0].width;
-    let height = frames[0].height;
-    if frames.iter().any(|frame| frame.width != width || frame.height != height) {
-        return Err(UNSUPPORTED);
-    }
+    let canvas_w = frames[0].width;
+    let canvas_h = frames[0].height;
     let mut bitstreams = Vec::with_capacity(frames.len());
     for frame in frames {
-        bitstreams.push(encode_vp8(frame)?);
+        if frame.width > canvas_w || frame.height > canvas_h {
+            return Err(UNSUPPORTED);
+        }
+        bitstreams.push((frame.width, frame.height, encode_vp8(frame)?));
     }
     let mut vp8x = [0u8; 10];
     vp8x[0] = ANIMATION;
-    write_u24(&mut vp8x[4..7], width - 1);
-    write_u24(&mut vp8x[7..10], height - 1);
+    write_u24(&mut vp8x[4..7], canvas_w - 1);
+    write_u24(&mut vp8x[7..10], canvas_h - 1);
     let mut body = Vec::new();
     push_chunk(&mut body, b"VP8X", &vp8x);
     push_chunk(&mut body, b"ANIM", &[0; 6]);
-    for bitstream in &bitstreams {
-        push_chunk(&mut body, b"ANMF", &anmf(width, height, bitstream));
+    for (width, height, bitstream) in &bitstreams {
+        push_chunk(&mut body, b"ANMF", &anmf(*width, *height, bitstream));
     }
     let mut out = Vec::with_capacity(12 + body.len());
     out.extend_from_slice(b"RIFF");
@@ -97,9 +98,10 @@ pub fn encode_webp_animation(frames: &[Raster]) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Frames of an animation this crate wrote: full-canvas `VP8 ` or `VP8L`
-/// bitstreams, in order. [`decode_webp`] still returns [`UNSUPPORTED`] for the
-/// same bytes, because that function returns one raster.
+/// Frames of an animation this crate wrote, in order. A frame smaller than
+/// the canvas is the rectangle at the origin, not a composited canvas.
+/// [`decode_webp`] still returns [`UNSUPPORTED`] for the same bytes, because
+/// that function returns one raster.
 pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
     let end = riff_end(bytes)?;
     let vp8x = read_chunk(bytes, 12, end)?;
@@ -135,7 +137,13 @@ pub fn decode_webp_animation(bytes: &[u8]) -> Result<Vec<Raster>, Error> {
         let origin_y = read_u24(&anmf.payload[3..6]).saturating_mul(2);
         let frame_w = read_u24(&anmf.payload[6..9]).wrapping_add(1);
         let frame_h = read_u24(&anmf.payload[9..12]).wrapping_add(1);
-        if origin_x != 0 || origin_y != 0 || frame_w != canvas_w || frame_h != canvas_h {
+        if origin_x != 0
+            || origin_y != 0
+            || frame_w == 0
+            || frame_h == 0
+            || frame_w > canvas_w
+            || frame_h > canvas_h
+        {
             return Err(UNSUPPORTED);
         }
         let raster = decode_frame(&anmf.payload[16..])?;
@@ -535,5 +543,53 @@ mod tests {
             assert_eq!(got.height, 720);
             assert_eq!(got.pixels, still.pixels);
         }
+    }
+
+    #[test]
+    fn partial_16_on_64_returns_both_frames() {
+        let mut canvas = vec![0u8; 64 * 64 * 3];
+        for px in canvas.chunks_exact_mut(3) {
+            px.copy_from_slice(&[40, 90, 160]);
+        }
+        let mut patch = vec![0u8; 16 * 16 * 3];
+        for px in patch.chunks_exact_mut(3) {
+            px.copy_from_slice(&[210, 50, 30]);
+        }
+        let full = Raster::new(64, 64, 3, canvas).unwrap();
+        let tile = Raster::new(16, 16, 3, patch).unwrap();
+        let bigger = Raster::new(64, 64, 3, vec![0; 64 * 64 * 3]).unwrap();
+        assert_eq!(
+            encode_webp_animation(&[tile.clone(), bigger]).unwrap_err(),
+            UNSUPPORTED
+        );
+        let file = encode_webp_animation(&[full.clone(), tile.clone()]).unwrap();
+        assert_eq!(decode_webp(&file).unwrap_err(), UNSUPPORTED);
+        let back = decode_webp_animation(&file).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].width, 64);
+        assert_eq!(back[0].height, 64);
+        assert_eq!(back[1].width, 16);
+        assert_eq!(back[1].height, 16);
+        let still_full = decode_webp(&encode_webp_lossy(&full).unwrap()).unwrap();
+        let still_tile = decode_webp(&encode_webp_lossy(&tile).unwrap()).unwrap();
+        assert_eq!(back[0].pixels, still_full.pixels);
+        assert_eq!(back[1].pixels, still_tile.pixels);
+        let mut shifted = file.clone();
+        let mut at = 12usize;
+        let end = 8 + u32::from_le_bytes(shifted[4..8].try_into().unwrap()) as usize;
+        let mut seen = 0;
+        while at + 8 <= end {
+            let size = u32::from_le_bytes(shifted[at + 4..at + 8].try_into().unwrap()) as usize;
+            if &shifted[at..at + 4] == b"ANMF" {
+                seen += 1;
+                if seen == 2 {
+                    shifted[at + 8] = 1;
+                    break;
+                }
+            }
+            at += 8 + size + (size & 1);
+        }
+        assert_eq!(seen, 2);
+        assert_eq!(decode_webp_animation(&shifted).unwrap_err(), UNSUPPORTED);
     }
 }

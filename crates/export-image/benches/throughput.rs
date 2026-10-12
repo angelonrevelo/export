@@ -684,4 +684,54 @@ fn main() {
         decoded4_720.len(),
         decode_webp(&anim4_720).is_err(),
     );
+
+    // Appended 64×64 canvas with a 16×16 partial frame at the origin.
+    // The full-frame 64×64 row above is unchanged.
+    let mut canvas64 = vec![0u8; 64 * 64 * 3];
+    for px in canvas64.chunks_exact_mut(3) {
+        px.copy_from_slice(&[220, 40, 60]);
+    }
+    let mut tile16 = vec![0u8; 16 * 16 * 3];
+    for px in tile16.chunks_exact_mut(3) {
+        px.copy_from_slice(&[20, 180, 90]);
+    }
+    let partial = [
+        Raster::new(64, 64, 3, canvas64).unwrap(),
+        Raster::new(16, 16, 3, tile16).unwrap(),
+    ];
+    for _ in 0..2 {
+        let _ = encode_webp_animation(&partial).unwrap();
+    }
+    let (p50, p99) = time_n(40, || {
+        black_box(encode_webp_animation(black_box(&partial)).unwrap());
+    });
+    ALLOCS.store(0, Ordering::Relaxed);
+    let anim_part = encode_webp_animation(&partial).unwrap();
+    let allocs = ALLOCS.load(Ordering::Relaxed);
+    let anim_part_pixels = 64.0 * 64.0 + 16.0 * 16.0;
+    println!(
+        "webp_anim64_partial_encode canvas=64x64 frames=2 partial=16x16 out_bytes={} samples=40 p50_us={:.1} p99_us={:.1} pixel_mb_s_p50={:.2} pixel_mb_s_p99={:.2} file_mb_s_p50={:.2} allocs={allocs} allocs_per_mp={:.2}",
+        anim_part.len(),
+        p50 as f64 / 1_000.0,
+        p99 as f64 / 1_000.0,
+        mb_s(anim_part_pixels * 3.0, p50),
+        mb_s(anim_part_pixels * 3.0, p99),
+        mb_s(anim_part.len() as f64, p50),
+        allocs as f64 / (anim_part_pixels / 1_000_000.0),
+    );
+    let decoded_part = decode_webp_animation(&anim_part).unwrap();
+    let still_canvas = decode_webp(&encode_webp_lossy(&partial[0]).unwrap()).unwrap();
+    let still_tile = decode_webp(&encode_webp_lossy(&partial[1]).unwrap()).unwrap();
+    let both_part = decoded_part.len() == 2
+        && decoded_part[0].width == 64
+        && decoded_part[0].height == 64
+        && decoded_part[0].pixels == still_canvas.pixels
+        && decoded_part[1].width == 16
+        && decoded_part[1].height == 16
+        && decoded_part[1].pixels == still_tile.pixels;
+    println!(
+        "webp_anim64_partial_decode frames={} both_frames={both_part} still_match={both_part} single_raster_errors={}",
+        decoded_part.len(),
+        decode_webp(&anim_part).is_err(),
+    );
 }
