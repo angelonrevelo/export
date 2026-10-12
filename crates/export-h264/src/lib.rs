@@ -566,7 +566,15 @@ pub fn fixture_640x480_split() -> Yuv420 {
 /// the same left/right shift again, so [`SHIFTED_MV`] and [`SPLIT_RIGHT_MV`] predict it
 /// from the previous picture.
 pub fn fixture_320x240_split_four() -> (Yuv420, Vec<Yuv420>) {
-    let intra = fixture_320x240();
+    split_four(fixture_320x240())
+}
+
+/// Four 640×480 pictures. Same left/right shift chain as [`fixture_320x240_split_four`].
+pub fn fixture_640x480_split_four() -> (Yuv420, Vec<Yuv420>) {
+    split_four(fixture_640x480())
+}
+
+fn split_four(intra: Yuv420) -> (Yuv420, Vec<Yuv420>) {
     let mut picture = intra.clone();
     let mut predicted = Vec::with_capacity(3);
     for _ in 0..3 {
