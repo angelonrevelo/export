@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use export_docs::{
     convert, pack_deflated, pack_stored, pairs, pdf_flate_fixture, pdf_merge, pdf_rotate, pdf_shrink,
-    pdf_split, pdf_watermark, word97_document,
+    pdf_split, pdf_text, pdf_watermark, word97_document,
 };
 
 const WARMUP: usize = 4;
@@ -581,6 +581,68 @@ fn doc_two_paragraphs() -> Vec<u8> {
     })
 }
 
+fn report_doc_pdf() {
+    let text = doc_paragraph();
+    let doc = word97_document(&[&text]).unwrap_or_else(|err| {
+        eprintln!("word97 fixture failed: {err}");
+        std::process::exit(1);
+    });
+    match convert("doc", "pdf", &doc) {
+        Ok(pdf) => {
+            let extracted = pdf_text(&pdf).unwrap_or_else(|err| {
+                eprintln!("doc→pdf text unreadable: {err}");
+                std::process::exit(1);
+            });
+            if !extracted.contains(&text) {
+                emit_untimed(
+                    "doc→pdf para",
+                    doc.len() as u64,
+                    Some(pdf.len() as u64),
+                    "MISS: pdf text does not match",
+                );
+            } else {
+                let sample = measure(|| ready_bytes("doc", "pdf", &doc));
+                emit_ready("doc→pdf para", doc.len() as u64, &sample);
+                if !cfg!(debug_assertions) {
+                    println!(
+                        "doc→pdf para p50_us={} p99_us={} MB/s={:.2} allocs_p50={} alloc_b_p50={} input_b={} output_b={}",
+                        sample.p50_ns / 1_000,
+                        sample.p99_ns / 1_000,
+                        mb_per_s(doc.len() as u64, sample.p50_ns),
+                        sample.allocs_p50,
+                        sample.alloc_bytes_p50,
+                        doc.len(),
+                        sample.output_bytes,
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", doc.len()))
+            {
+                eprintln!("doc→pdf hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("doc→pdf para", doc.len() as u64, None, &err.message);
+        }
+    }
+    let two = doc_two_paragraphs();
+    match convert("doc", "pdf", &two) {
+        Ok(_) => {
+            eprintln!("two-paragraph doc produced pdf");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            if !err.message.starts_with("MISS:") || !err.message.contains(&format!("input_b={}", two.len()))
+            {
+                eprintln!("doc pdf miss hid the input size: {err}");
+                std::process::exit(1);
+            }
+            emit_untimed("doc→pdf two", two.len() as u64, None, &err.message);
+        }
+    }
+}
+
 fn doc_encrypted() -> Vec<u8> {
     let mut doc = word97_document(&["Hi"]).unwrap_or_else(|err| {
         eprintln!("word97 encrypted fixture failed: {err}");
@@ -694,6 +756,15 @@ fn main() {
             "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
         );
         report_doc_two();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--doc-pdf") {
+        println!("export-docs doc one-paragraph pdf byte counts");
+        println!(
+            "{:<32} {:>10} {:>10} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} status",
+            "pair", "input_b", "output_b", "p50_us", "p99_us", "MB/s", "allocs_p50", "alloc_b_p50", "cold_us",
+        );
+        report_doc_pdf();
         return;
     }
     let xml = docx_xml(2500);
