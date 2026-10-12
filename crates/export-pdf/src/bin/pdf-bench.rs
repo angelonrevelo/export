@@ -1,4 +1,4 @@
-//! Release latency for a split of one 16×16 CMYK page.
+//! Release latency for a split of one 32×32 CMYK page.
 //!
 //! ```text
 //! cargo run --release -p export-pdf --bin pdf-bench

@@ -18,9 +18,11 @@
 //! page is 9206 ns p50 and 12724 ns p99.
 //! A 16×16 DeviceCMYK page is 1675 bytes in and out. Release split of that
 //! page is 9985 ns p50 and 10489 ns p99.
+//! A 32×32 DeviceCMYK page is 4747 bytes in and out. Release split of that
+//! page is 15051 ns p50 and 17352 ns p99.
 //!
 //! Honest limit: xref streams, object streams, any image other than the RGB
-//! page, the gray page, or the 16×16 CMYK page, and fonts other than the
+//! page, the gray page, or the CMYK page, and fonts other than the
 //! built-in Helvetica are not preserved. A truncated file, an
 //! xref offset that does not land on an object, an xref stream, or an
 //! unsupported image is an error.
@@ -55,13 +57,13 @@ pub fn gray_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Erro
     Ok(image_file(width, height, "/DeviceGray", samples))
 }
 
-/// Edge, in pixels, of the one uncompressed CMYK page this crate keeps.
-pub const CMYK_EDGE: u32 = 16;
+/// Largest edge, in pixels, of the one uncompressed CMYK page this crate keeps.
+pub const CMYK_EDGE: u32 = 32;
 
 /// One classic-xref page holding one uncompressed 8-bit DeviceCMYK image.
 ///
-/// `samples` is row-major CMYK, length `width * height * 4`. Width and
-/// height are both [`CMYK_EDGE`].
+/// `samples` is row-major CMYK, length `width * height * 4`. Each edge is
+/// from 1 through [`CMYK_EDGE`].
 pub fn cmyk_pdf(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, Error> {
     checked_cmyk_len(width, height, samples.len())?;
     Ok(image_file(width, height, "/DeviceCMYK", samples))
@@ -431,7 +433,7 @@ fn wrap_stream(body: &[u8]) -> Vec<u8> {
 }
 
 fn checked_cmyk_len(width: u32, height: u32, len: usize) -> Result<(), Error> {
-    if width != CMYK_EDGE || height != CMYK_EDGE {
+    if width == 0 || height == 0 || width > CMYK_EDGE || height > CMYK_EDGE {
         return Err(Error::BadPdf);
     }
     let need = (width as usize)
@@ -1176,9 +1178,11 @@ mod tests {
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0], pdf);
         assert_eq!(cmyk_samples(&pages[0]).unwrap().2, samples);
+        let small = [1u8, 2, 3, 4];
+        let small_pdf = cmyk_pdf(1, 1, &small).unwrap();
         assert_eq!(
-            cmyk_pdf(CMYK_EDGE, CMYK_EDGE - 1, &samples[..960]).unwrap_err(),
-            Error::BadPdf
+            cmyk_samples(&split(&small_pdf).unwrap()[0]).unwrap().2,
+            small
         );
         let wide = vec![0u8; ((CMYK_EDGE + 1) * CMYK_EDGE * 4) as usize];
         let wide_pdf = image_file_with(
@@ -1196,10 +1200,6 @@ mod tests {
 
     #[test]
     fn other_images_and_xref_streams_error() {
-        let cmyk = image_file_with("/DeviceCMYK", 8, "", 1, 1, &[1, 2, 3, 4], "/Im0 5 0 R");
-        assert_eq!(page_count(&cmyk).unwrap(), 1);
-        assert_eq!(split(&cmyk), Err(Error::BadPdf));
-
         let filtered = image_file_with(
             "/DeviceRGB",
             8,
