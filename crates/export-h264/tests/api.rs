@@ -1,10 +1,10 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence, fixture_160x160,
-    fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
+    encode, encode_ip, encode_ip_motion, encode_ip_split, encode_sequence, encode_sequence_split,
+    fixture_160x160, fixture_160x160_eight, fixture_160x160_predicted, fixture_160x160_shifted,
     fixture_160x160_sixteen, fixture_320x240, fixture_320x240_predicted, fixture_320x240_shifted,
-    fixture_320x240_split, fixture_32x32, fixture_32x32_eight, fixture_32x32_predicted,
-    fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error, Motion, Pass, Picture,
-    PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
+    fixture_320x240_split, fixture_320x240_split_four, fixture_32x32, fixture_32x32_eight,
+    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
+    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV, SPLIT_RIGHT_MV,
 };
 
 #[test]
@@ -518,6 +518,84 @@ fn qvga_split_keeps_the_shifted_pair() {
         encode_ip_split(
             &frame,
             &picture,
+            &EncodeOptions {
+                pass: Pass::Second,
+                ..opts
+            },
+            SHIFTED_MV,
+            SPLIT_RIGHT_MV,
+        )
+        .unwrap_err(),
+        Error::SecondPass
+    );
+}
+
+#[test]
+fn qvga_split_sequence_keeps_the_pair() {
+    let opts = EncodeOptions::default();
+    let frame = fixture_320x240();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.annex_b.len(), 19337);
+    let shifted = encode_ip_motion(&frame, &fixture_320x240_shifted(), &opts, SHIFTED_MV).unwrap();
+    assert_eq!(shifted.annex_b.len(), 20024);
+    let picture = fixture_320x240_split();
+    let pair = encode_ip_split(&frame, &picture, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(pair.annex_b.len(), 19954);
+    let one = encode_sequence_split(
+        &frame,
+        &[picture.clone()],
+        &opts,
+        SHIFTED_MV,
+        SPLIT_RIGHT_MV,
+    )
+    .unwrap();
+    assert_eq!(one.annex_b, pair.annex_b);
+    let (intra, predicted) = fixture_320x240_split_four();
+    assert_eq!(intra, frame);
+    assert_eq!(predicted.len(), 3);
+    assert_eq!(predicted[0], picture);
+    let sequence =
+        encode_sequence_split(&intra, &predicted, &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap();
+    assert_eq!(sequence.annex_b.len(), 20414);
+    assert_eq!(sequence.reconstructed.len(), 4);
+    assert_eq!(&sequence.annex_b[..19337], &encoded.annex_b[..]);
+    assert_ne!(&sequence.annex_b[..19954], &pair.annex_b[..]);
+    let (sixteen_intra, sixteen) = fixture_160x160_sixteen();
+    assert_eq!(
+        encode_sequence(&sixteen_intra, &sixteen, &opts)
+            .unwrap()
+            .annex_b
+            .len(),
+        7814
+    );
+    let mut sum = 0.0;
+    for (src, rec) in predicted.iter().zip(sequence.reconstructed.iter().skip(1)) {
+        sum += mean_absolute_error(src, rec);
+    }
+    let mae = sum / 3.0;
+    assert!(mae < 8.0, "split sequence mae {mae}");
+    assert_eq!(
+        encode_sequence_split(&frame, &[], &opts, SHIFTED_MV, SPLIT_RIGHT_MV).unwrap_err(),
+        Error::Count
+    );
+    assert_eq!(
+        encode_sequence_split(
+            &frame,
+            &predicted,
+            &EncodeOptions {
+                picture: Picture::Bipredicted,
+                ..opts
+            },
+            SHIFTED_MV,
+            SPLIT_RIGHT_MV,
+        )
+        .unwrap_err(),
+        Error::BipredictedFrame
+    );
+    assert_eq!(
+        encode_sequence_split(
+            &frame,
+            &predicted,
             &EncodeOptions {
                 pass: Pass::Second,
                 ..opts

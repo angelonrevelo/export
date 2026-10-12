@@ -62,6 +62,10 @@ name = "splitframe320"
 path = "src/bin/splitframe320.rs"
 
 [[bin]]
+name = "seqsplit320"
+path = "src/bin/seqsplit320.rs"
+
+[[bin]]
 name = "seqframe"
 path = "src/bin/seqframe.rs"
 

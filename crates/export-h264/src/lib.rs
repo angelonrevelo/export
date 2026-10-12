@@ -8,7 +8,8 @@
 //! [`encode_sequence`] writes that I-frame plus up to fifteen P-frames. Each
 //! P-frame references the previous reconstruction and uses either zero motion
 //! or one shared vector. [`encode_ip_split`] is one P-frame whose left and
-//! right macroblocks use two different vectors.
+//! right macroblocks use two different vectors. [`encode_sequence_split`]
+//! writes up to fifteen of those P-frames.
 //! Luma residual is a 4x4 transform. Chroma residual is the DC coefficient only.
 //!
 //! A lone P-frame, a B-frame, a second pass, and any thread count other than 1
@@ -283,13 +284,7 @@ pub fn encode_ip_split(
     }
     let mb_w = (intra.width / 16) as usize;
     let mb_h = (intra.height / 16) as usize;
-    let mut mvs = Vec::with_capacity(mb_w * mb_h);
-    for _row in 0..mb_h {
-        for mx in 0..mb_w {
-            let motion = if mx < mb_w / 2 { left } else { right };
-            mvs.push((motion.mvx, motion.mvy));
-        }
-    }
+    let mvs = half_mvs(mb_w, mb_h, left, right);
     let (i_bytes, i_rec) = encode::encode_iframe(intra, opts.qp)?;
     let (p_bytes, p_rec) = encode::encode_pframe_mvs(predicted, &i_rec, opts.qp, &mvs, 1, false)?;
     let mut annex_b = i_bytes;
@@ -365,6 +360,66 @@ pub fn encode_sequence(
         reconstructed,
         qp: opts.qp,
     })
+}
+
+/// I-frame, then one to fifteen P-frames, each with two motion vectors.
+///
+/// Every P-frame uses `left` on the left half of the macroblocks and `right`
+/// on the right half, predicted from the previous reconstruction. The last
+/// P-frame is not a reference. One P-frame matches [`encode_ip_split`]. A
+/// B-frame and a second pass are refused.
+pub fn encode_sequence_split(
+    intra: &Yuv420,
+    predicted: &[Yuv420],
+    opts: &EncodeOptions,
+    left: Motion,
+    right: Motion,
+) -> Result<EncodedSequence, Error> {
+    intra.check()?;
+    check_common(opts)?;
+    if matches!(opts.picture, Picture::Bipredicted) {
+        return Err(Error::BipredictedFrame);
+    }
+    if predicted.is_empty() || predicted.len() > 15 {
+        return Err(Error::Count);
+    }
+    for frame in predicted {
+        frame.check()?;
+        if frame.width != intra.width || frame.height != intra.height {
+            return Err(Error::Shape);
+        }
+    }
+    let mb_w = (intra.width / 16) as usize;
+    let mb_h = (intra.height / 16) as usize;
+    let mvs = half_mvs(mb_w, mb_h, left, right);
+    let (mut annex_b, mut reference) = encode::encode_iframe(intra, opts.qp)?;
+    let mut reconstructed = Vec::with_capacity(predicted.len() + 1);
+    reconstructed.push(reference.clone());
+    for (i, frame) in predicted.iter().enumerate() {
+        let frame_num = (i + 1) as u32;
+        let is_reference = i + 1 < predicted.len();
+        let (bytes, rec) =
+            encode::encode_pframe_mvs(frame, &reference, opts.qp, &mvs, frame_num, is_reference)?;
+        annex_b.extend(bytes);
+        reference = rec.clone();
+        reconstructed.push(rec);
+    }
+    Ok(EncodedSequence {
+        annex_b,
+        reconstructed,
+        qp: opts.qp,
+    })
+}
+
+fn half_mvs(mb_w: usize, mb_h: usize, left: Motion, right: Motion) -> Vec<(i32, i32)> {
+    let mut mvs = Vec::with_capacity(mb_w * mb_h);
+    for _row in 0..mb_h {
+        for mx in 0..mb_w {
+            let motion = if mx < mb_w / 2 { left } else { right };
+            mvs.push((motion.mvx, motion.mvy));
+        }
+    }
+    mvs
 }
 
 /// Deterministic 32×32 4:2:0 pattern used for the published measurement.
@@ -494,17 +549,32 @@ pub fn fixture_320x240_shifted() -> Yuv420 {
 /// The left half is moved four luma samples left, so [`SHIFTED_MV`] predicts it.
 /// The right half is moved four luma samples right, so [`SPLIT_RIGHT_MV`] predicts it.
 pub fn fixture_320x240_split() -> Yuv420 {
-    let src = fixture_320x240();
+    shift_halves(&fixture_320x240())
+}
+
+/// Four 320×240 pictures. The I-frame is the plain fixture. Each P-frame applies
+/// the same left/right shift again, so [`SHIFTED_MV`] and [`SPLIT_RIGHT_MV`] predict it
+/// from the previous picture.
+pub fn fixture_320x240_split_four() -> (Yuv420, Vec<Yuv420>) {
+    let intra = fixture_320x240();
+    let mut picture = intra.clone();
+    let mut predicted = Vec::with_capacity(3);
+    for _ in 0..3 {
+        picture = shift_halves(&picture);
+        predicted.push(picture.clone());
+    }
+    (intra, predicted)
+}
+
+fn shift_halves(src: &Yuv420) -> Yuv420 {
     let w = src.width as usize;
     let h = src.height as usize;
-    let cw = w / 2;
-    let ch = h / 2;
     Yuv420 {
         width: src.width,
         height: src.height,
         y: shift_plane_halves(&src.y, w, h, 4, -4),
-        u: shift_plane_halves(&src.u, cw, ch, 2, -2),
-        v: shift_plane_halves(&src.v, cw, ch, 2, -2),
+        u: shift_plane_halves(&src.u, w / 2, h / 2, 2, -2),
+        v: shift_plane_halves(&src.v, w / 2, h / 2, 2, -2),
     }
 }
 
