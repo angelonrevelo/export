@@ -208,6 +208,12 @@ Decode of that same 190-byte file, a later release run. The decoder paints the 1
 | --- | --- | --- | --- | --- | --- |
 | SVG rect encode, 32×32 black square on white (output 126 bytes) | 40 | 0.162 µs | 1.317 µs | 18,962.96 (p99 2,332.57) | pixels match; 1 alloc |
 
+`thumbnail_jpeg` of the existing two-frame 640×480 WebP, 34,434 bytes, a later release run. The output is a JPEG of that file's first frame, 3,024 bytes, 220×165. The long side is 220. p50 is 9,243.2 µs, under the 22.4 ms cap, so this path stays. A still WebP, the four-frame 640×480 file, and a smaller animation stay `Unsupported`. The PNG thumbnail row stays 3,703 bytes, p50 20,402.9 µs, p99 21,764.4 µs. The two-frame 640×480 first-frame row stays 34,434 bytes, p50 4,010.8 µs, p99 4,355.7 µs. The four-frame 1280×720 first-frame row stays 192,554 bytes, p50 12,321.1 µs. The 32×32 SVG row stays 126 bytes at 0.162 µs, and the 16×16 SVG row stays 124 bytes at 0.211 µs.
+
+| path | samples | p50 | p99 | pixel MB/s p50 | other |
+| --- | --- | --- | --- | --- | --- |
+| thumbnail q=72, two-frame 640×480 WebP first frame → 220×165 (output 3,024 bytes) | 20 | 9,243.2 µs | 9,431.0 µs | 99.71 (p99 97.72) | JPEG; long side 220; 19 allocs; 61.85 allocs/MP |
+
 ## Huffman lookup
 
 VP8L codes of one to eight bits go through a 256-entry table. Longer codes still walk one bit at a time. The table was compared with the bit-by-bit reader on the same 640×480 file.
