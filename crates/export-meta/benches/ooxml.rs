@@ -75,7 +75,7 @@ impl Write for Check<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let end = self.pos + buf.len();
         if end > self.expect.len() || buf != &self.expect[self.pos..end] {
-            return Err(io::Error::new(io::ErrorKind::Other, "plaintext mismatch"));
+            return Err(io::Error::other("plaintext mismatch"));
         }
         self.pos += buf.len();
         Ok(buf.len())

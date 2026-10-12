@@ -1091,7 +1091,7 @@ mod tests {
     impl Read for Boom {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.left == 0 {
-                return Err(io::Error::new(io::ErrorKind::Other, "boom"));
+                return Err(io::Error::other("boom"));
             }
             let n = buf.len().min(self.left).min(8);
             buf[..n].fill(1);

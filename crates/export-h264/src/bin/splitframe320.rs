@@ -96,8 +96,8 @@ fn main() -> ExitCode {
         SHIFTED_MV.mvy,
         SPLIT_RIGHT_MV.mvx,
         SPLIT_RIGHT_MV.mvy,
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

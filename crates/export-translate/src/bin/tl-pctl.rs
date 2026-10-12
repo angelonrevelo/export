@@ -52,7 +52,7 @@ static GLOBAL: PeakAlloc = PeakAlloc;
 /// Nearest-rank percentile. `pct` is 50 or 99. `sorted` is ascending.
 fn percentile(sorted: &[u128], pct: u128) -> u128 {
     let n = sorted.len() as u128;
-    let rank = (pct * n + 99) / 100;
+    let rank = (pct * n).div_ceil(100);
     let idx = rank.saturating_sub(1) as usize;
     sorted[idx.min(sorted.len() - 1)]
 }

@@ -1221,9 +1221,7 @@ mod tests {
                 return image_resp(&req.method, &png_b, "image/png");
             }
             if path == "/page" {
-                let html = format!(
-                    "<html><title>Album</title><img src=\"/a.jpg\"><img src=\"/b.png\"></html>"
-                );
+                let html = "<html><title>Album</title><img src=\"/a.jpg\"><img src=\"/b.png\"></html>".to_string();
                 return Resp {
                     status: 200,
                     headers: vec![("Content-Type".into(), "text/html".into())],

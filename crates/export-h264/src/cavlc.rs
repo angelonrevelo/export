@@ -485,8 +485,8 @@ pub(crate) fn read_block(
             return Err(Error::Bytes);
         }
     } else {
-        for i in 0..total {
-            pos[i] = i;
+        for (i, p) in pos.iter_mut().enumerate().take(total) {
+            *p = i;
         }
     }
     for i in 0..total {

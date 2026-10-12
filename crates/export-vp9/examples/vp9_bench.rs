@@ -48,6 +48,6 @@ fn main() -> ExitCode {
 }
 
 fn rank(n: u32, percentile: u32) -> usize {
-    let index = (u64::from(percentile) * u64::from(n) + 99) / 100;
+    let index = (u64::from(percentile) * u64::from(n)).div_ceil(100);
     (index as usize).saturating_sub(1).min(n as usize - 1)
 }

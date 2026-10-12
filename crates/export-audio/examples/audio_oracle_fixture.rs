@@ -9,15 +9,15 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let Some(wav_path) = args.next() else {
-        eprintln!("usage: oracle_fixture <out.wav> <out.pcm> <out.flac>");
+        eprintln!("usage: audio_oracle_fixture <out.wav> <out.pcm> <out.flac>");
         return ExitCode::from(2);
     };
     let Some(pcm_path) = args.next() else {
-        eprintln!("usage: oracle_fixture <out.wav> <out.pcm> <out.flac>");
+        eprintln!("usage: audio_oracle_fixture <out.wav> <out.pcm> <out.flac>");
         return ExitCode::from(2);
     };
     let Some(flac_path) = args.next() else {
-        eprintln!("usage: oracle_fixture <out.wav> <out.pcm> <out.flac>");
+        eprintln!("usage: audio_oracle_fixture <out.wav> <out.pcm> <out.flac>");
         return ExitCode::from(2);
     };
     let mut samples = Vec::with_capacity(4096);

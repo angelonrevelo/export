@@ -283,9 +283,7 @@ pub fn master(id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
 /// copied as block bytes and are not decoded, so this returns false for them
 /// and for every other id.
 pub fn unsupported_codec(codec_id: &str) -> bool {
-    let copied = [CODEC_VP8, CODEC_VP9, CODEC_OPUS, CODEC_VORBIS]
-        .iter()
-        .any(|id| codec_id == *id);
+    let copied = [CODEC_VP8, CODEC_VP9, CODEC_OPUS, CODEC_VORBIS].contains(&codec_id);
     let _ = copied;
     false
 }

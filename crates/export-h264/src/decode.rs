@@ -339,6 +339,7 @@ fn recon_luma(rec: &mut [u8], stride: usize, x: usize, y: usize, scan: &[i32], q
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn recon_chroma(rec: &mut [u8], stride: usize, mb_x: usize, mb_y: usize, dc: [i32; 4], qp: i32) {
     let x0 = mb_x * 8;
     let y0 = mb_y * 8;
@@ -577,6 +578,7 @@ fn read_motion_p_slice(
     })
 }
 
+#[allow(clippy::needless_range_loop)]
 fn add_zero_luma(
     rec: &mut [u8],
     reference: &[u8],
@@ -599,6 +601,8 @@ fn add_zero_luma(
     }
 }
 
+#[allow(clippy::needless_range_loop)]
+#[allow(clippy::too_many_arguments)]
 fn add_zero_chroma(
     rec: &mut [u8],
     reference: &[u8],
@@ -628,6 +632,7 @@ fn add_zero_chroma(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn moved_sample(
     reference: &[u8],
     stride: usize,
@@ -643,6 +648,7 @@ fn moved_sample(
     reference[sy * stride + sx] as i32
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_motion_luma(
     rec: &mut [u8],
     reference: &[u8],
@@ -669,6 +675,8 @@ fn add_motion_luma(
     }
 }
 
+#[allow(clippy::needless_range_loop)]
+#[allow(clippy::too_many_arguments)]
 fn add_motion_chroma(
     rec: &mut [u8],
     reference: &[u8],

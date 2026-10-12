@@ -174,7 +174,7 @@ fn main() {
 }
 
 fn nearest_rank(sorted: &[u128], pct: usize) -> u128 {
-    let rank = (pct * sorted.len() + 99) / 100;
+    let rank = (pct * sorted.len()).div_ceil(100);
     sorted[rank - 1]
 }
 

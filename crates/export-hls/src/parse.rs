@@ -612,7 +612,7 @@ fn valid_tag_name(name: &str) -> bool {
 }
 
 fn is_exact(name: &str) -> bool {
-    KNOWN.iter().any(|known| *known == name)
+    KNOWN.contains(&name)
 }
 
 fn is_cut_name(name: &str) -> bool {

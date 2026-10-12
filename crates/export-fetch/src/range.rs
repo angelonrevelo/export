@@ -17,6 +17,7 @@ pub struct ByteRange {
     pub end: u64,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl ByteRange {
     pub fn new(start: u64, end: u64) -> Self {
         Self { start, end }

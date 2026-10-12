@@ -60,8 +60,8 @@ fn main() -> ExitCode {
         "input_bytes={}\noutput_bytes={}\nthreads=1\nrelease_p50_ns={p50}\nrelease_p99_ns={p99}\nrelease_p50_us={}\nrelease_p99_us={}",
         IFRAME_32X32.len(),
         boxed.mp4.len(),
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

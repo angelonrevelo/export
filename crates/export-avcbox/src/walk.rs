@@ -268,7 +268,7 @@ fn read_block(bits: &mut Bits<'_>, nc: i32, maxn: usize) -> Result<usize, Error>
         let level = if code % 2 == 0 {
             ((code + 2) / 2) as i32
         } else {
-            -(((code + 1) / 2) as i32)
+            -(code.div_ceil(2) as i32)
         };
         if suffix == 0 {
             suffix = 1;

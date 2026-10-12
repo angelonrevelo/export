@@ -15,10 +15,10 @@ h264x47_log=$(mktemp "${TMPDIR:-/tmp}/export-fmp4-h264x47.XXXXXX.log")
 h264x188_log=$(mktemp "${TMPDIR:-/tmp}/export-fmp4-h264x188.XXXXXX.log")
 trap 'rm -f "$pcm" "$h264" "$h264x47" "$h264x188" "$pcm_log" "$h264_log" "$h264x47_log" "$h264x188_log"' EXIT INT TERM
 
-cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$pcm" pcm
-cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$h264" h264
-cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$h264x47" h264x47
-cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example write_sample -- "$h264x188" h264x188
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example fmp4_write_sample -- "$pcm" pcm
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example fmp4_write_sample -- "$h264" h264
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example fmp4_write_sample -- "$h264x47" h264x47
+cargo run --quiet --manifest-path "$root/Cargo.toml" --release --example fmp4_write_sample -- "$h264x188" h264x188
 
 # `ffmpeg -i` exits 1 when no output is requested. Rejection is a missing
 # container line, not that exit code.

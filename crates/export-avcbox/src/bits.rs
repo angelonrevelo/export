@@ -37,11 +37,9 @@ impl<'a> Bits<'a> {
             return Err(Error::Truncated);
         }
         let mut v = 0u32;
-        let mut p = self.pos;
-        for _ in 0..n {
+        for p in self.pos..self.pos + n as usize {
             let b = (self.data[p / 8] >> (7 - (p % 8))) & 1;
             v = (v << 1) | u32::from(b);
-            p += 1;
         }
         Ok(v)
     }
@@ -68,7 +66,7 @@ impl<'a> Bits<'a> {
             return Err(Error::Frame);
         }
         if v & 1 == 1 {
-            Ok(((v + 1) / 2) as i32)
+            Ok(v.div_ceil(2) as i32)
         } else {
             Ok(-((v / 2) as i32))
         }

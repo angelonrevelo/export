@@ -72,6 +72,7 @@ pub(crate) fn mdct(time: &[f64; BINS]) -> [f64; BINS] {
     solve(&matrix, time)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn solve(matrix: &[[f64; BINS]; BINS], time: &[f64; BINS]) -> [f64; BINS] {
     let mut rows = [[0.0; BINS + 1]; BINS];
     for row in 0..BINS {

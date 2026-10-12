@@ -62,8 +62,8 @@ fn main() -> ExitCode {
         boxed.mp4.len(),
         boxed.width,
         boxed.height,
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

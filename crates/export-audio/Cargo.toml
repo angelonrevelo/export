@@ -26,4 +26,4 @@ name = "throughput"
 harness = false
 
 [[example]]
-name = "oracle_fixture"
+name = "audio_oracle_fixture"

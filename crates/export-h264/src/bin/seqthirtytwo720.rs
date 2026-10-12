@@ -97,8 +97,8 @@ fn main() -> ExitCode {
         "pictures={}\noutput_bytes={}\nrelease_p50_us={}\nrelease_p99_us={}",
         encoded.reconstructed.len(),
         encoded.annex_b.len(),
-        (p50 + 999) / 1000,
-        (p99 + 999) / 1000
+        p50.div_ceil(1000),
+        p99.div_ceil(1000)
     );
     ExitCode::SUCCESS
 }

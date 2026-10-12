@@ -44,21 +44,16 @@ where
     let stop_t = Arc::clone(&stop);
     let thread = thread::spawn(move || {
         let handler = Arc::new(handler);
-        loop {
-            match listener.accept() {
-                Ok((sock, _)) => {
-                    if stop_t.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    hits_t.fetch_add(1, Ordering::SeqCst);
-                    let handler = Arc::clone(&handler);
-                    let last = Arc::clone(&last_t);
-                    thread::spawn(move || {
-                        let _ = handle_one(sock, handler.as_ref(), &last);
-                    });
-                }
-                Err(_) => break,
+        while let Ok((sock, _)) = listener.accept() {
+            if stop_t.load(Ordering::SeqCst) {
+                break;
             }
+            hits_t.fetch_add(1, Ordering::SeqCst);
+            let handler = Arc::clone(&handler);
+            let last = Arc::clone(&last_t);
+            thread::spawn(move || {
+                let _ = handle_one(sock, handler.as_ref(), &last);
+            });
         }
     });
     Server {
