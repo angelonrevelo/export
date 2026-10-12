@@ -28,6 +28,22 @@ of thousands. `cargo build --release --lib --target wasm32-unknown-unknown`
 produces `libexport_sheet.rlib` for the same parsers. XLSX is not in this crate
 yet.
 
+## XLS
+
+One generated BIFF8 `.xls`: a version-3 compound file, a `Workbook` stream, and
+one worksheet. Cell A1 is the number **42**. Cell B1 is the text **cat**.
+`xls → csv` prints `42,cat`. A file that is not BIFF is refused. `CONTINUE`,
+rich shared strings, and encryption are refused rather than guessed.
+
+Release build, 10 000 reads of that file after 200 warmup reads, nearest rank:
+
+| | time |
+|---|---:|
+| p50 | 520 ns |
+| p99 | 1 147 ns |
+
+Machine: 4-thread Intel Xeon, Linux 6.12.94+.
+
 ## What a record is
 
 CSV and TSV use the same quoting rules. A field that contains the delimiter, a

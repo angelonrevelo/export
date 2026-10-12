@@ -1,4 +1,6 @@
-//! Cross-converts the three formats without holding the table.
+//! Cross-converts CSV, TSV, and JSON without holding the table.
+//!
+//! XLS is read-only: one generated BIFF8 workbook converts to CSV or TSV.
 //!
 //! CSV and TSV share one reader. JSON is an array of objects when the
 //! delimited input has a header, or an array of arrays when it does not.
@@ -21,6 +23,7 @@ pub enum Format {
     Csv,
     Tsv,
     Json,
+    Xls,
 }
 
 impl Format {
@@ -29,6 +32,7 @@ impl Format {
             Format::Csv => "csv",
             Format::Tsv => "tsv",
             Format::Json => "json",
+            Format::Xls => "xls",
         }
     }
 
@@ -36,7 +40,7 @@ impl Format {
         match self {
             Format::Csv => Some(b','),
             Format::Tsv => Some(b'\t'),
-            Format::Json => None,
+            Format::Json | Format::Xls => None,
         }
     }
 }
@@ -75,6 +79,9 @@ pub fn convert<R: BufRead, W: Write>(
     mut output: W,
     options: Options,
 ) -> Result<Stats> {
+    if from == Format::Xls || to == Format::Xls {
+        return convert_xls(from, to, input, &mut output);
+    }
     match (from.delim(), to.delim()) {
         (Some(src_delim), Some(dst_delim)) => {
             delim_to_delim(input, &mut output, src_delim, dst_delim)
@@ -94,6 +101,19 @@ pub fn convert_bytes(
     let mut out = Vec::new();
     let stats = convert(from, to, std::io::Cursor::new(input), &mut out, options)?;
     Ok((out, stats))
+}
+
+fn convert_xls<R: BufRead, W: Write>(
+    from: Format,
+    to: Format,
+    input: R,
+    output: &mut W,
+) -> Result<Stats> {
+    match (from, to) {
+        (Format::Xls, Format::Csv) => crate::xls::to_delim(input, output, b','),
+        (Format::Xls, Format::Tsv) => crate::xls::to_delim(input, output, b'\t'),
+        _ => Err(Error::new("xls converts to csv and tsv")),
+    }
 }
 
 fn delim_to_delim<R: BufRead, W: Write>(
