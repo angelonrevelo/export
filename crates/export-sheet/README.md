@@ -126,6 +126,17 @@ Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
 |---|---:|
 | p50 | 881 ns |
 
+A ninth generated file turns that area down column A. A1 = 1, A2 = 2, and
+A3 = 3. The formula is the same area token. The value is **6**. `xls → csv`
+prints `1`, `2`, `3`, and then `6`. Any other uncached expression is still
+refused.
+
+Release build, same method (10 000 reads, 200 warmup reads, nearest rank):
+
+| | time |
+|---|---:|
+| p50 | 807 ns |
+
 Machine: 4-thread Intel Xeon, Linux 6.12.94+.
 
 ## What a record is
