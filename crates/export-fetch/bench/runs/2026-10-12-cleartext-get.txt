@@ -1,0 +1,25 @@
+bench=cleartext_get
+toolchain: rustc 1.83.0 (90b35a623 2024-11-26)
+profile: release opt-level=3 lto=thin codegen-units=1
+command: cargo run --release --manifest-path crates/export-fetch/Cargo.toml --offline --bin download_bench
+note: real HTTP/1.1 GET of 8 MiB from a std::net server bound to 127.0.0.1. Loopback is allowed only in this bench's GetCfg. https is not used and stays unsupported. One untimed warmup, then 40 timed samples. Process CPU includes the server thread in the same process. Debug builds print NOT JUDGED and exit 2.
+
+bench=cleartext_get
+release=1
+scheme=http
+host=127.0.0.1
+permit_loopback=bench_only
+https=unsupported
+payload_bytes=8388608
+samples=40
+warmup=1
+bytes_per_sec_p50=7708658103
+bytes_per_sec_p99=6880860160
+latency_ns_p50=1088206
+latency_ns_p99=1219122
+process_cpu_ns_per_mb_p50=233160
+process_cpu_ns_per_mb_p99=404480
+peak_buffered_bytes=65536
+vm_hwm_kib=10632
+bytes_checked=8388608
+sink_check=479430

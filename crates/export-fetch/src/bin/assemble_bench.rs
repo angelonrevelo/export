@@ -1,4 +1,5 @@
-//! Release-only assembler timings. Debug builds print NOT JUDGED and exit 2.
+//! Release-only assembler timings. This is an in-process copy, not a download.
+//! Debug builds print NOT JUDGED and exit 2.
 
 use export_fetch::{assemble_stream, COALESCE_GAP, ByteRange, assemble_coalesced};
 use std::io::{self, Write};
@@ -55,6 +56,7 @@ fn main() {
     let sparse_stats =
         assemble_coalesced(&src, &sparse, COALESCE_GAP, CHUNK, &mut sparse_sink).expect("sparse");
 
+    println!("bench=assembler");
     println!("release=1");
     println!("payload_bytes={PAYLOAD}");
     println!("chunk_bytes={CHUNK}");

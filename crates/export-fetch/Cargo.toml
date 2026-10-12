@@ -16,3 +16,7 @@ codegen-units = 1
 [[bin]]
 name = "assemble_bench"
 path = "src/bin/assemble_bench.rs"
+
+[[bin]]
+name = "download_bench"
+path = "src/bin/download_bench.rs"

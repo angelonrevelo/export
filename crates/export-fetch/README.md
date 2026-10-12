@@ -29,20 +29,35 @@ A batch is collapsed per URL before apply. Fetch plus remove of the same URL end
 
 Downloads copy through a 64 KiB buffer. The stream test checks that the peak write stays inside that buffer.
 
-## Assembler bench
+## Benchmarks
 
-`assemble_bench` times an in-memory copy, not a socket. Payload is 8 MiB, chunk is 64 KiB, 40 samples, release profile (`opt-level = 3`, thin LTO, one codegen unit). Bytes per second is payload divided by wall latency. The p99 bytes/sec figure is the slow tail, so it is the lower throughput. CPU time uses `CLOCK_PROCESS_CPUTIME_ID`. A debug build prints `NOT JUDGED` and exits 2.
+Both bins are release-only (`opt-level = 3`, thin LTO, one codegen unit), 8 MiB payload, 40 samples, rustc 1.83.0 on 2026-10-12. Bytes per second is payload divided by wall latency. The p99 bytes/sec figure is the slow tail, so it is the lower throughput. A debug build prints `NOT JUDGED` and exits 2. `https` is unsupported and is not part of either run.
 
-Recorded on rustc 1.83.0, 2026-10-12 (`bench/runs/2026-10-12-assembler.txt`):
+### Assembler (not a download)
 
-| | p50 | p99 |
+`assemble_bench` times an in-process copy. It does not open a socket. Chunk size is 64 KiB. CPU time uses `CLOCK_PROCESS_CPUTIME_ID`. Log: `bench/runs/2026-10-12-assembler.txt`.
+
+| Assembler | p50 | p99 |
 | --- | ---: | ---: |
 | Throughput | 29,090,243,268 B/s | 15,828,517,948 B/s |
 | Wall latency | 288,365 ns | 529,968 ns |
 | CPU | 36,156 ns/MB | 66,380 ns/MB |
 
-Peak buffer held by the assembler: 65,536 bytes. Process VmHWM after the run: 12,204 KiB. A sparse pass of 63,550 ranges collapsed to 1 coalesced read (`coalesce_gap=4096`).
+Peak buffer held by the assembler: 65,536 bytes. Process VmHWM after that run: 12,204 KiB. A sparse pass of 63,550 ranges collapsed to 1 coalesced read (`coalesce_gap=4096`).
+
+### Cleartext GET
+
+`download_bench` issues a real HTTP/1.1 GET of 8 MiB through `download_to`. The server is `std::net::TcpListener` bound to `127.0.0.1`. `permit_loopback` is set only on that bench's `GetCfg`; the default job config still refuses loopback, and other private ranges stay blocked. One untimed warmup, then 40 timed samples. Process CPU includes the server thread in the same process. Log: `bench/runs/2026-10-12-cleartext-get.txt`.
+
+| Cleartext GET | p50 | p99 |
+| --- | ---: | ---: |
+| Throughput | 7,708,658,103 B/s | 6,880,860,160 B/s |
+| Wall latency | 1,088,206 ns | 1,219,122 ns |
+| Process CPU | 233,160 ns/MB | 404,480 ns/MB |
+
+Peak write into the sink: 65,536 bytes. VmHWM after that run: 10,632 KiB.
 
 ```
 cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin assemble_bench
+cargo run --release --manifest-path crates/export-fetch/Cargo.toml --bin download_bench
 ```
