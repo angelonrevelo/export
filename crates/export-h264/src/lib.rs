@@ -103,7 +103,7 @@ impl Yuv420 {
         if self.width == 0 || self.height == 0 || self.width % 16 != 0 || self.height % 16 != 0 {
             return Err(Error::Size);
         }
-        if self.width > 128 || self.height > 128 {
+        if self.width > 160 || self.height > 160 {
             return Err(Error::TooLarge);
         }
         let y = (self.width as usize) * (self.height as usize);
@@ -322,23 +322,36 @@ pub fn encode_sequence(
 
 /// Deterministic 32×32 4:2:0 pattern used for the published measurement.
 pub fn fixture_32x32() -> Yuv420 {
-    let mut y = vec![0u8; 32 * 32];
-    let mut u = vec![0u8; 16 * 16];
-    let mut v = vec![0u8; 16 * 16];
-    for row in 0..32 {
-        for col in 0..32 {
-            y[row * 32 + col] = ((col * 7 + row * 3) % 180) as u8 + 40;
+    fixture_pattern(32, 32)
+}
+
+/// Deterministic 160×160 4:2:0 pattern. Same formula as [`fixture_32x32`].
+pub fn fixture_160x160() -> Yuv420 {
+    fixture_pattern(160, 160)
+}
+
+fn fixture_pattern(width: u32, height: u32) -> Yuv420 {
+    let w = width as usize;
+    let h = height as usize;
+    let cw = w / 2;
+    let ch = h / 2;
+    let mut y = vec![0u8; w * h];
+    let mut u = vec![0u8; cw * ch];
+    let mut v = vec![0u8; cw * ch];
+    for row in 0..h {
+        for col in 0..w {
+            y[row * w + col] = ((col * 7 + row * 3) % 180) as u8 + 40;
         }
     }
-    for row in 0..16 {
-        for col in 0..16 {
-            u[row * 16 + col] = (100 + col * 3) as u8;
-            v[row * 16 + col] = (120 + row * 4) as u8;
+    for row in 0..ch {
+        for col in 0..cw {
+            u[row * cw + col] = (100 + (col * 3) % 120) as u8;
+            v[row * cw + col] = (120 + (row * 4) % 100) as u8;
         }
     }
     Yuv420 {
-        width: 32,
-        height: 32,
+        width,
+        height,
         y,
         u,
         v,

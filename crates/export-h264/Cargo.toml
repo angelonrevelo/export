@@ -26,6 +26,10 @@ name = "iframe"
 path = "src/bin/iframe.rs"
 
 [[bin]]
+name = "iframe160"
+path = "src/bin/iframe160.rs"
+
+[[bin]]
 name = "ipframe"
 path = "src/bin/ipframe.rs"
 

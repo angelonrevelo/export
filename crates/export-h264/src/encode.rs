@@ -381,11 +381,14 @@ fn nc_at(nnz: &[u8], stride: usize, x: usize, y: usize) -> i32 {
 
 fn write_sps(width: u32, height: u32) -> Vec<u8> {
     let mut b = BitWriter::new();
+    let macroblocks = (width / 16) * (height / 16);
+    // Level 1.0 allows 99 macroblocks. 32×32 stays on level 1.0.
+    let level = if macroblocks <= 99 { 10 } else { 11 };
     b.write_bits(66, 8);
     b.write_bit(1);
     b.write_bit(1);
     b.write_bits(0, 6);
-    b.write_bits(10, 8);
+    b.write_bits(level, 8);
     b.write_ue(0);
     b.write_ue(0);
     b.write_ue(2);

@@ -1,7 +1,7 @@
 use export_h264::{
-    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_32x32, fixture_32x32_eight,
-    fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error, EncodeOptions, Error,
-    Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
+    encode, encode_ip, encode_ip_motion, encode_sequence, fixture_160x160, fixture_32x32,
+    fixture_32x32_eight, fixture_32x32_predicted, fixture_32x32_shifted, mean_absolute_error,
+    EncodeOptions, Error, Motion, Pass, Picture, PredictedFrame, Yuv420, SHIFTED_MV,
 };
 
 #[test]
@@ -52,6 +52,10 @@ fn iframe_bytes_stay_in_front_of_the_pframe() {
     let intra = fixture_32x32();
     let alone = encode(&intra, &EncodeOptions::default()).unwrap();
     assert_eq!(alone.annex_b.len(), 272);
+    assert!(alone
+        .annex_b
+        .windows(7)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x0a, 0xda, 0x25, 0x90]));
     let pair = encode_ip(
         &intra,
         &fixture_32x32_predicted(),
@@ -163,6 +167,7 @@ fn eight_pictures_keep_the_iframe_prefix() {
     assert_eq!(seq_intra, intra);
     assert_eq!(predicted.len(), 7);
     let sequence = encode_sequence(&intra, &predicted, &opts).unwrap();
+    assert_eq!(sequence.annex_b.len(), 405);
     assert_eq!(&sequence.annex_b[..272], &alone.annex_b[..]);
     assert_eq!(sequence.reconstructed.len(), 8);
     let one = encode_sequence(
@@ -228,6 +233,41 @@ fn eight_pictures_keep_the_iframe_prefix() {
         encode_sequence(&intra, &predicted, &second).unwrap_err(),
         Error::SecondPass
     );
+}
+
+#[test]
+fn larger_iframe_is_constrained_baseline() {
+    let frame = fixture_160x160();
+    let opts = EncodeOptions::default();
+    let encoded = encode(&frame, &opts).unwrap();
+    assert_eq!(encoded.qp, 26);
+    assert_eq!(encoded.reconstructed.width, 160);
+    assert!(encoded.annex_b.len() > 272);
+    assert!(encoded
+        .annex_b
+        .windows(4)
+        .any(|w| w == [0x67, 0x42, 0xc0, 0x0b]));
+    let mae = mean_absolute_error(&frame, &encoded.reconstructed);
+    assert!(mae < 40.0, "internal mae {mae}");
+    assert_eq!(
+        encode(
+            &frame,
+            &EncodeOptions {
+                picture: Picture::Predicted,
+                ..opts
+            }
+        )
+        .unwrap_err(),
+        Error::PredictedFrame
+    );
+    assert!(Yuv420::new(
+        176,
+        176,
+        vec![0; 176 * 176],
+        vec![0; 88 * 88],
+        vec![0; 88 * 88]
+    )
+    .is_err());
 }
 
 #[test]

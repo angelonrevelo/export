@@ -2,7 +2,7 @@
 
 One baseline H.264 I-frame, and one P-frame after it. 4:2:0, one slice, one QP, Annex B. No dependencies. Threading is off.
 
-This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. It does not link or spawn ffmpeg.
+This is not a video shrink of a real MP4. It does not open a movie. A lone P-frame, a B-frame, and a second pass return an error. The measured P-frame is the second picture, motion zero, one reference (the I-frame reconstruction). A separate shifted picture uses one non-zero 16×16 vector. Eight pictures are that I-frame plus seven P-frames, each predicted from the previous reconstruction. A separate I-frame is 160×160 at the same profile and QP. It does not link or spawn ffmpeg.
 
 Chroma residual is the DC coefficient of each 4×4 block. Luma residual is a full 4×4 transform. Deblocking is off so a decoder's pixels are the inverse transform.
 
