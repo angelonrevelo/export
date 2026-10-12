@@ -85,6 +85,12 @@ Same profile, 200 calls. Not a throughput number for a song.
 | --- | --- | --- | --- |
 | encode | 6.402 ms (6402279 ns) | 7.589 ms (7588843 ns) | 60 |
 
+Decode is `decode_fourth_frame` on that same 60-byte frame. The call also reads the earlier three frames so the overlap tail exists. It is still one frame late. 200 calls, same profile.
+
+| | p50 | p99 |
+| --- | --- | --- |
+| decode | 20.838 ms (20837888 ns) | 22.949 ms (22949440 ns) |
+
 ## Build
 
 ```

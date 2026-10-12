@@ -1,4 +1,4 @@
-//! Release p50/p99 and size for the fourth AAC-LC frame.
+//! Release p50/p99 for the fourth AAC-LC frame, encode and decode.
 //!
 //! The frame overlap-adds against the third frame's history. Writes all four
 //! ADTS frames, concatenated, to stdout. Prints counters on stderr.
@@ -49,11 +49,25 @@ fn main() {
     let encode_p50 = percentile(&mut encode_ns, 0.50);
     let encode_p99 = percentile(&mut encode_ns, 0.99);
 
+    assert_eq!(fourth.len(), 60);
+    let mut decode_ns = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let started = Instant::now();
+        let out =
+            export_aac::decode_fourth_frame(&first, &second, &third, &fourth).expect("decode");
+        decode_ns.push(started.elapsed().as_nanos());
+        assert_eq!(out, decoded);
+    }
+    let decode_p50 = percentile(&mut decode_ns, 0.50);
+    let decode_p99 = percentile(&mut decode_ns, 0.99);
+
     let mut err = io::stderr().lock();
     let _ = writeln!(err, "samples={SAMPLES}");
     let _ = writeln!(err, "output_bytes={}", fourth.len());
     let _ = writeln!(err, "encode_p50_ns={encode_p50}");
     let _ = writeln!(err, "encode_p99_ns={encode_p99}");
+    let _ = writeln!(err, "decode_p50_ns={decode_p50}");
+    let _ = writeln!(err, "decode_p99_ns={decode_p99}");
     let _ = writeln!(err, "max_abs_error_vs_delayed_sine={late}");
     let _ = writeln!(err, "max_abs_error_vs_own_input={own}");
 
