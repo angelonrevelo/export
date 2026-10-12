@@ -8,9 +8,6 @@ description = "One mono 48 kHz short Vorbis audio packet"
 readme = "README.md"
 publish = false
 
-# Standalone package so this crate builds without editing the parent workspace.
-[workspace]
-
 [dependencies]
 
 [profile.release]

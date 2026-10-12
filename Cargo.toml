@@ -1,10 +1,32 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/export-aac",
+    "crates/export-audio",
+    "crates/export-avcbox",
+    "crates/export-deflate",
+    "crates/export-docs",
+    "crates/export-fetch",
+    "crates/export-fmp4",
+    "crates/export-gif",
+    "crates/export-h264",
+    "crates/export-hls",
+    "crates/export-image",
     "crates/export-kernel",
-    "crates/export-subtitle",
-    "crates/export-web",
+    "crates/export-media",
+    "crates/export-meta",
+    "crates/export-mp3",
+    "crates/export-opus",
+    "crates/export-pack",
     "crates/export-pdf",
+    "crates/export-sheet",
+    "crates/export-speech",
+    "crates/export-subtitle",
+    "crates/export-translate",
+    "crates/export-vorbis",
+    "crates/export-vp9",
+    "crates/export-web",
+    "crates/export-webm",
 ]
 
 [workspace.package]
@@ -13,6 +35,11 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.74"
 
 [profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
 opt-level = 3
 lto = "thin"
 codegen-units = 1

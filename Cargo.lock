@@ -3,11 +3,83 @@
 version = 3
 
 [[package]]
+name = "export-aac"
+version = "0.1.0"
+
+[[package]]
+name = "export-audio"
+version = "0.1.0"
+
+[[package]]
+name = "export-avcbox"
+version = "0.1.0"
+
+[[package]]
+name = "export-deflate"
+version = "0.0.0"
+
+[[package]]
+name = "export-docs"
+version = "0.1.0"
+
+[[package]]
+name = "export-fetch"
+version = "0.1.0"
+
+[[package]]
+name = "export-fmp4"
+version = "0.1.0"
+
+[[package]]
+name = "export-gif"
+version = "0.1.0"
+
+[[package]]
+name = "export-h264"
+version = "0.1.0"
+
+[[package]]
+name = "export-hls"
+version = "0.1.0"
+
+[[package]]
+name = "export-image"
+version = "0.1.0"
+
+[[package]]
 name = "export-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "export-media"
+version = "0.1.0"
+
+[[package]]
+name = "export-meta"
+version = "0.0.0"
+
+[[package]]
+name = "export-mp3"
+version = "0.1.0"
+
+[[package]]
+name = "export-opus"
+version = "0.1.0"
+
+[[package]]
+name = "export-pack"
+version = "0.1.0"
+
+[[package]]
 name = "export-pdf"
+version = "0.1.0"
+
+[[package]]
+name = "export-sheet"
+version = "0.1.0"
+
+[[package]]
+name = "export-speech"
 version = "0.1.0"
 
 [[package]]
@@ -18,8 +90,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "export-translate"
+version = "0.1.0"
+
+[[package]]
+name = "export-vorbis"
+version = "0.1.0"
+
+[[package]]
+name = "export-vp9"
+version = "0.1.0"
+
+[[package]]
 name = "export-web"
 version = "0.1.0"
 dependencies = [
  "export-kernel",
 ]
+
+[[package]]
+name = "export-webm"
+version = "0.1.0"

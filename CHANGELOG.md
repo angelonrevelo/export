@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Rust workspace in `Cargo.toml`, one member per crate: `export-aac`, `export-audio`, `export-avcbox`, `export-deflate`, `export-docs`, `export-fetch`, `export-fmp4`, `export-gif`, `export-h264`, `export-hls`, `export-image`, `export-kernel`, `export-media`, `export-meta`, `export-mp3`, `export-opus`, `export-pack`, `export-pdf`, `export-sheet`, `export-speech`, `export-subtitle`, `export-translate`, `export-vorbis`, `export-vp9`, `export-web`, `export-webm`. These are libraries. `scripts/run.sh` still serves the Python app in `app/`. The page does not call them.
+- `export-kernel` keeps its checked raw DEFLATE inflater. `export-deflate` is a separate raw compressor and inflater. Pack, image, docs, and sheet keep their own inflate code.
+- `scripts/outside_score.py` scores uploads already in the repo against the Python app. `EXPORT_RUST_ORACLE` may name a separate program. The script is not the server.
 - `EXPORT_CORS_ORIGIN` CORS allow-list (comma-separated exact origins; unset = no CORS, as before). Allows `X-Password` + `Content-Type`, answers private-network preflights with `Access-Control-Allow-Private-Network: true`, and 401/429 responses carry the CORS headers. For cuttingboard's Companion.
 - `words` transcript format → `{stem}_words.json` = `{ language, word: [{ text, start, end, confidence }] }` from faster-whisper `word_timestamps=True` (turbo and the pinned PH dialect model) or Groq word granularity (`confidence` null). Upload, URL, capabilities and the reachable set list it. Not translated.
 - PH dialect STT: UI pins Cebuano / Ilocano / Hiligaynon / Waray / Bikol (`ceb` `ilo` `hil` `war` `bcl`) to `rbcurzon/whisper-medium-ph`. Tagalog/auto stay on `large-v3-turbo`. Missing dialect weights error; they do not transcribe as `tl`.
@@ -17,6 +20,7 @@
 - Convert **reachable set**: after a file is chosen, convert-to lists every format reachable by composing existing bridges (multi-hop). `GET /api/reachable?ext=mp4` returns `{ "format": [...] }`. Video→`png` is a still frame (not a transcript, not raw bytes in a PNG). Video→JPEG hops through that still. Video→PDF stays the existing transcript PDF.
 
 ### Changed
+- Docs name the Rust crates on `main` and the Python paths that still serve. The runnable app is a local `scripts/run.sh`. There is no hosted deploy, certificate, or public URL.
 - Default local Whisper model is `large-v3-turbo` (multilingual). `distil-large-v3` is English-only.
 - Shrink prediction with a byte cap is a single exact size, not a lo–hi range.
 - Default video shrink profile remains playback-safe h.264 / yuv420p / faststart.
@@ -29,7 +33,7 @@
 
 ### Not done
 - `git push` / origin.
-- Live certbot / DNS / tmpfs mount (documented, not provisioned here).
+- Hosted deploy, certificate, and public URL. Not in this repo.
 - SECURITY.md Phase 3 (accounts, Redis, sandbox converters).
 - Bilingual srt, HTML-safe translate, Homebrew libass burn-in.
 - New format families (aseprite, N64, Minecraft, WASM). Video→PDF is still STT, not frames-as-PDF.

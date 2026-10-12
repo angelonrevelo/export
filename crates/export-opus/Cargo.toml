@@ -8,10 +8,6 @@ description = "One Opus packet: mono, 48 kHz, one 20 ms frame."
 readme = "README.md"
 publish = false
 
-# Standalone crate. An empty workspace table keeps this package out of any
-# parent workspace so the root manifest does not need to change.
-[workspace]
-
 [lib]
 name = "export_opus"
 path = "src/lib.rs"

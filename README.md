@@ -103,14 +103,58 @@ browser ──► FastAPI (app/main.py, port 8500)
 
 One process, jobs held in memory, output files in a temp folder that a
 background loop clears every few hours. Each conversion is a small bridge
-function from one format to another.
+function from one format to another. Those bridges are Python. A request
+from the page does not call the Rust crates.
 
-## Deploying
+## Running locally
 
-For a server, see [scripts/export.service](scripts/export.service) (systemd),
-[scripts/nginx-export.conf](scripts/nginx-export.conf) and
-[scripts/Caddyfile](scripts/Caddyfile) (HTTPS reverse proxy). Read
-[SECURITY.md](SECURITY.md) before exposing it beyond localhost.
+`scripts/run.sh` is the runnable app. It loads `.env` and starts uvicorn on
+`app.main:app`, bound to `127.0.0.1:8500` unless `HOST` and `PORT` say
+otherwise. A checkout of `main` is what that local run serves. This repo has
+no hosted deploy target, certificate, or public URL.
+
+## Rust crates
+
+`Cargo.toml` is one workspace. Each crate is listed once. They are
+zero-dependency libraries next to the Python app, not a second server.
+`export-kernel` has a checked raw DEFLATE inflater, and `export-deflate` is
+a separate raw compressor and inflater. Pack, image, docs, and sheet keep
+their own inflate code too.
+
+| Crate | What the library does |
+|---|---|
+| `export-kernel` | Little-endian container, streaming SHA-256, CRC-32, magic-byte sniff, checked raw DEFLATE inflate. No network. |
+| `export-subtitle` | SRT, WebVTT, and ASS/SSA cues, plus a CRC-checked cue file. One ASS bold, italic, underline, and strikeout override. |
+| `export-web` | In-memory job runner with a hard byte budget. No threads and no model. Not the FastAPI process. |
+| `export-pdf` | Split and merge classic-xref text PDFs, including one small uncompressed RGB, gray, or CMYK page. |
+| `export-pack` | Store-method zip, CBZ to a minimal PDF, TTF/OTF container copy, PNG, and this crate's own inflate. |
+| `export-sheet` | Streaming CSV, TSV, and one JSON array. BIFF8 `.xls` read covers the generated layouts in the crate. One-sheet XLSX: stored write, stored or checked deflate read. |
+| `export-meta` | `EXMETA01` record and in-place scrub of that header. OOXML decrypt for the standard AES-128-ECB and agile AES-256-CBC/SHA-512 packages this crate accepts. |
+| `export-media` | Stream-copy of non-fragmented MP4/MOV/M4A, WAV/PCM, a one-pass WAV shrink, and a one-frame gray audiogram. Fragmented MP4 is refused. AAC, Opus, MP3, FLAC, GIF, and WebM are identified and not decoded. |
+| `export-translate` | English ↔ Spanish and English ↔ Filipino lexicon transfer. Not NLLB. Any other pair fails. |
+| `export-speech` | Log-mel, integer kernels, greedy CTC writers, a fixture that spells `HI`, `IH`, or `NO`, 5×7 OCR for a small glyph set, formant-sine WAV, and spectral subtraction. Not Whisper, Tesseract, or Piper. |
+| `export-image` | PNG decode, baseline JPEG shrink-to-bytes, 220px JPEG thumbnails, a simple WebP still plus a few listed animations, and a 16×16 or 32×32 black-square SVG. Not HEIC, AVIF, TIFF, RAW, JPEG XL, or background removal. |
+| `export-fetch` | Cleartext HTTP/1.1 (redirects and ranges). HTTPS, YouTube ciphers, and DRM are refused. |
+| `export-docs` | Document hops with no LibreOffice, pandoc, or Ghostscript. `pairs()` rows with `ready: true` are the implemented text conversions (docx, odt, markdown, HTML, txt, and classic PDF text, split, merge, rotate, watermark, and a Flate shrink that must inflate back to the same bytes). `ready: false` rows are not implemented, including PDF encrypt, decrypt, pdf→docx, and pdf→png. |
+| `export-gif` | GIF87a/89a LZW and a 3-3-2 quantizer. It does not decode video. |
+| `export-deflate` | Raw DEFLATE compress and inflate (RFC 1951). No zlib wrapper. Separate from `export-kernel`'s inflater. |
+| `export-audio` | FLAC subset encode and decode, plus WAV. It does not call ffmpeg. |
+| `export-h264` | Constrained Baseline Annex B written by this crate: one I-frame and following P-frames, and a still of that I-frame reconstruction. Not a general MP4 decoder and not a shrink. |
+| `export-opus` | One Opus packet: silence, a few 20 ms 440 Hz sine frames, and one prepared stereo packet. Not a song encoder. |
+| `export-webm` | Stream-copy WebM and Matroska. VP8, VP9, Opus, and Vorbis payloads are copied and not decoded. |
+| `export-aac` | AAC-LC ADTS at 44.1 kHz, 1024 samples per channel, including later frames of one sine and a stereo pair. HE-AAC, SBR, and parametric stereo are unsupported. |
+| `export-hls` | Cleartext HLS media playlists, and cleartext HTTP/1.1 fetch of them. `https`, `#EXT-X-KEY`, cookies, and credentials are unsupported. |
+| `export-fmp4` | Stream-copy of fragmented MP4 sample bytes. H.264 `avc1` is copied, not decoded. AAC, Opus, and VP9 are sniffed and unsupported. |
+| `export-avcbox` | Boxes Annex B H.264 pictures into a non-fragmented MP4. It does not encode H.264. |
+| `export-vorbis` | One short mono 48 kHz Vorbis packet: silence, or two half-scale 440 Hz frames plus the next 32 samples. |
+| `export-mp3` | One MPEG-1 Layer III frame, mono, 44.1 kHz, 1152 samples. No bit reservoir. |
+| `export-vp9` | Decode one generated keyframe at 8×8 through 2048×2048. Inter frames, extra frames, and VP8 are unsupported. |
+
+`scripts/outside_score.py` scores files already stored in this repo against
+the Python app. It may call a separate program named by `EXPORT_RUST_ORACLE`.
+It is not the server.
+
+Crate tests: `cargo test --workspace --offline`. Python tests: `pytest`.
 
 ## Links
 
