@@ -1,4 +1,4 @@
-//! epub to HTML when the spine is one, two, three, four, five, six, or seven XHTML files.
+//! epub to HTML when the spine is one, two, three, four, five, six, seven, or eight XHTML files.
 //! Those files are copied in spine order. The 2,603-byte six-item file stays a miss.
 //! Any other package stays a miss. Pandoc is not called.
 
@@ -137,7 +137,7 @@ fn spine_hrefs<R: Read + Seek>(
         refs: Vec::new(),
     };
     xml::pull(&mut reader, &mut sink)?;
-    if !(1..=7).contains(&sink.refs.len()) {
+    if !(1..=8).contains(&sink.refs.len()) {
         return Err(spine_shape());
     }
     let mut hrefs = Vec::new();
@@ -753,6 +753,65 @@ mod tests {
         expect.extend_from_slice(fifth);
         expect.extend_from_slice(sixth);
         expect.extend_from_slice(seventh);
+        assert_eq!(html_of(&bytes).unwrap(), expect);
+    }
+
+    #[test]
+    fn eight_xhtml_files_are_copied_in_spine_order() {
+        let first = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>First paragraph 0</p></body></html>";
+        let second = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Second paragraph 0</p></body></html>";
+        let third = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Third paragraph 0</p></body></html>";
+        let fourth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Fourth paragraph 0</p></body></html>";
+        let fifth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Fifth paragraph 0</p></body></html>";
+        let sixth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Sixth paragraph 0</p></body></html>";
+        let seventh = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Seventh paragraph 0</p></body></html>";
+        let eighth = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Eighth paragraph 0</p></body></html>";
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <manifest>
+    <item id="chap" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="next" href="next.xhtml" media-type="application/xhtml+xml"/>
+    <item id="more" href="more.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tail" href="tail.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>
+    <item id="last" href="last.xhtml" media-type="application/xhtml+xml"/>
+    <item id="extra" href="extra.xhtml" media-type="application/xhtml+xml"/>
+    <item id="again" href="again.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+    <itemref idref="next"/>
+    <itemref idref="more"/>
+    <itemref idref="tail"/>
+    <itemref idref="end"/>
+    <itemref idref="last"/>
+    <itemref idref="extra"/>
+    <itemref idref="again"/>
+  </spine>
+</package>
+"#;
+        let bytes = pack_stored(&[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", container().as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/chapter.xhtml", first),
+            ("OEBPS/next.xhtml", second),
+            ("OEBPS/more.xhtml", third),
+            ("OEBPS/tail.xhtml", fourth),
+            ("OEBPS/end.xhtml", fifth),
+            ("OEBPS/last.xhtml", sixth),
+            ("OEBPS/extra.xhtml", seventh),
+            ("OEBPS/again.xhtml", eighth),
+        ]);
+        assert_ne!(bytes.len(), 2603);
+        let mut expect = first.to_vec();
+        expect.extend_from_slice(second);
+        expect.extend_from_slice(third);
+        expect.extend_from_slice(fourth);
+        expect.extend_from_slice(fifth);
+        expect.extend_from_slice(sixth);
+        expect.extend_from_slice(seventh);
+        expect.extend_from_slice(eighth);
         assert_eq!(html_of(&bytes).unwrap(), expect);
     }
 
