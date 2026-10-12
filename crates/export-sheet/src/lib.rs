@@ -33,8 +33,9 @@
 //! only as its cached IEEE number. The expression is not evaluated. A SUM of
 //! two numeric cells with no cached number is those two cells added. A SUM of
 //! three numeric cells with no cached number is those three cells added. A SUM of
-//! four numeric cells with no cached number is those four cells added. Any
-//! other uncached expression is refused. A file that is not BIFF
+//! four numeric cells with no cached number is those four cells added. A SUM of
+//! one contiguous three-cell range with no cached number is those three cells
+//! added. Any other uncached expression is refused. A file that is not BIFF
 //! is refused. `CONTINUE`,
 //! rich shared strings, and encryption are refused rather than guessed.
 
@@ -54,6 +55,7 @@ pub use xls::generated_biff_xls;
 pub use xls::generated_biff_xls_numeric_column;
 pub use xls::generated_biff_xls_sum_cache;
 pub use xls::generated_biff_xls_sum_uncached;
+pub use xls::generated_biff_xls_sum_uncached_area;
 pub use xls::generated_biff_xls_sum_uncached_four;
 pub use xls::generated_biff_xls_sum_uncached_three;
 pub use xls::generated_biff_xls_two_numbers;

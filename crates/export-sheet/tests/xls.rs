@@ -1,8 +1,8 @@
 use export_sheet::{
     convert_bytes, generated_biff_xls, generated_biff_xls_numeric_column,
     generated_biff_xls_sum_cache, generated_biff_xls_sum_uncached,
-    generated_biff_xls_sum_uncached_four, generated_biff_xls_sum_uncached_three,
-    generated_biff_xls_two_numbers, Format, Options,
+    generated_biff_xls_sum_uncached_area, generated_biff_xls_sum_uncached_four,
+    generated_biff_xls_sum_uncached_three, generated_biff_xls_two_numbers, Format, Options,
 };
 
 #[test]
@@ -74,6 +74,14 @@ fn uncached_sum_of_four_is_twenty_two() {
     let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
     assert_eq!(stats.rows, 1);
     assert_eq!(csv, b"4,5,6,7,22\n");
+}
+
+#[test]
+fn uncached_sum_of_a_three_cell_range_is_six() {
+    let file = generated_biff_xls_sum_uncached_area();
+    let (csv, stats) = convert_bytes(Format::Xls, Format::Csv, &file, Options::default()).unwrap();
+    assert_eq!(stats.rows, 1);
+    assert_eq!(csv, b"1,2,3,6\n");
 }
 
 #[test]

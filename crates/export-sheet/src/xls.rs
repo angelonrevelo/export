@@ -61,6 +61,11 @@ pub fn generated_biff_xls_sum_uncached_four() -> Vec<u8> {
     wrap_ole(&workbook_sum_uncached_four())
 }
 
+/// A1 = 1, B1 = 2, C1 = 3, D1 = SUM of the range A1:C1 with no cached number.
+pub fn generated_biff_xls_sum_uncached_area() -> Vec<u8> {
+    wrap_ole(&workbook_sum_uncached_area())
+}
+
 pub(crate) fn to_delim<R: BufRead, W: Write>(
     mut input: R,
     output: &mut W,
@@ -276,6 +281,50 @@ fn formula_sum_uncached_four(row: u16, col: u16) -> Vec<u8> {
         0x44, 0x00, 0x00, 0x02, 0x00, // PtgRef value, C1
         0x44, 0x00, 0x00, 0x03, 0x00, // PtgRef value, D1
         0x42, 0x04, 0x04, 0x00, // PtgFuncVar value, 4 args, SUM
+    ];
+    let mut data = Vec::with_capacity(22 + rgce.len());
+    data.extend_from_slice(&row.to_le_bytes());
+    data.extend_from_slice(&col.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF]);
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
+    data.extend_from_slice(&rgce);
+    data
+}
+
+fn workbook_sum_uncached_area() -> Vec<u8> {
+    let mut out = Vec::new();
+    push_rec(&mut out, 0x0809, &bof(0x0005));
+    push_rec(&mut out, 0x0042, &0x04E4u16.to_le_bytes());
+    let boundsheet_at = out.len();
+    push_rec(&mut out, 0x0085, &boundsheet(0, "Sheet"));
+    push_rec(&mut out, 0x000A, &[]);
+    let sheet_at = out.len() as u32;
+    out[boundsheet_at + 4..boundsheet_at + 8].copy_from_slice(&sheet_at.to_le_bytes());
+    push_rec(&mut out, 0x0809, &bof(0x0010));
+    push_rec(&mut out, 0x0081, &0x04C1u16.to_le_bytes());
+    let mut dims = dimensions();
+    dims[10..12].copy_from_slice(&4u16.to_le_bytes());
+    push_rec(&mut out, 0x0200, &dims);
+    push_rec(&mut out, 0x0203, &number_cell(0, 0, 1.0));
+    push_rec(&mut out, 0x0203, &number_cell(0, 1, 2.0));
+    push_rec(&mut out, 0x0203, &number_cell(0, 2, 3.0));
+    push_rec(&mut out, 0x0006, &formula_sum_uncached_area(0, 3));
+    push_rec(&mut out, 0x000A, &[]);
+    out
+}
+
+/// SUM(A1:C1) with an empty formula value. One area token, then SUM. Nothing else.
+fn formula_sum_uncached_area(row: u16, col: u16) -> Vec<u8> {
+    let rgce = [
+        0x45, // PtgArea value
+        0x00, 0x00, // first row
+        0x00, 0x00, // last row
+        0x00, 0x00, // first column, A
+        0x02, 0x00, // last column, C
+        0x42, 0x01, 0x04, 0x00, // PtgFuncVar value, 1 arg, SUM
     ];
     let mut data = Vec::with_capacity(22 + rgce.len());
     data.extend_from_slice(&row.to_le_bytes());
@@ -749,13 +798,15 @@ fn parse_sst(data: &[u8]) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Uncached SUM of two, three, or four value-class cell refs. Any other expression stays refused.
+/// Uncached SUM of two, three, or four cell refs, or one three-cell area. Anything else stays refused.
 fn sum_uncached_numeric_cells(data: &[u8], rows: &[Vec<String>]) -> Result<f64> {
     if data.len() < 22 {
         return Err(Error::new("xls formula record has no cached number"));
     }
     let cce = u16::from_le_bytes(data[20..22].try_into().unwrap()) as usize;
-    if cce == 14 {
+    if cce == 13 {
+        sum_three_cell_range(data, rows)
+    } else if cce == 14 {
         sum_two_numeric_cells(data, rows)
     } else if cce == 19 {
         sum_three_numeric_cells(data, rows)
@@ -884,6 +935,64 @@ fn sum_four_numeric_cells(data: &[u8], rows: &[Vec<String>]) -> Result<f64> {
         return Err(Error::new("xls sum is not finite"));
     }
     Ok(sum)
+}
+
+/// SUM of one area that is exactly three cells in a line. Other expressions stay refused.
+fn sum_three_cell_range(data: &[u8], rows: &[Vec<String>]) -> Result<f64> {
+    if data.len() < 22 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    let cce = u16::from_le_bytes(data[20..22].try_into().unwrap()) as usize;
+    if data.len() != 22 + cce || cce != 13 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    let rgce = &data[22..];
+    if rgce[0] != 0x45 || rgce[9] != 0x42 || rgce[10] != 1 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    if u16::from_le_bytes(rgce[11..13].try_into().unwrap()) != 4 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    let rw_first = u16::from_le_bytes(rgce[1..3].try_into().unwrap());
+    let rw_last = u16::from_le_bytes(rgce[3..5].try_into().unwrap());
+    let col_first = u16::from_le_bytes(rgce[5..7].try_into().unwrap());
+    let col_last = u16::from_le_bytes(rgce[7..9].try_into().unwrap());
+    let cells = three_cell_line(rw_first, rw_last, col_first, col_last)?;
+    let mut sum = 0.0;
+    for (row, col) in cells {
+        sum += cell_number(rows, row, col)?;
+    }
+    if !sum.is_finite() {
+        return Err(Error::new("xls sum is not finite"));
+    }
+    Ok(sum)
+}
+
+/// A straight line of three cells. A rectangle, or any other length, is refused.
+fn three_cell_line(
+    rw_first: u16,
+    rw_last: u16,
+    col_first: u16,
+    col_last: u16,
+) -> Result<[(u16, u16); 3]> {
+    if col_first > 255 || col_last > 255 {
+        return Err(Error::new("xls formula record has no cached number"));
+    }
+    if rw_first == rw_last && u32::from(col_last) == u32::from(col_first) + 2 {
+        return Ok([
+            (rw_first, col_first),
+            (rw_first, col_first + 1),
+            (rw_first, col_first + 2),
+        ]);
+    }
+    if col_first == col_last && u32::from(rw_last) == u32::from(rw_first) + 2 {
+        return Ok([
+            (rw_first, col_first),
+            (rw_first + 1, col_first),
+            (rw_first + 2, col_first),
+        ]);
+    }
+    Err(Error::new("xls formula record has no cached number"))
 }
 
 fn cell_number(rows: &[Vec<String>], row: u16, col: u16) -> Result<f64> {
@@ -1271,6 +1380,58 @@ mod tests {
             let op = u16::from_le_bytes(other[i..i + 2].try_into().unwrap());
             if op == 0x0006 {
                 other[i + 4 + 22 + 22] = 5;
+                break;
+            }
+            let len = u16::from_le_bytes(other[i + 2..i + 4].try_into().unwrap()) as usize;
+            i += 4 + len;
+        }
+        let err = parse_workbook(&other).unwrap_err();
+        assert!(err.message().contains("no cached number"), "{err}");
+    }
+
+    #[test]
+    fn uncached_sum_adds_one_three_cell_range() {
+        let stream = workbook_sum_uncached_area();
+        let formula = record(&stream, 0x0006);
+        assert_eq!(formula.len(), 35);
+        assert_eq!(formula[6], 0x03);
+        assert_eq!(
+            u16::from_le_bytes(formula[12..14].try_into().unwrap()),
+            0xFFFF
+        );
+        assert_eq!(
+            &formula[22..],
+            &[0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x42, 0x01, 0x04, 0x00,]
+        );
+        let rows = parse_workbook(&stream).unwrap();
+        assert_eq!(
+            rows,
+            vec![vec![
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "6".to_string()
+            ]]
+        );
+        let mut wider = stream.clone();
+        let mut i = 0;
+        while i + 4 <= wider.len() {
+            let op = u16::from_le_bytes(wider[i..i + 2].try_into().unwrap());
+            if op == 0x0006 {
+                wider[i + 4 + 22 + 7] = 3;
+                break;
+            }
+            let len = u16::from_le_bytes(wider[i + 2..i + 4].try_into().unwrap()) as usize;
+            i += 4 + len;
+        }
+        let err = parse_workbook(&wider).unwrap_err();
+        assert!(err.message().contains("no cached number"), "{err}");
+        let mut other = stream.clone();
+        let mut i = 0;
+        while i + 4 <= other.len() {
+            let op = u16::from_le_bytes(other[i..i + 2].try_into().unwrap());
+            if op == 0x0006 {
+                other[i + 4 + 22 + 11] = 5;
                 break;
             }
             let len = u16::from_le_bytes(other[i + 2..i + 4].try_into().unwrap()) as usize;
