@@ -24,6 +24,7 @@ committed and before a codec runs.
 | `Wav { sample_rate, channels }` | WAV PCM in, or `sowt` / `twos` PCM inside MP4. Optional integer linear resample and mono downmix. |
 | `concat_mp4` | Stream-copy two non-fragmented MP4s whose sample entries match. Codec mismatch and `moof` are errors. |
 | `shrink_wav` | One downmix and at most one resample to a byte budget. Returns the file and its real byte count. |
+| `audiogram` | One gray waveform frame (`raw `, 24-bit RGB) plus the PCM audio track. The video sample lasts as long as the WAV. |
 
 `export_reader` pulls from `Read` into at most `max` bytes and pushes the
 result as an owned buffer the caller writes.
@@ -34,12 +35,13 @@ result as an owned buffer the caller writes.
 - AAC, Opus, MP3, FLAC, GIF, and WebM/Matroska are sniffed and not decoded.
 - Durations that need `mvhd` version 1, and `mdat` boxes past 4 GiB, are refused.
 - There is no video pixel decode, GIF palette, or multi-pass video shrink. WAV shrink is one resample after an optional downmix.
+- `audiogram` writes one uncompressed `raw ` sample. It does not emit 30 frames and it does not encode H.264 or AV1. ffmpeg reads that sample; Chrome reports a 0×0 picture. See `BENCH.md`.
 - The resample is integer linear interpolation, not a windowed sinc.
 
 ## Bench
 
-Release only. `cargo bench --bench throughput` and
-`cargo bench --bench concat_shrink` print MB/s, p50, p99, and allocations
+Release only. `cargo bench --bench throughput`, `cargo bench --bench concat_shrink`,
+and `cargo bench --bench audiogram` print MB/s, p50, p99, and allocations
 per MB for hits and misses. A debug build exits 2 and does not publish a
 timing verdict.
 

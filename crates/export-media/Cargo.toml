@@ -29,5 +29,9 @@ harness = false
 name = "concat_shrink"
 harness = false
 
+[[bench]]
+name = "audiogram"
+harness = false
+
 [[example]]
 name = "oracle_fixture"

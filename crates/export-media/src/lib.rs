@@ -7,10 +7,12 @@
 //!
 //! Working jobs: stream-copy remux of non-fragmented mp4/mov/m4a, elementary
 //! sample copy, stream-copy concat of two matching MP4s, WAV/PCM read and
-//! write, and a one-pass WAV shrink via downmix and integer resample.
-//! Fragmented MP4 (`moof`) is refused. AAC, Opus, MP3, FLAC, GIF, and WebM
-//! are identified and not decoded.
+//! write, a one-pass WAV shrink via downmix and integer resample, and a
+//! one-frame gray audiogram muxed with the PCM track. Fragmented MP4
+//! (`moof`) is refused. AAC, Opus, MP3, FLAC, GIF, and WebM are identified
+//! and not decoded.
 
+mod audiogram;
 mod bmff;
 mod dedup;
 mod error;
@@ -21,6 +23,7 @@ mod shrink;
 mod sniff;
 mod wav;
 
+pub use audiogram::{audiogram, audiogram_repeat, Audiogram, HEIGHT, WIDTH};
 pub use bmff::{
     append_samples, build_movie, concat_mp4, elementary, parse, remux, Movie, MovieSpec, RemuxOpt,
     SampleTable, Track, TrackSpec,
