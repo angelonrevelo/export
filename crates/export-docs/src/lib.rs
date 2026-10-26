@@ -23,6 +23,7 @@ mod error;
 mod htmlpdf;
 mod markdown;
 mod pdf;
+mod plain;
 mod ppt;
 mod pptx;
 mod rtf;

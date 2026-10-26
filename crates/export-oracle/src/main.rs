@@ -40,7 +40,12 @@ fn run(src: &str, dest: &str, kind: &str) -> Result<(), String> {
     let out = match kind {
         "phone-jpeg" | "heic" => shrink_image(&bytes, kind),
         "mp4" => shrink_video(&bytes),
-        "docx" => export_docs::convert("docx", "txt", &bytes).map_err(|e| e.to_string()),
+        "docx" => export_docs::convert("docx", "txt", &bytes)
+            .map(|text| match std::str::from_utf8(&text) {
+                Ok(s) => text_mode_bytes(s),
+                Err(_) => text,
+            })
+            .map_err(|e| e.to_string()),
         "pdf" => pdf_text(&bytes),
         "xlsx" => xlsx_csv(&bytes),
         other => Err(format!("unknown kind {other}")),
