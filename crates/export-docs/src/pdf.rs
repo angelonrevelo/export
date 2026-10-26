@@ -411,22 +411,26 @@ pub fn page_count(data: &[u8]) -> Result<usize> {
 }
 
 pub fn plain_text(data: &[u8]) -> Result<String> {
+    Ok(plain_text_pages(data)?.join("\n"))
+}
+
+/// The literal strings of each page's content stream, one entry per page in
+/// page order. A page without contents is an empty string, so callers can
+/// shape per-page output the way the Python app does.
+pub fn plain_text_pages(data: &[u8]) -> Result<Vec<String>> {
     let mut src = Src::open(data)?;
     let ids = src.page_ids()?;
-    let mut out = String::new();
+    let mut pages = Vec::with_capacity(ids.len());
     for id in ids {
         let page = src.load(id)?;
         let Some(contents) = page.dict_get("Contents").cloned() else {
+            pages.push(String::new());
             continue;
         };
         let bytes = src.stream_bytes(&contents)?;
-        let text = content_strings(&bytes);
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&text);
+        pages.push(content_strings(&bytes));
     }
-    Ok(out)
+    Ok(pages)
 }
 
 pub fn split(data: &[u8]) -> Result<Vec<Vec<u8>>> {

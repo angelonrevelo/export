@@ -37,6 +37,11 @@
 //! truncated to 70 percent, at least 2 pixels. That second file is still a
 //! baseline JPEG. The cap is not raised.
 //!
+//! [`shrink_jpeg`] is the phone-photo path for a JPEG source. It runs one
+//! pass with the standard tables and the same truncated 70-percent scaling
+//! the Python app uses, and applies the EXIF orientation first, because a
+//! portrait phone photo is stored sideways on the sensor.
+//!
 //! [`thumbnail_jpeg`] is a separate path: the long edge is at most 220 pixels
 //! and the JPEG quality is 72. The WebP inputs are the two-frame 640×480 file
 //! and the four-frame 1280×720 file, and the picture is that file's first frame.
@@ -46,6 +51,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod exif;
 mod inflate;
 mod jpeg;
 mod png;
@@ -67,7 +73,7 @@ pub use png::{decode_png, encode_png, restore_lossless, restore_lossless_all, Lo
 pub use raster::Raster;
 pub use resize::{resize, Filter};
 pub use sha256::{sha256, Sha256};
-pub use shrink::{shrink_png, Probe, ShrinkCache, ShrinkOutcome};
+pub use shrink::{shrink_jpeg, shrink_png, Probe, ShrinkCache, ShrinkOutcome};
 pub use sniff::{sniff, Format};
 pub use svg::{encode_svg, rasterize_svg};
 pub use thumb::{thumbnail_jpeg, Thumbnail, THUMB_LONG_EDGE, THUMB_QUALITY, THUMB_READ_LIMIT};

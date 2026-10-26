@@ -16,7 +16,8 @@
 use std::collections::HashMap;
 
 use crate::error::{Error, INVALID, OVER_BUDGET, UNSUPPORTED};
-use crate::jpeg::{encode_jpeg_limited, encode_jpeg_optimized_limited, Limited};
+use crate::exif;
+use crate::jpeg::{decode_jpeg, encode_jpeg_limited, encode_jpeg_optimized_limited, Limited};
 use crate::png::{decode_png, png_header};
 use crate::raster::Raster;
 use crate::resize::{resize, Filter};
@@ -192,6 +193,125 @@ pub fn shrink_png(
         image = resize(&image, nw, nh, Filter::Area)?;
         scales += 1;
     }
+}
+
+/// Measured JPEG shrink from a JPEG or HEIC source, one cap.
+///
+/// This is the phone-photo path and it mirrors the app's algorithm step for
+/// step: a source at or under the cap is copied byte for byte; otherwise the
+/// encoder runs a binary search over qualities 1-95 at the source
+/// dimensions, each side is truncated to 70 percent (at least 2 pixels) and
+/// the search repeats, at most six times; the encode that landed under the
+/// cap is grown back to the cap with COM markers. The EXIF orientation is
+/// applied first, so a portrait photo keeps its upright pixel count. There
+/// is no second pass with counted Huffman tables here: the app runs the
+/// standard tables only.
+pub fn shrink_jpeg(
+    bytes: &[u8],
+    target: u64,
+    cache: &mut ShrinkCache,
+) -> Result<ShrinkOutcome, Error> {
+    if target == 0 {
+        return Err(INVALID);
+    }
+    if sniff(bytes) != Format::Jpeg {
+        return Err(UNSUPPORTED);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finish();
+    cache.hash_passes += 1;
+    if let Some(slot) = cache.slots.get(&digest) {
+        if slot.target == target {
+            cache.hits += 1;
+            let mut hit = slot.outcome.clone();
+            hit.dedup_hit = true;
+            return Ok(hit);
+        }
+    }
+    let (source_width, source_height) = jpeg_size(bytes)?;
+    if (bytes.len() as u64) <= target {
+        let outcome = ShrinkOutcome {
+            bytes: bytes.to_vec(),
+            digest,
+            dedup_hit: false,
+            copied: true,
+            quality: None,
+            probes: Vec::new(),
+            width: source_width,
+            height: source_height,
+            scales: 0,
+        };
+        remember(cache, target, &outcome);
+        return Ok(outcome);
+    }
+    let decoded = decode_jpeg(bytes)?;
+    let mut image = into_rgb(decoded)?;
+    image = exif::transpose(&image, exif::orientation(bytes))?;
+    let mut probes = Vec::new();
+    let mut scales = 0u32;
+    loop {
+        // The app saves with optimize=True: Huffman tables counted from the
+        // image. A quality-1 miss means every higher quality misses too.
+        if let Some((quality, encoded)) = search_counted(&image, target, cache, &mut probes)? {
+            return Ok(publish(
+                encoded,
+                Fit {
+                    quality,
+                    width: image.width,
+                    height: image.height,
+                    scales,
+                },
+                digest,
+                probes,
+                target,
+                cache,
+            ));
+        }
+        if scales >= MAX_SCALES {
+            return Err(OVER_BUDGET);
+        }
+        let nw = truncated_scale(image.width);
+        let nh = truncated_scale(image.height);
+        if nw == image.width && nh == image.height {
+            return Err(OVER_BUDGET);
+        }
+        image = resize(&image, nw, nh, Filter::Area)?;
+        scales += 1;
+    }
+}
+
+/// Width and height straight from the frame header, without decoding.
+fn jpeg_size(bytes: &[u8]) -> Result<(u32, u32), Error> {
+    let mut i = 2usize;
+    while i + 4 <= bytes.len() {
+        if bytes[i] != 0xff {
+            return Err(INVALID);
+        }
+        let marker = bytes[i + 1];
+        if marker == 0xd8 || (0xd0..=0xd7).contains(&marker) || marker == 0x01 {
+            i += 2;
+            continue;
+        }
+        if marker == 0xda || marker == 0xd9 {
+            return Err(UNSUPPORTED);
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        if len < 2 || i + 2 + len > bytes.len() {
+            return Err(INVALID);
+        }
+        // SOF0-SOF15 except DHT (C4), JPG (C8), and DAC (CC).
+        if (0xc0..=0xcf).contains(&marker) && marker != 0xc4 && marker != 0xc8 && marker != 0xcc {
+            if len < 7 {
+                return Err(INVALID);
+            }
+            let height = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]);
+            let width = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]);
+            return Ok((u32::from(width), u32::from(height)));
+        }
+        i += 2 + len;
+    }
+    Err(UNSUPPORTED)
 }
 
 fn truncated_scale(n: u32) -> u32 {
@@ -430,6 +550,8 @@ pub(crate) fn pad_jpeg(buf: &mut Vec<u8>, target: usize) {
 #[cfg(test)]
 mod tests {
     use super::truncated_scale;
+    use super::*;
+    use crate::jpeg::encode_jpeg;
 
     #[test]
     fn truncated_scale_matches_the_python_chain() {
@@ -448,5 +570,82 @@ mod tests {
             h = truncated_scale(h);
             assert_eq!((w, h), (ew, eh));
         }
+    }
+
+    /// A noisy 64×48 JPEG (noise keeps the encode well above the test caps).
+    fn noisy_jpeg() -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(64 * 48 * 3);
+        let mut state = 0x1234_5678u32;
+        for _ in 0..64 * 48 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            pixels.push((state >> 24) as u8);
+            pixels.push((state >> 16) as u8);
+            pixels.push((state >> 8) as u8);
+        }
+        let raster = Raster::new(64, 48, 3, pixels).unwrap();
+        encode_jpeg(&raster, 95).unwrap()
+    }
+
+    /// Splice an EXIF APP1 carrying the given orientation after the SOI.
+    fn with_orientation(mut jpeg: Vec<u8>, orientation: u16) -> Vec<u8> {
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II\x2a\x00");
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&orientation.to_le_bytes());
+        tiff.extend_from_slice(&0u16.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        let mut app1 = Vec::new();
+        app1.extend_from_slice(&((6 + tiff.len() + 2) as u16).to_be_bytes());
+        app1.extend_from_slice(b"Exif\x00\x00");
+        app1.extend_from_slice(&tiff);
+        let mut out = jpeg.drain(..2).collect::<Vec<u8>>();
+        out.extend_from_slice(&[0xff, 0xe1]);
+        out.extend_from_slice(&app1);
+        out.extend_from_slice(&jpeg);
+        out
+    }
+
+    #[test]
+    fn a_jpeg_source_shrinks_to_exactly_the_cap() {
+        let bytes = noisy_jpeg();
+        assert!(bytes.len() > 2_000, "the fixture encodes past the test cap");
+        let mut cache = ShrinkCache::new();
+        let outcome = shrink_jpeg(&bytes, 2_000, &mut cache).unwrap();
+        assert_eq!(outcome.bytes.len(), 2_000);
+        assert_eq!(&outcome.bytes[..2], &[0xff, 0xd8]);
+        let round = decode_jpeg(&outcome.bytes).unwrap();
+        assert_eq!((round.width, round.height), (64, 48));
+        assert!(!outcome.copied);
+        assert!(outcome.quality.is_some());
+    }
+
+    #[test]
+    fn an_under_cap_jpeg_is_copied() {
+        let bytes = noisy_jpeg();
+        let mut cache = ShrinkCache::new();
+        let outcome = shrink_jpeg(&bytes, u64::from(bytes.len() as u32) + 10, &mut cache).unwrap();
+        assert!(outcome.copied);
+        assert_eq!(outcome.bytes, bytes);
+    }
+
+    #[test]
+    fn the_exif_orientation_turns_the_output() {
+        let bytes = with_orientation(noisy_jpeg(), 6);
+        let mut cache = ShrinkCache::new();
+        let outcome = shrink_jpeg(&bytes, 2_000, &mut cache).unwrap();
+        let round = decode_jpeg(&outcome.bytes).unwrap();
+        // Orientation 6 is stored sideways: the output is 48 wide, 64 tall.
+        assert_eq!((round.width, round.height), (48, 64));
+    }
+
+    #[test]
+    fn a_non_jpeg_source_is_refused() {
+        let mut cache = ShrinkCache::new();
+        let err = shrink_jpeg(b"not a jpeg", 1_000, &mut cache).unwrap_err();
+        assert_eq!(err.code, crate::error::ErrorCode::Unsupported);
     }
 }

@@ -22,13 +22,17 @@ fn csv_xlsx_round_trip_keeps_shared_strings_and_numbers() {
     assert!(contains(&book, b"sharedStrings"), "shared string part");
     assert!(contains(&book, b"t=\"s\""), "string cells use the table");
     assert!(contains(&book, b"<v>2</v>"), "2 is a number");
-    assert!(contains(&book, b"<v>3.50</v>"), "3.50 stays lexical");
+    assert!(contains(&book, b"<v>3.50</v>"), "3.50 stays lexical on write");
     assert!(contains(&book, b"&amp;"), "shared strings escape &");
     let (back, stats) =
         convert_bytes(Format::Xlsx, Format::Csv, &book, Options::default()).unwrap();
     assert_eq!(stats.rows, 3);
     assert_eq!(stats.lossy, 0);
-    assert_eq!(String::from_utf8(back).unwrap(), csv);
+    // Reading casts "3.50" through a float, so the repr prints 3.5.
+    assert_eq!(
+        String::from_utf8(back).unwrap(),
+        "name,qty,note\napple,2,\"say \"\"hi\"\"\"\npie,3.5,a&b<c\n"
+    );
 }
 
 #[test]

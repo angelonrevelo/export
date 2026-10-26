@@ -278,6 +278,12 @@ pub fn pdf_text(input: &[u8]) -> Result<String> {
     pdf::plain_text(input)
 }
 
+/// Per-page literal strings, in page order, so a caller can shape per-page
+/// output like the Python app does.
+pub fn pdf_text_pages(input: &[u8]) -> Result<Vec<String>> {
+    pdf::plain_text_pages(input)
+}
+
 pub fn pdf_image_matches(input: &[u8], width: u32, height: u32, rgb: &[u8]) -> Result<bool> {
     pdf::contains_image(input, width, height, rgb)
 }
