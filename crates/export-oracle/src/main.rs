@@ -82,7 +82,7 @@ fn shrink_video(bytes: &[u8]) -> Result<Vec<u8>, String> {
 /// whole, and writes through a text-mode handle, so a `\n` becomes the
 /// platform line separator.
 fn pdf_text(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let pages = export_docs::pdf_text_pages(bytes).map_err(|e| e.to_string())?;
+    let pages = export_docs::layout_text_pages(bytes).map_err(|e| e.to_string())?;
     let shaped = pages
         .iter()
         .map(|page| page.trim())

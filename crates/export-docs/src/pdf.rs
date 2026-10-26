@@ -11,7 +11,7 @@ const PAGE_H: i64 = 792;
 const MARGIN: f32 = 54.0;
 
 #[derive(Clone, Debug)]
-enum Obj {
+pub(crate) enum Obj {
     Null,
     Bool(bool),
     Int(i64),
@@ -25,18 +25,18 @@ enum Obj {
 }
 
 impl Obj {
-    fn dict_get(&self, key: &str) -> Option<&Obj> {
+    pub(crate) fn dict_get(&self, key: &str) -> Option<&Obj> {
         items(self)?.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    fn name_val(&self, key: &str) -> Option<&str> {
+    pub(crate) fn name_val(&self, key: &str) -> Option<&str> {
         match self.dict_get(key)? {
             Obj::Name(n) => Some(n.as_str()),
             _ => None,
         }
     }
 
-    fn int_val(&self, key: &str) -> Option<i64> {
+    pub(crate) fn int_val(&self, key: &str) -> Option<i64> {
         match self.dict_get(key)? {
             Obj::Int(n) => Some(*n),
             _ => None,
@@ -75,14 +75,14 @@ fn items_mut(obj: &mut Obj) -> Option<&mut Vec<(String, Obj)>> {
     }
 }
 
-struct Src<'a> {
+pub(crate) struct Src<'a> {
     data: &'a [u8],
     xref: Vec<Option<u64>>,
     cache: HashMap<u32, Obj>,
 }
 
 impl<'a> Src<'a> {
-    fn open(data: &'a [u8]) -> Result<Self> {
+    pub(crate) fn open(data: &'a [u8]) -> Result<Self> {
         if !data.starts_with(b"%PDF-") {
             return Err(Error::new("pdf: missing %PDF- header"));
         }
@@ -120,7 +120,7 @@ impl<'a> Src<'a> {
         }
     }
 
-    fn load(&mut self, id: u32) -> Result<Obj> {
+    pub(crate) fn load(&mut self, id: u32) -> Result<Obj> {
         if let Some(obj) = self.cache.get(&id) {
             return Ok(obj.clone());
         }
@@ -170,7 +170,7 @@ impl<'a> Src<'a> {
         }
     }
 
-    fn page_ids(&mut self) -> Result<Vec<u32>> {
+    pub(crate) fn page_ids(&mut self) -> Result<Vec<u32>> {
         let root = self.root_id()?;
         let catalog = self.load(root)?;
         let pages = match catalog.dict_get("Pages") {
@@ -242,7 +242,7 @@ impl<'a> Src<'a> {
         })
     }
 
-    fn inherit(&mut self, page_id: u32, key: &str) -> Result<Option<Obj>> {
+    pub(crate) fn inherit(&mut self, page_id: u32, key: &str) -> Result<Option<Obj>> {
         let page = self.load(page_id)?;
         let Some(Obj::Ref(mut id)) = page.dict_get("Parent").cloned() else {
             return Ok(None);
@@ -260,7 +260,7 @@ impl<'a> Src<'a> {
         Ok(None)
     }
 
-    fn stream_bytes(&mut self, obj: &Obj) -> Result<Vec<u8>> {
+    pub(crate) fn stream_bytes(&mut self, obj: &Obj) -> Result<Vec<u8>> {
         match obj {
             Obj::Ref(id) => {
                 let loaded = self.load(*id)?;

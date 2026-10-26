@@ -44,7 +44,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "htm", target: "pdf", ready: true, note: "same path as html" },
     Pair { source: "txt", target: "html", ready: true, note: "paragraph wrap" },
     Pair { source: "txt", target: "pdf", ready: true, note: "txt→html→text PDF" },
-    Pair { source: "pdf", target: "txt", ready: true, note: "literal strings in content streams; no ToUnicode" },
+    Pair { source: "pdf", target: "txt", ready: true, note: "text state machine with ToUnicode CMaps, font encodings, and widths; shaped like pdfplumber" },
     Pair { source: "pdf", target: "split", ready: true, note: "one PDF per page, classic xref rewritten" },
     Pair { source: "pdf", target: "merge", ready: true, note: "new trailer, pages concatenated" },
     Pair { source: "pdf", target: "rotate", ready: true, note: "sets /Rotate, does not rasterize" },
