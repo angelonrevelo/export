@@ -7,10 +7,12 @@
 //! streaming text path put a single newline between every paragraph and
 //! never wrapped, which matched none of that.
 //!
-//! Tables are the one known gap: pandoc draws them as a dashed grid with
-//! content-based column widths. Here they keep the legacy tab-separated
-//! rows, so a document with a table still converts but not to pandoc's
-//! bytes.
+//! Tables render as pandoc's dashed grid: column widths from the `tblGrid`
+//! twips as a share of the page text width, cells wrapped inside their
+//! column, a full-dash border above the header and below the body around a
+//! per-column dash underline, a blank line between body rows (plus one
+//! trailing when there is a single row), and the whole table indented two
+//! spaces.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -78,15 +80,12 @@ impl XmlSink for NumberingSink {
             }
             "lvlOverride" => {
                 self.in_override = true;
-                self.cur_override_level =
-                    xml_attr(attrs, "ilvl").and_then(|v| v.parse().ok());
+                self.cur_override_level = xml_attr(attrs, "ilvl").and_then(|v| v.parse().ok());
             }
             "startOverride" => {
                 if let (Some(num), Some(level)) = (self.cur_num, self.cur_override_level) {
                     if let Some(start) = xml_attr(attrs, "val").and_then(|v| v.parse().ok()) {
-                        self.numbering
-                            .start_override
-                            .insert((num, level), start);
+                        self.numbering.start_override.insert((num, level), start);
                     }
                 }
             }
@@ -159,13 +158,60 @@ fn xml_attr<'a>(attrs: &'a [Attr], local: &str) -> Option<&'a str> {
         .map(|a| a.value.as_str())
 }
 
+/// Cell paragraph alignment from `w:jc`, the way the docx reader maps it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+fn jc_to_align(jc: Option<&str>) -> Align {
+    match jc {
+        Some("center") => Align::Center,
+        Some("right") | Some("end") => Align::Right,
+        _ => Align::Left,
+    }
+}
+
+struct TblCell {
+    align: Align,
+    /// Paragraphs; each is its collapsed lines joined with newlines.
+    paras: Vec<String>,
+}
+
+impl TblCell {
+    fn new() -> Self {
+        Self {
+            align: Align::Left,
+            paras: Vec::new(),
+        }
+    }
+}
+
+struct TblRow {
+    /// `w:tblHeader` on the row: joins the header run at the top.
+    header: bool,
+    cells: Vec<TblCell>,
+}
+
+/// One table, as read. Rendered once the section width is known.
+#[derive(Default)]
+struct TblState {
+    /// `w:gridCol` widths in twips; `None` when a column carries no width.
+    grid: Vec<Option<u32>>,
+    header_first_row: bool,
+    rows: Vec<TblRow>,
+}
+
 /// One rendered block. Consecutive list items share one block joined by a
 /// single newline (pandoc's tight list); consecutive quotes share one too,
-/// with a blank line inside.
+/// with a blank line inside. Tables render at the end, when the section
+/// width is known.
 enum Block {
     Text(String),
     Quote(String),
-    Table(String),
+    Table(TblState),
     List(Vec<String>),
 }
 
@@ -184,10 +230,18 @@ pub struct TextSink<'a, W> {
     blocks: Vec<Block>,
     /// Open list levels of the current run: (numId, ilvl, indent, width).
     levels: Vec<(u32, u32, usize, usize)>,
-    /// Table depth. Cells stream in the legacy tab-separated form.
-    table: u32,
-    cells: usize,
-    row: String,
+    /// Open tables; the last one collects rows and cells.
+    tables: Vec<TblState>,
+    /// `w:jc` of the paragraph being read.
+    para_jc: Option<String>,
+    /// The current row's `w:tblHeader`.
+    row_header: bool,
+    /// Page text width in twips from the body-level `sectPr`.
+    text_width: Option<u32>,
+    body_depth: u32,
+    in_sectpr: bool,
+    /// pgSz w, pgMar left/right/gutter, in that order.
+    sect_parts: [Option<u32>; 4],
 }
 
 impl<'a, W: Write> TextSink<'a, W> {
@@ -203,9 +257,13 @@ impl<'a, W: Write> TextSink<'a, W> {
             counters: HashMap::new(),
             blocks: Vec::new(),
             levels: Vec::new(),
-            table: 0,
-            cells: 0,
-            row: String::new(),
+            tables: Vec::new(),
+            para_jc: None,
+            row_header: false,
+            text_width: None,
+            body_depth: 0,
+            in_sectpr: false,
+            sect_parts: [None; 4],
         }
     }
 
@@ -215,14 +273,29 @@ impl<'a, W: Write> TextSink<'a, W> {
             .map_err(|e| Error::new(e.to_string()))
     }
 
-    /// A paragraph ended. In tables the text joins the row; otherwise it
-    /// becomes a block.
+    /// A paragraph ended. In tables the text joins the open cell; otherwise
+    /// it becomes a block.
     fn close_para(&mut self) -> Result<()> {
         let para = std::mem::take(&mut self.para);
         let style = std::mem::take(&mut self.style);
         let list = self.list.take();
-        if self.table > 0 {
-            self.row.push_str(&para);
+        let jc = self.para_jc.take();
+        if let Some(state) = self.tables.last_mut() {
+            let lines: Vec<String> = para
+                .split('\n')
+                .map(collapse)
+                .filter(|line| !line.is_empty())
+                .collect();
+            if let Some(cell) = state.rows.last_mut().and_then(|row| row.cells.last_mut()) {
+                if !lines.is_empty() {
+                    cell.paras.push(lines.join("\n"));
+                }
+                if cell.paras.len() == 1 {
+                    // The reader takes a cell's alignment from its first
+                    // paragraph.
+                    cell.align = jc_to_align(jc.as_deref());
+                }
+            }
             return Ok(());
         }
         let lines: Vec<String> = para
@@ -239,8 +312,8 @@ impl<'a, W: Write> TextSink<'a, W> {
         if !is_list {
             self.counters.clear();
             self.levels.clear();
-            let quote = style.eq_ignore_ascii_case("blocktext") || style.eq_ignore_ascii_case("quote");
-            self.levels.clear();
+            let quote =
+                style.eq_ignore_ascii_case("blocktext") || style.eq_ignore_ascii_case("quote");
             if quote {
                 self.push_quote(&lines);
             } else {
@@ -312,8 +385,7 @@ impl<'a, W: Write> TextSink<'a, W> {
                 item.push_str(&piece);
             }
         }
-        let run_continues = continues
-            && matches!(self.blocks.last(), Some(Block::List { .. }));
+        let run_continues = continues && matches!(self.blocks.last(), Some(Block::List { .. }));
         if run_continues {
             if let Some(Block::List(items)) = self.blocks.last_mut() {
                 items.push(item);
@@ -381,7 +453,11 @@ impl<'a, W: Write> TextSink<'a, W> {
             match block {
                 Block::Text(text) => out.push_str(&text),
                 Block::Quote(text) => out.push_str(&text),
-                Block::Table(text) => out.push_str(&text),
+                Block::Table(state) => {
+                    if let Some(rendered) = render_table(&state, self.text_width) {
+                        out.push_str(&rendered);
+                    }
+                }
                 Block::List(items) => out.push_str(&items.join("\n")),
             }
         }
@@ -415,6 +491,211 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
     lines.push(current);
     lines
+}
+
+/// Render one table the way pandoc's plain writer does: its `pandocTable`
+/// with `multiline` on, nested two spaces. Column widths are the grid
+/// twips as a share of the page text width (minus ten twips per gap),
+/// floored at 71 columns times that share, never below a column's longest
+/// word plus two. The border runs above the header and below the body, the
+/// per-column underline between them, body rows separated by blank lines
+/// with one trailing when there is a single row. A table with no rows is
+/// dropped by the reader, so there is nothing to render.
+fn render_table(state: &TblState, text_width: Option<u32>) -> Option<String> {
+    if state.rows.is_empty() {
+        return None;
+    }
+    let ncols = if !state.grid.is_empty() {
+        state.grid.len()
+    } else {
+        state
+            .rows
+            .iter()
+            .map(|row| row.cells.len())
+            .max()
+            .unwrap_or(0)
+    };
+    if ncols == 0 {
+        return None;
+    }
+    let unspecified = state.grid.is_empty() || state.grid.iter().any(|g| g.is_none());
+    let (fracs, is_simple): (Vec<f64>, bool) = if unspecified {
+        (vec![0.0; ncols], true)
+    } else {
+        let page = f64::from(text_width.unwrap_or(9360));
+        let total = (page - 10.0 * (ncols as f64 - 1.0)).max(1.0);
+        let mut f: Vec<f64> = state
+            .grid
+            .iter()
+            .map(|g| g.unwrap_or(0) as f64 / total)
+            .collect();
+        let sum: f64 = f.iter().sum();
+        if sum > 1.0 {
+            for x in &mut f {
+                *x /= sum;
+            }
+        }
+        (f, false)
+    };
+
+    // The header run: the first row when tblLook says so, extended by
+    // rows that carry their own w:tblHeader.
+    let mut header_count = 0;
+    for (i, row) in state.rows.iter().enumerate() {
+        if i == 0 && state.header_first_row {
+            header_count = 1;
+        } else if row.header && header_count == i {
+            header_count += 1;
+        } else {
+            break;
+        }
+    }
+    let (hdr, body) = state.rows.split_at(header_count);
+
+    let widths: Vec<usize> = (0..ncols)
+        .map(|c| {
+            let cells: Vec<&TblCell> = state
+                .rows
+                .iter()
+                .filter_map(|row| row.cells.get(c))
+                .collect();
+            if is_simple {
+                // Two plus the widest unwrapped paragraph.
+                2 + cells
+                    .iter()
+                    .flat_map(|cell| cell.paras.iter())
+                    .flat_map(|para| para.split('\n'))
+                    .map(|line| line.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            } else {
+                // 71 columns times the width share, but never below the
+                // longest word plus two.
+                let min_chars = 2 + cells
+                    .iter()
+                    .flat_map(|cell| cell.paras.iter())
+                    .flat_map(|para| para.split('\n'))
+                    .flat_map(|line| line.split(' '))
+                    .map(|word| word.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                ((71.0 * fracs[c]).floor() as usize).max(min_chars)
+            }
+        })
+        .collect();
+
+    // Alignment comes from the first body row, else the header.
+    let align_of = |c: usize| -> Align {
+        body.first()
+            .or(hdr.first())
+            .and_then(|row| row.cells.get(c))
+            .map_or(Align::Left, |cell| cell.align)
+    };
+
+    // One row line merges the cell blocks left to right, with a one-space
+    // block between neighbors: the accumulated line is padded to the
+    // accumulated declared width before the next block is appended
+    // (doclayout's mergeBlocks), and nothing follows the last block, so its
+    // lines stay unpadded. Alignment pads a cell's lines on the left when
+    // the block is built, exactly like rblock and cblock.
+    let render_row = |row: &TblRow| -> Vec<String> {
+        let mut blocks: Vec<(usize, Vec<String>)> = Vec::new();
+        for (c, &width) in widths.iter().enumerate() {
+            if c > 0 {
+                blocks.push((1, vec![" ".to_string()]));
+            }
+            let empty = TblCell::new();
+            let cell = row.cells.get(c).unwrap_or(&empty);
+            let align = align_of(c);
+            let mut lines = Vec::new();
+            for (i, para) in cell.paras.iter().enumerate() {
+                if i > 0 {
+                    lines.push(String::new());
+                }
+                for seg in para.split('\n') {
+                    for piece in wrap_text(seg, width) {
+                        let len = piece.chars().count();
+                        match align {
+                            Align::Left => lines.push(piece),
+                            Align::Center => {
+                                lines.push(format!("{}{}", " ".repeat((width - len) / 2), piece));
+                            }
+                            Align::Right => {
+                                lines.push(format!("{}{}", " ".repeat(width - len), piece));
+                            }
+                        }
+                    }
+                }
+            }
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
+            blocks.push((width, lines));
+        }
+        let height = blocks
+            .iter()
+            .map(|(_, lines)| lines.len())
+            .max()
+            .unwrap_or(1);
+        (0..height)
+            .map(|line_idx| {
+                let mut out = String::new();
+                let mut acc_width = 0usize;
+                let mut acc_len = 0usize;
+                for (i, (width, lines)) in blocks.iter().enumerate() {
+                    let line = lines.get(line_idx).map(String::as_str).unwrap_or("");
+                    if i > 0 {
+                        out.push_str(&" ".repeat(acc_width - acc_len));
+                    }
+                    out.push_str(line);
+                    acc_len = acc_width + line.chars().count();
+                    acc_width += width;
+                }
+                out
+            })
+            .collect()
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    let border = "-".repeat(widths.iter().sum::<usize>() + ncols.saturating_sub(1));
+    let underline = widths
+        .iter()
+        .map(|width| "-".repeat(*width))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !hdr.is_empty() {
+        lines.push(border.clone());
+        lines.extend(render_row(&hdr[0]));
+    }
+    lines.push(underline.clone());
+    for (i, row) in body.iter().enumerate() {
+        if i > 0 {
+            lines.push(String::new());
+        }
+        lines.extend(render_row(row));
+    }
+    if body.len() < 2 {
+        lines.push(String::new());
+    }
+    if hdr.is_empty() {
+        lines.push(underline);
+    } else {
+        lines.push(border);
+    }
+    // Nest two; empty lines stay empty, the way the renderer prefixes.
+    Some(
+        lines
+            .into_iter()
+            .map(|line| {
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn render_number(fmt: &str, n: u32) -> String {
@@ -512,11 +793,15 @@ impl<W: Write> XmlSink for TextSink<'_, W> {
                 self.para.clear();
                 self.style.clear();
                 self.list = None;
+                self.para_jc = None;
             }
             "pStyle" => {
                 if let Some(v) = xml_attr(attrs, "val") {
                     self.style = v.to_string();
                 }
+            }
+            "jc" => {
+                self.para_jc = xml_attr(attrs, "val").map(str::to_string);
             }
             "numPr" => self.list = Some((0, 0)),
             "ilvl" => {
@@ -532,16 +817,70 @@ impl<W: Write> XmlSink for TextSink<'_, W> {
             "t" => self.in_t = true,
             "tab" => self.para.push('\t'),
             "br" | "cr" => self.para.push('\n'),
-            "tbl" => {
-                self.table += 1;
-                self.row.clear();
+            "body" => self.body_depth += 1,
+            "sectPr" => {
+                // Word writes the body-level sectPr last, so the last one
+                // wins, matching the reader's single lookup.
+                self.in_sectpr = self.body_depth == 1;
+                self.sect_parts = [None; 4];
             }
-            "tr" => self.cells = 0,
-            "tc" => {
-                if self.cells > 0 {
-                    self.row.push('\t');
+            "pgSz" => {
+                if self.in_sectpr {
+                    self.sect_parts[0] = xml_attr(attrs, "w").and_then(|v| v.parse().ok());
                 }
-                self.cells += 1;
+            }
+            "pgMar" => {
+                if self.in_sectpr {
+                    self.sect_parts[1] = xml_attr(attrs, "left").and_then(|v| v.parse().ok());
+                    self.sect_parts[2] = xml_attr(attrs, "right").and_then(|v| v.parse().ok());
+                    self.sect_parts[3] = xml_attr(attrs, "gutter").and_then(|v| v.parse().ok());
+                }
+            }
+            "tbl" => {
+                self.tables.push(TblState::default());
+            }
+            "tblGrid" => {
+                if let Some(state) = self.tables.last_mut() {
+                    state.grid.clear();
+                }
+            }
+            "gridCol" => {
+                if let Some(state) = self.tables.last_mut() {
+                    // A column without w:w leaves every column unspecified,
+                    // per the reader: writers mishandle a mix.
+                    match xml_attr(attrs, "w").and_then(|v| v.parse().ok()) {
+                        Some(dxa) => state.grid.push(Some(dxa)),
+                        None => state.grid.push(None),
+                    }
+                }
+            }
+            "tblLook" => {
+                if let Some(state) = self.tables.last_mut() {
+                    state.header_first_row = match xml_attr(attrs, "firstRow") {
+                        Some("1") => true,
+                        Some(_) => false,
+                        None => xml_attr(attrs, "val")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .is_some_and(|mask| mask & 0x020 != 0),
+                    };
+                }
+            }
+            "tblHeader" => self.row_header = true,
+            "tr" => {
+                self.row_header = false;
+                if let Some(state) = self.tables.last_mut() {
+                    state.rows.push(TblRow {
+                        header: false,
+                        cells: Vec::new(),
+                    });
+                }
+            }
+            "tc" => {
+                if let Some(state) = self.tables.last_mut() {
+                    if let Some(row) = state.rows.last_mut() {
+                        row.cells.push(TblCell::new());
+                    }
+                }
             }
             _ => {}
         }
@@ -559,19 +898,54 @@ impl<W: Write> XmlSink for TextSink<'_, W> {
         match loc {
             "t" => self.in_t = false,
             "p" => self.close_para()?,
+            "body" => self.body_depth = self.body_depth.saturating_sub(1),
+            "sectPr" => {
+                if self.in_sectpr {
+                    let [w, left, right, gutter] = self.sect_parts;
+                    if let (Some(w), Some(left), Some(right), Some(gutter)) =
+                        (w, left, right, gutter)
+                    {
+                        self.text_width = Some(w.saturating_sub(left + right + gutter));
+                    }
+                    self.in_sectpr = false;
+                }
+            }
             "tr" => {
-                if self.table > 0 {
-                    self.row.push('\n');
-                    let line = std::mem::take(&mut self.row);
-                    match self.blocks.last_mut() {
-                        Some(Block::Table(prev)) => prev.push_str(&line),
-                        _ => self.blocks.push(Block::Table(line)),
+                if let Some(state) = self.tables.last_mut() {
+                    if let Some(row) = state.rows.last_mut() {
+                        row.header = self.row_header;
                     }
                 }
-                self.cells = 0;
+                self.row_header = false;
             }
             "tbl" => {
-                self.table = self.table.saturating_sub(1);
+                if let Some(state) = self.tables.pop() {
+                    if self.tables.is_empty() {
+                        // Rendered at the end, once the section width is known.
+                        self.blocks.push(Block::Table(state));
+                    } else if let Some(parent) = self.tables.last_mut() {
+                        // A table inside a cell keeps the flat tab form.
+                        if let Some(cell) =
+                            parent.rows.last_mut().and_then(|row| row.cells.last_mut())
+                        {
+                            for row in &state.rows {
+                                let line = row
+                                    .cells
+                                    .iter()
+                                    .map(|cell| {
+                                        cell.paras
+                                            .iter()
+                                            .flat_map(|para| para.split('\n'))
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\t");
+                                cell.paras.push(line);
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -600,7 +974,10 @@ mod tests {
         for line in &lines {
             assert!(line.chars().count() <= 20, "{line}");
         }
-        assert_eq!(lines.join(" "), "aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv");
+        assert_eq!(
+            lines.join(" "),
+            "aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv"
+        );
     }
 
     #[test]
@@ -663,5 +1040,134 @@ mod tests {
         assert_eq!(numbering.start(300, 0), 1);
         assert!(numbering.is_list(100));
         assert!(!numbering.is_list(999));
+    }
+
+    fn table_state(grid: &[Option<u32>], rows: &[Vec<&str>]) -> TblState {
+        TblState {
+            grid: grid.to_vec(),
+            header_first_row: true,
+            rows: rows
+                .iter()
+                .map(|cells| TblRow {
+                    header: false,
+                    cells: cells
+                        .iter()
+                        .map(|text| TblCell {
+                            align: Align::Left,
+                            paras: vec![(*text).to_string()],
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn an_equal_grid_table_draws_pandocs_dashes() {
+        // Page width 9360 minus two 10-twip gaps: three 2631-twip columns
+        // floor(71 * 2631/9340) to 20 chars each.
+        let state = table_state(
+            &[Some(2631), Some(2631), Some(2631)],
+            &[vec!["a", "b", "c"], vec!["1", "2", "3"]],
+        );
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(
+            lines[0],
+            "  --------------------------------------------------------------"
+        );
+        assert_eq!(lines[1], "  a                    b                    c");
+        assert_eq!(
+            lines[2],
+            "  -------------------- -------------------- --------------------"
+        );
+        assert_eq!(lines[3], "  1                    2                    3");
+        assert_eq!(lines[4], "");
+        assert_eq!(
+            lines[5],
+            "  --------------------------------------------------------------"
+        );
+    }
+
+    #[test]
+    fn a_single_body_row_carries_a_trailing_blank_line() {
+        let state = table_state(
+            &[Some(3900), Some(3900)],
+            &[vec!["a", "b"], vec!["1", "2"]],
+        );
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[4], "", "blank between the one body row and the border");
+    }
+
+    #[test]
+    fn two_body_rows_separate_with_one_blank_line() {
+        let state = table_state(
+            &[Some(3900), Some(3900)],
+            &[vec!["a", "b"], vec!["1", "2"], vec!["3", "4"]],
+        );
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(lines.len(), 7);
+        assert_eq!(lines[4], "", "blank between the body rows");
+        assert!(lines[5].starts_with("  3"), "{:?}", lines[5]);
+    }
+
+    #[test]
+    fn a_wrapped_cell_pads_its_neighbors_to_the_column_edge() {
+        // doclayout's mergeBlocks: every line of a non-final block pads to
+        // the block width, including under an empty neighbor line.
+        let state = table_state(
+            &[Some(2631), Some(2631)],
+            &[vec!["aa", "text that wraps here"]],
+        );
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        // Columns floor to 19 (9350 = 9360 minus one 10-twip gap); the
+        // wrapped cell's second line keeps its trailing pad plus the
+        // separator space, because the last column still merges under it.
+        assert_eq!(lines[1], "  aa                  text that wraps");
+        // The last block merges nothing after it, so its continuation line
+        // carries no trailing pad: the gap spaces from the empty first
+        // column and separator, then the bare word.
+        assert_eq!(lines[2], "                      here");
+    }
+
+    #[test]
+    fn grid_columns_without_widths_fall_back_to_content() {
+        let state = table_state(&[None, None], &[vec!["name", "n"], vec!["abc", "12"]]);
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        // numChars: two plus the widest cell in the column.
+        assert_eq!(lines[1], "  name   n");
+        assert_eq!(lines[3], "  abc    12");
+    }
+
+    #[test]
+    fn cell_alignment_pads_inside_the_column() {
+        let mut state = table_state(
+            &[Some(2631), Some(2631), Some(2631)],
+            &[vec!["a", "b", "c"], vec!["left", "mid", "right"]],
+        );
+        // Alignment comes from the first body row's cells.
+        state.rows[1].cells[0].align = Align::Left;
+        state.rows[1].cells[1].align = Align::Center;
+        state.rows[1].cells[2].align = Align::Right;
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        // Widths floor to 20. "mid" centers at (20-3)/2 = 8 spaces into
+        // its column; "right" fills its column from the left with 15
+        // spaces; the merge pads each finished column to its edge.
+        assert_eq!(lines[3], "  left                         mid                         right");
+    }
+
+    #[test]
+    fn jc_maps_to_cell_alignment() {
+        assert_eq!(jc_to_align(Some("center")), Align::Center);
+        assert_eq!(jc_to_align(Some("right")), Align::Right);
+        assert_eq!(jc_to_align(Some("end")), Align::Right);
+        assert_eq!(jc_to_align(Some("left")), Align::Left);
+        assert_eq!(jc_to_align(None), Align::Left);
     }
 }
