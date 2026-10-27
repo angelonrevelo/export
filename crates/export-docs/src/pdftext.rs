@@ -82,6 +82,7 @@ fn layout_page(src: &mut Src, id: u32) -> Result<String> {
     let raw = Interpreter {
         src,
         fonts: &mut fonts,
+        resources: resources.clone(),
         chars: Vec::new(),
         ctm,
         ts: TextState::default(),
@@ -928,6 +929,9 @@ struct RawChar {
 struct Interpreter<'a, 'b> {
     src: &'b mut Src<'a>,
     fonts: &'b mut Fonts,
+    /// The current `/Resources`, for fonts and form XObjects; a form's own
+    /// Resources replace it while it runs, like pdfminer's push_state.
+    resources: Option<Obj>,
     chars: Vec<RawChar>,
     ctm: [f64; 6],
     ts: TextState,
@@ -938,7 +942,7 @@ struct Interpreter<'a, 'b> {
 }
 
 impl Interpreter<'_, '_> {
-    fn run(mut self, data: &[u8]) -> Result<Vec<RawChar>> {
+    fn run(&mut self, data: &[u8]) -> Result<Vec<RawChar>> {
         let mut i = 0;
         while let Some(tok) = next_token(data, &mut i) {
             match tok {
@@ -946,7 +950,7 @@ impl Interpreter<'_, '_> {
                 other => self.stack.push(other),
             }
         }
-        Ok(self.chars)
+        Ok(std::mem::take(&mut self.chars))
     }
 
     fn execute(&mut self, op: &str) -> Result<()> {
@@ -1078,6 +1082,19 @@ impl Interpreter<'_, '_> {
                     self.ts.wordspace = *v;
                 }
                 self.stack.clear();
+                Ok(())
+            }
+            "Do" => {
+                // A form XObject runs its own content stream with the
+                // form's matrix prepended and its own resources.
+                let name = match self.stack.last() {
+                    Some(Tok::Name(name)) => name.clone(),
+                    _ => String::new(),
+                };
+                self.stack.clear();
+                if !name.is_empty() {
+                    self.run_form(&name)?;
+                }
                 Ok(())
             }
             "Tz" => {
@@ -1213,6 +1230,81 @@ impl Interpreter<'_, '_> {
 }
 
 /// `q`/`Q` save the CTM and the whole text state, like the interpreter's
+impl Interpreter<'_, '_> {
+    /// Paint a form XObject: its content stream runs with the form's
+    /// `/Matrix` prepended to the CTM and its own `/Resources` in scope;
+    /// the whole text state is saved and restored around it, like
+    /// pdfminer's push_state around forms.
+    fn run_form(&mut self, name: &str) -> Result<()> {
+        let Some(xobj) = self
+            .resources
+            .as_ref()
+            .and_then(|res| res.dict_get("XObject"))
+            .and_then(|table| table.dict_get(name))
+            .and_then(|obj| deref(obj, self.src, 0))
+        else {
+            return Ok(());
+        };
+        let Obj::Stream { dict, data } = xobj else {
+            return Ok(());
+        };
+        let dict_obj = Obj::Dict(dict.clone());
+        if dict_obj.name_val("Subtype") != Some("Form") {
+            return Ok(());
+        }
+        let content = crate::pdf::decode_stream(&dict, &data)?;
+        let matrix = match dict_obj.dict_get("Matrix") {
+            Some(Obj::Arr(items)) if items.len() == 6 => {
+                let mut m = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+                for (i, item) in items.iter().enumerate() {
+                    m[i] = obj_int(item).unwrap_or(if i == 0 { 1 } else { 0 }) as f64;
+                }
+                m
+            }
+            _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        };
+        let saved_ctm = self.ctm;
+        let saved_ts = self.ts.clone();
+        let saved_resources = self.resources.clone();
+        let saved_stack = std::mem::take(&mut self.stack);
+        self.ctm = mult(&matrix, &self.ctm);
+        if let Some(res) = dict_obj.dict_get("Resources") {
+            self.resources = Some(res.clone());
+        }
+        // The form's fonts resolve against its own resources.
+        let mut form_fonts = Fonts::new();
+        if let Some(res) = &self.resources {
+            if let Some(font_root) = res.dict_get("Font") {
+                form_fonts.set_root(font_root.clone());
+            }
+        }
+        std::mem::swap(self.fonts, &mut form_fonts);
+        let mut nested = Interpreter {
+            src: self.src,
+            fonts: self.fonts,
+            resources: self.resources.clone(),
+            chars: std::mem::take(&mut self.chars),
+            ctm: self.ctm,
+            ts: self.ts.clone(),
+            stack: std::mem::take(&mut self.stack),
+            saved: std::mem::take(&mut self.saved),
+        };
+        nested.run(&content)?;
+        let out = nested.chars;
+        self.chars = out;
+        self.ctm = nested.ctm;
+        self.ts = nested.ts;
+        self.stack = nested.stack;
+        self.saved = nested.saved;
+        std::mem::swap(self.fonts, &mut form_fonts);
+        self.ctm = saved_ctm;
+        self.ts = saved_ts;
+        self.resources = saved_resources;
+        self.stack = saved_stack;
+        Ok(())
+    }
+}
+
 fn shift_line(ts: &mut TextState, tx: f64, ty: f64) {
     let [a, b, c, d, e, f] = ts.matrix;
     ts.matrix = [a, b, c, d, tx * a + ty * c + e, tx * b + ty * d + f];

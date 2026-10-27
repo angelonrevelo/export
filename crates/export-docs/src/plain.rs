@@ -202,6 +202,8 @@ struct TblState {
     grid: Vec<Option<u32>>,
     header_first_row: bool,
     rows: Vec<TblRow>,
+    /// A caption paragraph adjacent to the table.
+    caption: Option<String>,
 }
 
 /// One rendered block. Consecutive list items share one block joined by a
@@ -242,6 +244,13 @@ pub struct TextSink<'a, W> {
     in_sectpr: bool,
     /// pgSz w, pgMar left/right/gutter, in that order.
     sect_parts: [Option<u32>; 4],
+    /// `wp:docPr` descriptions of the drawings in the current paragraph.
+    para_images: Vec<String>,
+    /// A caption paragraph waiting for its figure: the text between the
+    /// brackets.
+    pending_caption: Option<String>,
+    /// A caption paragraph's lines, held while waiting for its figure.
+    held_caption_lines: Option<Vec<String>>,
 }
 
 impl<'a, W: Write> TextSink<'a, W> {
@@ -264,6 +273,9 @@ impl<'a, W: Write> TextSink<'a, W> {
             body_depth: 0,
             in_sectpr: false,
             sect_parts: [None; 4],
+            para_images: Vec::new(),
+            pending_caption: None,
+            held_caption_lines: None,
         }
     }
 
@@ -306,6 +318,7 @@ impl<'a, W: Write> TextSink<'a, W> {
         if lines.is_empty() {
             self.counters.clear();
             self.levels.clear();
+            self.flush_held_caption();
             return Ok(());
         }
         let is_list = matches!(&list, Some((num_id, _)) if self.numbering.is_list(*num_id));
@@ -317,11 +330,7 @@ impl<'a, W: Write> TextSink<'a, W> {
             if quote {
                 self.push_quote(&lines);
             } else {
-                let wrapped: Vec<String> = lines
-                    .iter()
-                    .flat_map(|line| wrap_text(line, WRAP_COLUMNS))
-                    .collect();
-                self.blocks.push(Block::Text(wrapped.join("\n")));
+                self.push_picture_or_text(&style, &lines);
             }
             return Ok(());
         }
@@ -426,6 +435,80 @@ impl<'a, W: Write> TextSink<'a, W> {
         (marker, width)
     }
 
+    /// A non-list paragraph: drawings carry `[descr]` markers inline; a
+    /// caption-styled paragraph pairs with an adjacent image-only paragraph
+    /// into a figure (`[caption]`), or with a table into the table's
+    /// caption line. Everything else is a wrapped text block.
+    fn push_picture_or_text(&mut self, style: &str, lines: &[String]) {
+        let caption_style = is_caption_style(style);
+        let text = lines.join("\n");
+        let image_only = !self.para_images.is_empty() && strip_markers(&text).is_empty();
+
+        // Caption paragraph: pair with the image before it or the table
+        // before it, hold for the figure or table after it, or fall through
+        // as text.
+        if caption_style && !image_only {
+            let has_text = !text.is_empty();
+            if has_text {
+                if let Some(Block::Text(prev)) = self.blocks.last_mut() {
+                    if is_image_block(prev) {
+                        // Figure: the image paragraph came first.
+                        *prev = format!("[{text}]");
+                        self.para_images.clear();
+                        return;
+                    }
+                }
+                if let Some(Block::Table(state)) = self.blocks.last_mut() {
+                    if state.caption.is_none() {
+                        // Table captions print below the table.
+                        state.caption = Some(text.clone());
+                        self.para_images.clear();
+                        return;
+                    }
+                }
+                // Nothing behind; hold for a figure or table ahead. Two
+                // captions in a row flush the first one as text.
+                self.flush_held_caption();
+                self.pending_caption = Some(text.clone());
+                self.held_caption_lines = Some(lines.to_vec());
+                return;
+            }
+        }
+        // An image-only paragraph: a held caption turns it into a figure;
+        // otherwise the markers stand alone.
+        if image_only {
+            if let Some(caption) = self.pending_caption.take() {
+                self.held_caption_lines = None;
+                self.blocks.push(Block::Text(format!("[{caption}]")));
+                self.para_images.clear();
+                return;
+            }
+        }
+        // A plain paragraph with a caption still pending: the caption never
+        // found an image or table, so emit it first.
+        self.flush_held_caption();
+        let wrapped: Vec<String> = lines
+            .iter()
+            .flat_map(|line| wrap_text(line, WRAP_COLUMNS))
+            .collect();
+        self.blocks.push(Block::Text(wrapped.join("\n")));
+        self.para_images.clear();
+    }
+
+    /// A held caption paragraph waits for its figure or table; anything
+    /// else that arrives means the pairing failed and the caption prints
+    /// as an ordinary paragraph.
+    fn flush_held_caption(&mut self) {
+        if let Some(lines) = self.held_caption_lines.take() {
+            let wrapped: Vec<String> = lines
+                .iter()
+                .flat_map(|line| wrap_text(line, WRAP_COLUMNS))
+                .collect();
+            self.blocks.push(Block::Text(wrapped.join("\n")));
+            self.pending_caption = None;
+        }
+    }
+
     /// Consecutive quote paragraphs are one blockquote: paragraphs inside
     /// it are separated by a blank line, every line indented two spaces.
     fn push_quote(&mut self, lines: &[String]) {
@@ -466,6 +549,41 @@ impl<'a, W: Write> TextSink<'a, W> {
         }
         self.write(out.as_bytes())
     }
+}
+
+/// Caption style names pdfminer... rather, pandoc's reader accepts:
+/// "caption", "table caption", "image caption", case-insensitive; style
+/// ids squeeze the spaces out.
+fn is_caption_style(style: &str) -> bool {
+    let squeezed: String = style
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    matches!(squeezed.as_str(), "caption" | "imagecaption" | "tablecaption")
+}
+
+/// A block of only `[...]` image markers.
+fn is_image_block(block: &str) -> bool {
+    !block.is_empty() && strip_markers(block).is_empty()
+}
+
+/// Remove balanced `[...]` groups, the way a paragraph of only image
+/// markers reads as empty.
+fn strip_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut depth = 0usize;
+    for ch in text.chars() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth = depth.saturating_sub(1);
+            }
+            other if depth == 0 => out.push(other),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
 }
 
 /// Pandoc's plain writer collapses whitespace runs to one space.
@@ -682,6 +800,14 @@ fn render_table(state: &TblState, text_width: Option<u32>) -> Option<String> {
     } else {
         lines.push(border);
     }
+    // A caption prints below the table, blank line between, nested like
+    // the table itself.
+    if let Some(caption) = &state.caption {
+        lines.push(String::new());
+        for piece in wrap_text(caption, WRAP_COLUMNS - 4) {
+            lines.push(format!(": {piece}"));
+        }
+    }
     // Nest two; empty lines stay empty, the way the renderer prefixes.
     Some(
         lines
@@ -784,6 +910,20 @@ impl<W: Write> XmlSink for TextSink<'_, W> {
             self.skip += 1;
             return Ok(());
         }
+        // A drawing's properties carry its alt text; the marker lands in
+        // the paragraph where the drawing sits. The prefix is wp, outside
+        // the w: gate below.
+        if std::env::var("FIG_DEBUG").is_ok() && name.contains("docPr") {
+            eprintln!("docPr seen: {name}");
+        }
+        if name.ends_with(":docPr") || name == "docPr" {
+            let descr = xml_attr(attrs, "descr").unwrap_or("");
+            self.para.push('[');
+            self.para.push_str(descr);
+            self.para.push(']');
+            self.para_images.push(descr.to_string());
+            return Ok(());
+        }
         let Some(loc) = crate::docx::word_local(name) else {
             return Ok(());
         };
@@ -794,6 +934,7 @@ impl<W: Write> XmlSink for TextSink<'_, W> {
                 self.style.clear();
                 self.list = None;
                 self.para_jc = None;
+                self.para_images.clear();
             }
             "pStyle" => {
                 if let Some(v) = xml_attr(attrs, "val") {
@@ -837,7 +978,17 @@ impl<W: Write> XmlSink for TextSink<'_, W> {
                 }
             }
             "tbl" => {
-                self.tables.push(TblState::default());
+                let mut state = TblState::default();
+                if let Some(caption) = self.pending_caption.take() {
+                    state.caption = Some(caption);
+                    self.held_caption_lines = None;
+                } else if self.pending_caption.is_some() {
+                    // A caption paragraph waiting for a figure; a table
+                    // takes it instead.
+                    state.caption = self.pending_caption.take();
+                    self.held_caption_lines = None;
+                }
+                self.tables.push(state);
             }
             "tblGrid" => {
                 if let Some(state) = self.tables.last_mut() {
@@ -1046,6 +1197,7 @@ mod tests {
         TblState {
             grid: grid.to_vec(),
             header_first_row: true,
+            caption: None,
             rows: rows
                 .iter()
                 .map(|cells| TblRow {
@@ -1169,5 +1321,83 @@ mod tests {
         assert_eq!(jc_to_align(Some("end")), Align::Right);
         assert_eq!(jc_to_align(Some("left")), Align::Left);
         assert_eq!(jc_to_align(None), Align::Left);
+    }
+
+    #[test]
+    fn image_markers_stand_where_the_drawing_sat() {
+        let mut out = Vec::new();
+        {
+            let mut sink = TextSink::new(&mut out, Numbering::default());
+            sink.start("w:p", &[]).unwrap();
+            sink.start("w:t", &[]).unwrap();
+            sink.text("Before the picture ").unwrap();
+            sink.end("w:t").unwrap();
+        sink.start(
+            "wp:docPr",
+            &[Attr {
+                name: "descr".into(),
+                value: "red square".into(),
+            }],
+        )
+        .unwrap();
+        sink.end("wp:docPr").unwrap();
+            sink.end("w:t").unwrap();
+            sink.start("w:t", &[]).unwrap();
+            sink.text(" and more.").unwrap();
+            sink.end("w:t").unwrap();
+            sink.end("w:p").unwrap();
+            sink.finish_document().unwrap();
+        }
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.trim(), "Before the picture [red square] and more.");
+    }
+
+    #[test]
+    fn a_caption_paragraph_pairs_with_the_image_before_it() {
+        let mut out = Vec::new();
+        {
+            let mut sink = TextSink::new(&mut out, Numbering::default());
+            sink.start("w:p", &[]).unwrap();
+            sink.start(
+                "wp:docPr",
+                &[Attr {
+                    name: "descr".into(),
+                    value: "".into(),
+                }],
+            )
+            .unwrap();
+            sink.end("wp:docPr").unwrap();
+            sink.end("w:p").unwrap();
+            sink.start("w:p", &[]).unwrap();
+            sink.start(
+                "w:pStyle",
+                &[Attr {
+                    name: "val".into(),
+                    value: "ImageCaption".into(),
+                }],
+            )
+            .unwrap();
+            sink.start("w:t", &[]).unwrap();
+            sink.text("The caption text").unwrap();
+            sink.end("w:t").unwrap();
+            sink.end("w:p").unwrap();
+            sink.finish_document().unwrap();
+        }
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.trim(), "[The caption text]");
+    }
+
+    #[test]
+    fn a_table_caption_prints_below_the_grid() {
+        let state = table_state(
+            &[Some(2631), Some(2631)],
+            &[vec!["a", "b"], vec!["1", "2"]],
+        );
+        let mut state = state;
+        state.caption = Some("The table caption.".into());
+        let out = render_table(&state, Some(9360)).unwrap();
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(lines[lines.len() - 2], "");
+        assert_eq!(lines[lines.len() - 1], "  : The table caption.");
     }
 }
