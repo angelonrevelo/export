@@ -46,6 +46,23 @@ fn convert_ooxml<R: Read + Seek, W: Write>(
     if index.by_name(part).is_none() {
         return Err(Error::new(format!("docx: missing {part}")));
     }
+    // The numbering part decides list markers, so it is read before the
+    // document entry takes the reader.
+    let numbering = if !html && matches!(kind, Kind::Docx) {
+        match index.by_name("word/numbering.xml") {
+            Some(_) => {
+                let mut entry = zip::open_entry(src, &index, "word/numbering.xml")?;
+                let mut bytes = Vec::new();
+                entry
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| Error::new(format!("docx: {e}")))?;
+                crate::plain::parse_numbering(&bytes)
+            }
+            None => crate::plain::Numbering::default(),
+        }
+    } else {
+        crate::plain::Numbering::default()
+    };
     let mut reader = zip::open_entry(src, &index, part)?;
     let zip_scratch = reader.scratch_peak();
     let mut out = CountWrite::new(out);
@@ -53,7 +70,12 @@ fn convert_ooxml<R: Read + Seek, W: Write>(
         out.write_all(b"<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"></head><body>\n")
             .map_err(|e| Error::new(e.to_string()))?;
     }
-    let stats = {
+    let stats = if !html && matches!(kind, Kind::Docx) {
+        let mut sink = crate::plain::TextSink::new(&mut out, numbering);
+        let stats = xml::pull(&mut reader, &mut sink)?;
+        sink.finish_document()?;
+        stats
+    } else {
         let mut sink = Sink {
         out: &mut out,
         html,
@@ -378,7 +400,7 @@ impl<W: Write> Sink<'_, W> {
     }
 }
 
-fn word_local(name: &str) -> Option<&str> {
+pub(crate) fn word_local(name: &str) -> Option<&str> {
     prefixed(name, "w", "wordprocessingml/2006/main")
 }
 

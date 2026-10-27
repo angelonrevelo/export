@@ -11,7 +11,7 @@ const PAGE_H: i64 = 792;
 const MARGIN: f32 = 54.0;
 
 #[derive(Clone, Debug)]
-enum Obj {
+pub(crate) enum Obj {
     Null,
     Bool(bool),
     Int(i64),
@@ -25,18 +25,18 @@ enum Obj {
 }
 
 impl Obj {
-    fn dict_get(&self, key: &str) -> Option<&Obj> {
+    pub(crate) fn dict_get(&self, key: &str) -> Option<&Obj> {
         items(self)?.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    fn name_val(&self, key: &str) -> Option<&str> {
+    pub(crate) fn name_val(&self, key: &str) -> Option<&str> {
         match self.dict_get(key)? {
             Obj::Name(n) => Some(n.as_str()),
             _ => None,
         }
     }
 
-    fn int_val(&self, key: &str) -> Option<i64> {
+    pub(crate) fn int_val(&self, key: &str) -> Option<i64> {
         match self.dict_get(key)? {
             Obj::Int(n) => Some(*n),
             _ => None,
@@ -75,14 +75,25 @@ fn items_mut(obj: &mut Obj) -> Option<&mut Vec<(String, Obj)>> {
     }
 }
 
-struct Src<'a> {
+/// One xref row: a file offset, a compressed object inside an object
+/// stream, or a free slot.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum XrefEntry {
+    Free,
+    Offset(u64),
+    InStream { objstm: u32, index: u32 },
+}
+
+pub(crate) struct Src<'a> {
     data: &'a [u8],
-    xref: Vec<Option<u64>>,
+    xref: Vec<Option<XrefEntry>>,
     cache: HashMap<u32, Obj>,
+    /// Decompressed object streams, keyed by their object number.
+    objstms: HashMap<u32, HashMap<u32, Obj>>,
 }
 
 impl<'a> Src<'a> {
-    fn open(data: &'a [u8]) -> Result<Self> {
+    pub(crate) fn open(data: &'a [u8]) -> Result<Self> {
         if !data.starts_with(b"%PDF-") {
             return Err(Error::new("pdf: missing %PDF- header"));
         }
@@ -107,6 +118,7 @@ impl<'a> Src<'a> {
             data,
             xref,
             cache: HashMap::new(),
+            objstms: HashMap::new(),
         })
     }
 
@@ -120,19 +132,88 @@ impl<'a> Src<'a> {
         }
     }
 
-    fn load(&mut self, id: u32) -> Result<Obj> {
+    pub(crate) fn load(&mut self, id: u32) -> Result<Obj> {
         if let Some(obj) = self.cache.get(&id) {
             return Ok(obj.clone());
         }
-        let off = self
+        let entry = self
             .xref
             .get(id as usize)
-            .copied()
+            .cloned()
             .flatten()
             .ok_or_else(|| Error::new(format!("pdf: missing object {id}")))?;
-        let obj = self.load_at(off, 0)?;
+        let obj = match entry {
+            XrefEntry::Offset(off) => self.load_at(off, 0)?,
+            XrefEntry::InStream { objstm, index } => self.load_from_objstm(objstm, index)?,
+            XrefEntry::Free => {
+                return Err(Error::new(format!("pdf: object {id} is free")))
+            }
+        };
         self.cache.insert(id, obj.clone());
         Ok(obj)
+    }
+
+    /// An object carried inside a `/Type /ObjStm` stream: the stream holds
+    /// `N` pairs of (object number, offset), then the objects themselves
+    /// from `/First`.
+    fn load_from_objstm(&mut self, objstm: u32, index: u32) -> Result<Obj> {
+        if let Some(objects) = self.objstms.get(&objstm) {
+            return objects
+                .get(&index)
+                .cloned()
+                .ok_or_else(|| Error::new(format!("pdf: object stream {objstm} has no object {index}")));
+        }
+        let off = self
+            .xref
+            .get(objstm as usize)
+            .cloned()
+            .flatten()
+            .and_then(|e| match e {
+                XrefEntry::Offset(off) => Some(off),
+                _ => None,
+            })
+            .ok_or_else(|| Error::new(format!("pdf: missing object stream {objstm}")))?;
+        let Obj::Stream { dict, data } = self.load_at(off, 0)? else {
+            return Err(Error::new(format!("pdf: object stream {objstm} is not a stream")));
+        };
+        let decoded = decode_stream(&dict, &data)?;
+        let n = dict
+            .iter()
+            .find(|(k, _)| k == "N")
+            .and_then(|(_, v)| match v {
+                Obj::Int(n) => Some(*n as usize),
+                _ => None,
+            })
+            .ok_or_else(|| Error::new("pdf: object stream missing N"))?;
+        let first = dict
+            .iter()
+            .find(|(k, _)| k == "First")
+            .and_then(|(_, v)| match v {
+                Obj::Int(n) => Some(*n as usize),
+                _ => None,
+            })
+            .ok_or_else(|| Error::new("pdf: object stream missing First"))?;
+        let mut p = Cur::new(&decoded, 0);
+        let mut objects = HashMap::new();
+        for _ in 0..n {
+            p.skip();
+            let num = p.parse_int()?;
+            p.skip();
+            let rel = p.parse_int()?;
+            let at = first + rel as usize;
+            if at >= decoded.len() {
+                return Err(Error::new("pdf: object stream offset past end"));
+            }
+            let mut inner = Cur::new(&decoded, at);
+            let obj = inner.parse_value()?;
+            objects.insert(num as u32, obj);
+        }
+        self.objstms.insert(objstm, objects);
+        self.objstms
+            .get(&objstm)
+            .and_then(|objects| objects.get(&index))
+            .cloned()
+            .ok_or_else(|| Error::new(format!("pdf: object stream {objstm} has no object {index}")))
     }
 
     fn load_at(&mut self, offset: u64, depth: u32) -> Result<Obj> {
@@ -170,7 +251,7 @@ impl<'a> Src<'a> {
         }
     }
 
-    fn page_ids(&mut self) -> Result<Vec<u32>> {
+    pub(crate) fn page_ids(&mut self) -> Result<Vec<u32>> {
         let root = self.root_id()?;
         let catalog = self.load(root)?;
         let pages = match catalog.dict_get("Pages") {
@@ -242,7 +323,7 @@ impl<'a> Src<'a> {
         })
     }
 
-    fn inherit(&mut self, page_id: u32, key: &str) -> Result<Option<Obj>> {
+    pub(crate) fn inherit(&mut self, page_id: u32, key: &str) -> Result<Option<Obj>> {
         let page = self.load(page_id)?;
         let Some(Obj::Ref(mut id)) = page.dict_get("Parent").cloned() else {
             return Ok(None);
@@ -260,7 +341,7 @@ impl<'a> Src<'a> {
         Ok(None)
     }
 
-    fn stream_bytes(&mut self, obj: &Obj) -> Result<Vec<u8>> {
+    pub(crate) fn stream_bytes(&mut self, obj: &Obj) -> Result<Vec<u8>> {
         match obj {
             Obj::Ref(id) => {
                 let loaded = self.load(*id)?;
@@ -301,13 +382,115 @@ fn stream_len(src: &mut Src, dict: &[(String, Obj)], depth: u32) -> Result<usize
     Ok(n)
 }
 
-fn decode_stream(dict: &[(String, Obj)], data: &[u8]) -> Result<Vec<u8>> {
+fn obj_int(obj: &Obj) -> Option<i64> {
+    match obj {
+        Obj::Int(n) => Some(*n),
+        Obj::Real(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+pub(crate) fn decode_stream(dict: &[(String, Obj)], data: &[u8]) -> Result<Vec<u8>> {
     let filter = dict.iter().find(|(k, _)| k == "Filter").map(|(_, v)| v);
-    match filter {
-        None => Ok(data.to_vec()),
-        Some(Obj::Name(n)) if n == "FlateDecode" => inflate_vec(data),
-        Some(Obj::Arr(a)) if a.len() == 1 => decode_stream(&[("Filter".into(), a[0].clone())], data),
-        Some(_) => Err(Error::new("pdf: unsupported stream filter")),
+    let parms = dict.iter().find(|(k, _)| k == "DecodeParms").map(|(_, v)| v);
+    match (filter, parms) {
+        (Some(Obj::Name(n)), _) if n == "FlateDecode" => {
+            let inflated = inflate_zlib(data)?;
+            apply_decode_parms(parms, inflated)
+        }
+        (Some(Obj::Arr(a)), _) if a.len() == 1 => {
+            decode_stream(&[("Filter".into(), a[0].clone()), ("DecodeParms".into(), parms.cloned().unwrap_or(Obj::Null))], data)
+        }
+        (None, _) => Ok(data.to_vec()),
+        (Some(_), _) => Err(Error::new("pdf: unsupported stream filter")),
+    }
+}
+
+/// PNG predictors (10-15) un-filter each row; a bare Predictor number or a
+/// `Colors BitsPerComponent Columns` triple covers the TIFF-style ones used
+/// by xref streams.
+fn apply_decode_parms(parms: Option<&Obj>, data: Vec<u8>) -> Result<Vec<u8>> {
+    // One dict, or the first of an array aligned with the filter array.
+    let dict = match parms {
+        Some(d @ Obj::Dict(_)) => Some(d),
+        Some(Obj::Arr(items)) => items.first(),
+        _ => None,
+    };
+    let Some(Obj::Dict(items)) = dict else {
+        return Ok(data);
+    };
+    let field = |name: &str| -> Option<i64> {
+        items
+            .iter()
+            .find(|(k, _)| k == name)
+            .and_then(|(_, v)| obj_int(v))
+    };
+    let predictor = field("Predictor").unwrap_or(1);
+    if !(10..=15).contains(&predictor) {
+        return Ok(data);
+    }
+    let columns = field("Columns").unwrap_or(1).max(1) as usize;
+    png_unfilter(data, columns)
+}
+
+/// The per-row filter byte selects None(0), Sub(1), Up(2), Average(3), or
+/// Paeth(4); rows are `columns` bytes wide after the filter byte.
+fn png_unfilter(data: Vec<u8>, columns: usize) -> Result<Vec<u8>> {
+    let stride = columns + 1;
+    if stride == 0 || data.is_empty() {
+        return Ok(data);
+    }
+    let rows = data.len() / stride;
+    let mut out = vec![0u8; rows * columns];
+    let mut prev = vec![0u8; columns];
+    for row in 0..rows {
+        let src = &data[row * stride..(row + 1) * stride];
+        let filter = src[0];
+        let line = &src[1..];
+        let base = row * columns;
+        for (i, byte) in line.iter().enumerate() {
+            let left = if i >= columns { out[base + i - columns] } else { 0 };
+            let up = prev[i];
+            let up_left = if i >= columns { prev[i - columns] } else { 0 };
+            let value = match filter {
+                0 => *byte,
+                1 => byte.wrapping_add(left),
+                2 => byte.wrapping_add(up),
+                3 => byte.wrapping_add(((u16::from(left) + u16::from(up)) / 2) as u8),
+                4 => {
+                    let p = i16::from(left) + i16::from(up) - i16::from(up_left);
+                    let pa = p.abs();
+                    let pb = (p - i16::from(left)).abs();
+                    let pc = (p - i16::from(up)).abs();
+                    let guess = if pa <= pb && pa <= pc {
+                        left
+                    } else if pb <= pc {
+                        up
+                    } else {
+                        up_left
+                    };
+                    byte.wrapping_add(guess)
+                }
+                _ => *byte,
+            };
+            out[base + i] = value;
+        }
+        prev.copy_from_slice(&out[base..base + columns]);
+    }
+    Ok(out)
+}
+
+/// FlateDecode wraps the deflate stream in the two-byte zlib header (and
+/// trails an Adler-32 the inflater never reaches). Real files always carry
+/// it; the crate's own fixtures are raw.
+fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>> {
+    if data.len() >= 2
+        && data[0] & 0x0f == 8
+        && (u16::from(data[0]) * 256 + u16::from(data[1])) % 31 == 0
+    {
+        inflate_vec(&data[2..])
+    } else {
+        inflate_vec(data)
     }
 }
 
@@ -411,22 +594,26 @@ pub fn page_count(data: &[u8]) -> Result<usize> {
 }
 
 pub fn plain_text(data: &[u8]) -> Result<String> {
+    Ok(plain_text_pages(data)?.join("\n"))
+}
+
+/// The literal strings of each page's content stream, one entry per page in
+/// page order. A page without contents is an empty string, so callers can
+/// shape per-page output the way the Python app does.
+pub fn plain_text_pages(data: &[u8]) -> Result<Vec<String>> {
     let mut src = Src::open(data)?;
     let ids = src.page_ids()?;
-    let mut out = String::new();
+    let mut pages = Vec::with_capacity(ids.len());
     for id in ids {
         let page = src.load(id)?;
         let Some(contents) = page.dict_get("Contents").cloned() else {
+            pages.push(String::new());
             continue;
         };
         let bytes = src.stream_bytes(&contents)?;
-        let text = content_strings(&bytes);
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&text);
+        pages.push(content_strings(&bytes));
     }
-    Ok(out)
+    Ok(pages)
 }
 
 pub fn split(data: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -624,7 +811,7 @@ where
     let mut replaced = 0usize;
     let mut earliest = data.len();
     for (id, slot) in pieces.iter_mut().enumerate().skip(1) {
-        let Some(off) = src.xref[id] else {
+        let Some(XrefEntry::Offset(off)) = src.xref[id] else {
             continue;
         };
         earliest = earliest.min(off as usize);
@@ -1841,11 +2028,23 @@ fn read_trailer_only(data: &[u8], at: u64) -> Result<Obj> {
     }
 }
 
-fn read_xref(data: &[u8], at: u64, xref: &mut Vec<Option<u64>>, fill: bool) -> Result<u64> {
+fn read_xref(
+    data: &[u8],
+    at: u64,
+    xref: &mut Vec<Option<XrefEntry>>,
+    fill: bool,
+) -> Result<u64> {
     let mut p = Cur::new(data, at as usize);
     p.skip();
     if !p.keyword("xref") {
-        return Err(Error::new("pdf: xref stream is not supported"));
+        // A PDF 1.5 cross-reference stream: an object whose stream holds
+        // the entries and whose dictionary is the trailer.
+        let (entries, trailer) = read_xref_stream(data, at)?;
+        apply_xref_entries(xref, entries, fill);
+        return Ok(match trailer.dict_get("Prev") {
+            Some(Obj::Int(n)) if *n > 0 => *n as u64,
+            _ => 0,
+        });
     }
     loop {
         p.skip();
@@ -1877,7 +2076,7 @@ fn read_xref(data: &[u8], at: u64, xref: &mut Vec<Option<u64>>, fill: bool) -> R
                 xref.resize(id + 1, None);
             }
             if fill && xref[id].is_none() && used && off >= 0 {
-                xref[id] = Some(off as u64);
+                xref[id] = Some(XrefEntry::Offset(off as u64));
             }
         }
     }
@@ -1885,11 +2084,162 @@ fn read_xref(data: &[u8], at: u64, xref: &mut Vec<Option<u64>>, fill: bool) -> R
         return Err(Error::new("pdf: missing trailer"));
     }
     let trailer = p.parse_value()?;
+    // Hybrid files: the classic table points at compressed objects through
+    // a companion stream whose entries override the free rows.
+    if let Some(Obj::Int(stm)) = trailer.dict_get("XRefStm") {
+        if *stm > 0 {
+            let (entries, _) = read_xref_stream(data, *stm as u64)?;
+            apply_xref_entries(xref, entries, fill);
+        }
+    }
     Ok(match trailer.dict_get("Prev") {
         Some(Obj::Int(n)) if *n > 0 => *n as u64,
         _ => 0,
     })
 }
+
+/// Fold parsed rows into the table; later passes fill gaps and let real
+/// entries override free ones.
+fn apply_xref_entries(
+    xref: &mut Vec<Option<XrefEntry>>,
+    entries: Vec<(usize, XrefEntry)>,
+    fill: bool,
+) {
+    for (id, entry) in entries {
+        if xref.len() <= id {
+            xref.resize(id + 1, None);
+        }
+        let replace = matches!(
+            (&xref[id], &entry),
+            (None, XrefEntry::Offset(_) | XrefEntry::InStream { .. })
+                | (Some(XrefEntry::Free), XrefEntry::Offset(_) | XrefEntry::InStream { .. })
+        );
+        if fill && replace {
+            xref[id] = Some(entry);
+        }
+    }
+}
+
+/// Parse one cross-reference stream object: its dictionary is the trailer
+/// and its decoded rows describe the objects.
+fn read_xref_stream(
+    data: &[u8],
+    at: u64,
+) -> Result<(Vec<(usize, XrefEntry)>, Obj)> {
+    let mut p = Cur::new(data, at as usize);
+    p.skip();
+    let _id = p.parse_int()?;
+    let _gen = p.parse_int()?;
+    if !p.keyword("obj") {
+        return Err(Error::new("pdf: xref stream is not an object"));
+    }
+    let dict = p.parse_value()?;
+    p.skip();
+    if !p.keyword("stream") {
+        return Err(Error::new("pdf: xref stream has no stream"));
+    }
+    let Obj::Dict(fields) = &dict else {
+        return Err(Error::new("pdf: xref stream has no dictionary"));
+    };
+    let len = match fields.iter().find(|(k, _)| k == "Length").map(|(_, v)| v) {
+        Some(Obj::Int(n)) if *n >= 0 => *n as usize,
+        _ => {
+            // Fall back to scanning for endstream.
+            let rest = &data[p.i..];
+            let end = rest
+                .windows(9)
+                .position(|w| w == b"endstream")
+                .ok_or_else(|| Error::new("pdf: xref stream has no end"))?;
+            end
+        }
+    };
+    p.bump(13);
+    p.bump(10);
+    if p.i + len > data.len() {
+        return Err(Error::new("pdf: xref stream length past end"));
+    }
+    let raw = &data[p.i..p.i + len];
+    let decoded = decode_stream(fields, raw)?;
+
+    let width = |name: &str| -> usize {
+        fields
+            .iter()
+            .find(|(k, _)| k == name)
+            .and_then(|(_, v)| match v {
+                Obj::Arr(items) => items.first().and_then(obj_int).map(|n| n as usize),
+                _ => None,
+            })
+            .unwrap_or(0)
+    };
+    let w1 = width("W0Clause");
+    let _ = w1;
+    let ws = match fields.iter().find(|(k, _)| k == "W").map(|(_, v)| v) {
+        Some(Obj::Arr(items)) => {
+            let mut out = [0usize; 3];
+            for (i, item) in items.iter().take(3).enumerate() {
+                out[i] = obj_int(item).unwrap_or(0) as usize;
+            }
+            out
+        }
+        _ => return Err(Error::new("pdf: xref stream missing W")),
+    };
+    let row_len: usize = ws.iter().sum();
+    if row_len == 0 {
+        return Err(Error::new("pdf: xref stream has empty rows"));
+    }
+    let size = fields.iter().find(|(k, _)| k == "Size").and_then(|(_, v)| match v {
+        Obj::Int(n) => Some(*n as usize),
+        _ => None,
+    });
+    let index: Vec<(usize, usize)> =
+        match fields.iter().find(|(k, _)| k == "Index").map(|(_, v)| v) {
+            Some(Obj::Arr(items)) => {
+                let nums: Vec<usize> = items.iter().filter_map(obj_int).map(|n| n as usize).collect();
+                nums.chunks(2)
+                    .filter(|pair| pair.len() == 2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .collect()
+            }
+            _ => match size {
+                Some(size) => vec![(0, size)],
+                None => return Err(Error::new("pdf: xref stream missing Index and Size")),
+            },
+        };
+    let mut entries = Vec::new();
+    let mut row = 0usize;
+    for (start, count) in index {
+        for n in 0..count {
+            let at = row * row_len;
+            if at + row_len > decoded.len() {
+                break;
+            }
+            let mut pos = 0usize;
+            let mut read_field = |width: usize| -> u64 {
+                let mut v = 0u64;
+                for b in &decoded[at + pos..at + pos + width] {
+                    v = (v << 8) | u64::from(*b);
+                }
+                pos += width;
+                v
+            };
+            let kind = if ws[0] == 0 { 1 } else { read_field(ws[0]) as usize };
+            let f2 = read_field(ws[1]);
+            let f3 = read_field(ws[2]);
+            let entry = match kind {
+                0 => XrefEntry::Free,
+                1 => XrefEntry::Offset(f2),
+                _ => XrefEntry::InStream {
+                    objstm: f2 as u32,
+                    index: f3 as u32,
+                },
+            };
+            entries.push((start + n, entry));
+            row += 1;
+        }
+    }
+    Ok((entries, dict.clone()))
+}
+
 
 struct Cur<'a> {
     data: &'a [u8],

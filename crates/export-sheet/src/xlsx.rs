@@ -5,10 +5,17 @@
 //! inflates method 8 with the decoder tested against known streams. Anything
 //! else refuses the file.
 //!
-//! Only the first sheet is read. A cell whose text is a plain number is
-//! written as a number, in the same characters, not through a float. Every
-//! other non-empty cell is a shared string. Empty cells are written so a
-//! trailing blank field survives.
+//! The reader takes the workbook's active sheet (the first one when the
+//! workbook names no active tab). When the sheet declares a `<dimension>`
+//! rectangle, rows and cells are padded or dropped to that rectangle; without
+//! one, rows come back exactly as stored. A numeric cell whose style carries
+//! a date number format becomes an ISO date or time, matching what a
+//! spreadsheet reader hands a text writer: serials under one day are times,
+//! the 1900 leap-year serials 1-59 shift by one day, and the epoch is
+//! 1899-12-30 (1904-01-01 when the workbook declares `date1904`). Booleans
+//! become `True` and `False`. Numbers without a decimal point or exponent
+//! keep their literal digits; other numbers are re-printed with the shortest
+//! digits that round-trip, which is what a float repr prints.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -284,14 +291,167 @@ fn read_first_sheet(bytes: &[u8]) -> Result<(Vec<Vec<String>>, u64)> {
     let (parts, lossy) = zip::unzip(bytes)?;
     let workbook = part(&parts, "xl/workbook.xml")?;
     let rels = part(&parts, "xl/_rels/workbook.xml.rels")?;
-    let sheet_rid = first_sheet_rid(workbook)?;
+    let sheet_rid = active_sheet_rid(workbook)?;
     let sheet_path = sheet_target(rels, &sheet_rid)?;
     let strings = match part_opt(&parts, "xl/sharedStrings.xml") {
         Some(bytes) => parse_shared_strings(bytes)?,
         None => Vec::new(),
     };
-    let rows = parse_sheet(part(&parts, &sheet_path)?, &strings)?;
+    let styles = match part_opt(&parts, "xl/styles.xml") {
+        Some(bytes) => parse_styles(bytes)?,
+        None => Styles::default(),
+    };
+    let ctx = SheetCtx {
+        strings,
+        styles,
+        date1904: workbook_is_date1904(workbook)?,
+    };
+    let rows = parse_sheet(part(&parts, &sheet_path)?, &ctx)?;
     Ok((rows, lossy))
+}
+
+/// Which `<sheet>` the workbook's `activeTab` names; the first one by default.
+fn active_sheet_rid(workbook: &[u8]) -> Result<String> {
+    let mut pull = Pull::new(workbook);
+    let mut text = String::new();
+    let mut attrs = Vec::new();
+    let mut active_tab: u32 = 0;
+    let mut sheets: Vec<String> = Vec::new();
+    while let Some(ev) = pull.next(&mut text, &mut attrs)? {
+        if !matches!(ev, Ev::Open | Ev::Empty) {
+            continue;
+        }
+        match pull.local() {
+            "workbookView" => {
+                if let Some(tab) = xml::attr(&attrs, "activeTab").and_then(|s| s.parse().ok()) {
+                    active_tab = tab;
+                }
+            }
+            "sheet" => {
+                let id = xml::attr(&attrs, "id")
+                    .ok_or_else(|| Error::new("xlsx sheet has no relationship id"))?;
+                sheets.push(id.to_string());
+            }
+            _ => {}
+        }
+    }
+    if sheets.is_empty() {
+        return Err(Error::new("xlsx workbook has no sheet"));
+    }
+    let index = (active_tab as usize).min(sheets.len() - 1);
+    Ok(std::mem::take(&mut sheets[index]))
+}
+
+/// `<workbookPr date1904="1"/>`: the 1904 date system instead of 1900.
+fn workbook_is_date1904(workbook: &[u8]) -> Result<bool> {
+    let mut pull = Pull::new(workbook);
+    let mut text = String::new();
+    let mut attrs = Vec::new();
+    while let Some(ev) = pull.next(&mut text, &mut attrs)? {
+        if matches!(ev, Ev::Open | Ev::Empty) && pull.local() == "workbookPr" {
+            return Ok(matches!(
+                xml::attr(&attrs, "date1904").unwrap_or(""),
+                "1" | "true" | "TRUE" | "True"
+            ));
+        }
+    }
+    Ok(false)
+}
+
+/// Number formats declared by the workbook, and the format id of every cell style.
+#[derive(Default)]
+struct Styles {
+    /// numFmtId of each `cellXfs` entry, in order.
+    xfs: Vec<u32>,
+    /// Custom `numFmt` codes by id (builtins 14-22 and 45-47 are dates).
+    custom: HashMap<u32, String>,
+}
+
+fn parse_styles(xml: &[u8]) -> Result<Styles> {
+    let mut pull = Pull::new(xml);
+    let mut text = String::new();
+    let mut attrs = Vec::new();
+    let mut styles = Styles::default();
+    let mut in_cell_xfs = false;
+    while let Some(ev) = pull.next(&mut text, &mut attrs)? {
+        match ev {
+            Ev::Open | Ev::Empty => match pull.local() {
+                "numFmt" => {
+                    if let (Some(id), Some(code)) = (
+                        xml::attr(&attrs, "numFmtId").and_then(|s| s.parse().ok()),
+                        xml::attr(&attrs, "formatCode"),
+                    ) {
+                        styles.custom.insert(id, code.to_string());
+                    }
+                }
+                "cellXfs" => in_cell_xfs = ev == Ev::Open,
+                "xf" if in_cell_xfs => {
+                    let id = xml::attr(&attrs, "numFmtId")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    styles.xfs.push(id);
+                }
+                _ => {}
+            },
+            Ev::Close if pull.local() == "cellXfs" => in_cell_xfs = false,
+            _ => {}
+        }
+    }
+    Ok(styles)
+}
+
+/// The builtin ids whose format code is a date or time.
+fn builtin_is_date(id: u32) -> bool {
+    matches!(id, 14..=22 | 45..=47)
+}
+
+/// openpyxl's `is_date_format`: first `;` section, quoted literals and
+/// non-time bracket conditions stripped, then a date/time letter that is not
+/// escaped by `_` or `\`.
+fn format_is_date(code: &str) -> bool {
+    let first = code.split(';').next().unwrap_or("");
+    let chars: Vec<char> = first.chars().collect();
+    let mut stripped: Vec<char> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '"' => {
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            '[' => {
+                let end = chars[i + 1..].iter().position(|&c| c == ']').map(|p| i + 1 + p);
+                match end {
+                    Some(end) => {
+                        let inner: String = chars[i + 1..end].iter().collect();
+                        if matches!(inner.as_str(), "h" | "hh" | "m" | "mm" | "s" | "ss") {
+                            stripped.extend(chars[i + 1..end].iter());
+                        }
+                        i = end + 1;
+                    }
+                    None => break,
+                }
+            }
+            c => {
+                stripped.push(c);
+                i += 1;
+            }
+        }
+    }
+    stripped.iter().enumerate().any(|(i, &c)| {
+        matches!(c, 'd' | 'm' | 'h' | 'y' | 's' | 'D' | 'M' | 'H' | 'Y' | 'S')
+            && (i == 0 || (stripped[i - 1] != '_' && stripped[i - 1] != '\\'))
+    })
+}
+
+/// One sheet's read context: shared strings, styles, and the date epoch.
+struct SheetCtx {
+    strings: Vec<String>,
+    styles: Styles,
+    date1904: bool,
 }
 
 fn part<'a>(parts: &'a [zip::Part], name: &str) -> Result<&'a [u8]> {
@@ -307,20 +467,6 @@ fn part_opt<'a>(parts: &'a [zip::Part], name: &str) -> Option<&'a [u8]> {
         .iter()
         .find(|part| part.name == name)
         .map(|part| part.bytes.as_slice())
-}
-
-fn first_sheet_rid(workbook: &[u8]) -> Result<String> {
-    let mut pull = Pull::new(workbook);
-    let mut text = String::new();
-    let mut attrs = Vec::new();
-    while let Some(ev) = pull.next(&mut text, &mut attrs)? {
-        if matches!(ev, Ev::Open | Ev::Empty) && pull.local() == "sheet" {
-            let id = xml::attr(&attrs, "id")
-                .ok_or_else(|| Error::new("xlsx sheet has no relationship id"))?;
-            return Ok(id.to_string());
-        }
-    }
-    Err(Error::new("xlsx workbook has no sheet"))
 }
 
 fn sheet_target(rels: &[u8], rid: &str) -> Result<String> {
@@ -412,11 +558,11 @@ fn parse_shared_strings(xml: &[u8]) -> Result<Vec<String>> {
     Ok(strings)
 }
 
-fn parse_sheet(xml: &[u8], strings: &[String]) -> Result<Vec<Vec<String>>> {
+fn parse_sheet(xml: &[u8], ctx: &SheetCtx) -> Result<Vec<Vec<String>>> {
     let mut pull = Pull::new(xml);
     let mut text = String::new();
     let mut attrs = Vec::new();
-    let mut rows = Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
     let mut row: Vec<String> = Vec::new();
     let mut in_row = false;
     let mut in_c = false;
@@ -425,12 +571,17 @@ fn parse_sheet(xml: &[u8], strings: &[String]) -> Result<Vec<Vec<String>>> {
     let mut in_inline_t = false;
     let mut cell_type = String::new();
     let mut cell_col: Option<u32> = None;
+    let mut cell_style: u32 = 0;
     let mut value = String::new();
     let mut inline = String::new();
+    let mut rect: Option<(u32, u32)> = None;
     while let Some(ev) = pull.next(&mut text, &mut attrs)? {
         match ev {
             Ev::Open | Ev::Empty => {
                 match pull.local() {
+                    "dimension" => {
+                        rect = xml::attr(&attrs, "ref").and_then(parse_dimension);
+                    }
                     "row" => {
                         if in_row {
                             return Err(Error::new("xlsx row is nested"));
@@ -451,6 +602,9 @@ fn parse_sheet(xml: &[u8], strings: &[String]) -> Result<Vec<Vec<String>>> {
                         in_c = true;
                         cell_type = xml::attr(&attrs, "t").unwrap_or("").to_string();
                         cell_col = xml::attr(&attrs, "r").and_then(col_index);
+                        cell_style = xml::attr(&attrs, "s")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
                         value.clear();
                         inline.clear();
                     }
@@ -464,7 +618,7 @@ fn parse_sheet(xml: &[u8], strings: &[String]) -> Result<Vec<Vec<String>>> {
                         place_cell(
                             &mut row,
                             cell_col,
-                            cell_text(&cell_type, &value, &inline, strings)?,
+                            cell_text(&cell_type, &value, &inline, ctx, cell_style)?,
                         )?;
                         in_c = false;
                         in_v = false;
@@ -492,7 +646,7 @@ fn parse_sheet(xml: &[u8], strings: &[String]) -> Result<Vec<Vec<String>>> {
                     place_cell(
                         &mut row,
                         cell_col,
-                        cell_text(&cell_type, &value, &inline, strings)?,
+                        cell_text(&cell_type, &value, &inline, ctx, cell_style)?,
                     )?;
                     in_c = false;
                 }
@@ -507,22 +661,237 @@ fn parse_sheet(xml: &[u8], strings: &[String]) -> Result<Vec<Vec<String>>> {
             Ev::Text => {}
         }
     }
+    if let Some((max_row, max_col)) = rect {
+        let max_row = max_row as usize;
+        let max_col = max_col as usize;
+        // openpyxl fills missing rows between parsed ones, and fills up to
+        // the rectangle only when a parsed row ran past it.
+        let ran_past = rows.len() > max_row;
+        rows.truncate(max_row);
+        for row in rows.iter_mut() {
+            row.truncate(max_col);
+            row.resize(max_col, String::new());
+        }
+        if ran_past {
+            while rows.len() < max_row {
+                rows.push(vec![String::new(); max_col]);
+            }
+        }
+    }
     Ok(rows)
 }
 
-fn cell_text(kind: &str, value: &str, inline: &str, strings: &[String]) -> Result<String> {
+/// `<dimension ref="A1:C3"/>` as a 1-based (rows, cols) rectangle.
+fn parse_dimension(reference: &str) -> Option<(u32, u32)> {
+    let (start, end) = reference.split_once(':').unwrap_or((reference, reference));
+    let row_of = |part: &str| -> Option<u32> {
+        let digits: String = part.chars().skip_while(|c| c.is_ascii_alphabetic()).collect();
+        digits.parse().ok()
+    };
+    let col_of = |part: &str| -> Option<u32> {
+        let letters: String = part.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        // col_index is 0-based; the rectangle width counts columns from 1.
+        col_index(&letters).map(|c| c + 1)
+    };
+    let (rows, cols) = (row_of(end)?, col_of(end)?);
+    let rows = rows.max(row_of(start).unwrap_or(rows));
+    let cols = cols.max(col_of(start).unwrap_or(cols));
+    Some((rows.max(1), cols.max(1)))
+}
+
+fn cell_text(
+    kind: &str,
+    value: &str,
+    inline: &str,
+    ctx: &SheetCtx,
+    style: u32,
+) -> Result<String> {
     match kind {
         "s" => {
             let idx: usize = value.trim().parse().map_err(|_| {
                 Error::new(format!("shared string index \"{value}\" is not a number"))
             })?;
-            strings
-                .get(idx)
-                .cloned()
-                .ok_or_else(|| Error::new(format!("shared string index {idx} is out of range")))
+            ctx.strings.get(idx).cloned().ok_or_else(|| {
+                Error::new(format!("shared string index {idx} is out of range"))
+            })
         }
         "inlineStr" => Ok(inline.to_string()),
+        "b" => Ok(bool_text(value.trim())),
+        "n" | "" => Ok(number_text(value.trim(), ctx, style)),
         _ => Ok(value.trim().to_string()),
+    }
+}
+
+/// openpyxl reads `t="b"` through `bool(int(value))`.
+fn bool_text(value: &str) -> String {
+    match value {
+        "1" | "true" | "TRUE" | "True" => "True".to_string(),
+        "0" | "false" | "FALSE" | "False" => "False".to_string(),
+        other => match other.parse::<i64>() {
+            Ok(n) => {
+                if n != 0 {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
+            Err(_) => other.to_string(),
+        },
+    }
+}
+
+/// A numeric cell: a date serial through the 1900/1904 rules when the style
+/// says date, otherwise the number a float repr would print.
+fn number_text(value: &str, ctx: &SheetCtx, style: u32) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    let fmt_id = ctx.styles.xfs.get(style as usize).copied().unwrap_or(0);
+    let is_date = builtin_is_date(fmt_id)
+        || ctx
+            .styles
+            .custom
+            .get(&fmt_id)
+            .is_some_and(|code| format_is_date(code));
+    if is_date {
+        if let Ok(serial) = value.parse::<f64>() {
+            return excel_serial_iso(serial, ctx.date1904);
+        }
+    }
+    // openpyxl casts a cell with a decimal point or exponent to float and
+    // prints the repr; everything else stays an int in its own digits.
+    if value.contains('.') || value.contains('E') || value.contains('e') {
+        match value.parse::<f64>() {
+            Ok(x) => python_float_repr(x),
+            Err(_) => value.to_string(),
+        }
+    } else {
+        match value.parse::<i64>() {
+            Ok(n) => n.to_string(),
+            Err(_) => value.to_string(),
+        }
+    }
+}
+
+/// Python `round()`: halves go to the even neighbour.
+fn py_round(x: f64) -> f64 {
+    let r = x.round();
+    if (x - x.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+        r - x.signum()
+    } else {
+        r
+    }
+}
+
+/// Excel serial → ISO date, time, or datetime, the way openpyxl's
+/// `from_excel` builds it: serials under one day are times, 1900 serials
+/// 1-59 shift by a day (the leap-year bug), and the epoch is 1899-12-30 or
+/// 1904-01-01.
+fn excel_serial_iso(value: f64, date1904: bool) -> String {
+    let day = value.floor();
+    let fraction = value - day;
+    let ms = py_round(fraction * 86_400_000.0) as i64;
+    if (0.0..1.0).contains(&value) && ms < 86_400_000 {
+        return time_iso(ms);
+    }
+    let mut day = day as i64;
+    if !date1904 && (0.0..60.0).contains(&value) {
+        day += 1;
+    }
+    let (ey, em, ed) = if date1904 { (1904, 1, 1) } else { (1899, 12, 30) };
+    let days = days_from_civil(ey, em, ed) + day + ms / 86_400_000;
+    let rem = ms % 86_400_000;
+    let (y, m, d) = civil_from_days(days);
+    let clock = time_iso(rem);
+    format!("{y:04}-{m:02}-{d:02}T{clock}")
+}
+
+/// A millisecond count inside one day as `HH:MM:SS[.ffffff]`, a Python
+/// `time.isoformat()`.
+fn time_iso(ms: i64) -> String {
+    let h = ms / 3_600_000;
+    let m = (ms / 60_000) % 60;
+    let s = (ms / 1_000) % 60;
+    let us = (ms % 1_000) * 1000;
+    if us == 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{h:02}:{m:02}:{s:02}.{us:06}")
+    }
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Python `repr()` of a finite float: the shortest digits that round-trip,
+/// fixed notation between 1e-4 and 1e16, scientific with a signed two-digit
+/// exponent outside that window.
+fn python_float_repr(x: f64) -> String {
+    if x == 0.0 {
+        return if x.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
+    }
+    let sci = format!("{x:e}");
+    let (mant, exp) = sci.split_once('e').expect("{:e} always has an exponent");
+    let e: i32 = exp.parse().expect("{:e} exponent is an integer");
+    let neg = mant.starts_with('-');
+    let digits: String = mant.chars().filter(|c| c.is_ascii_digit()).collect();
+    let sign = if neg { "-" } else { "" };
+    if (-4..16).contains(&e) {
+        let mut out = String::from(sign);
+        if e >= 0 {
+            let int_len = e as usize + 1;
+            if digits.len() > int_len {
+                out.push_str(&digits[..int_len]);
+                out.push('.');
+                out.push_str(&digits[int_len..]);
+            } else {
+                out.push_str(&digits);
+                for _ in digits.len()..int_len {
+                    out.push('0');
+                }
+                out.push_str(".0");
+            }
+        } else {
+            out.push_str("0.");
+            for _ in 0..(-e - 1) {
+                out.push('0');
+            }
+            out.push_str(&digits);
+        }
+        out
+    } else {
+        let mut out = String::from(sign);
+        out.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        if e >= 0 {
+            out.push_str(&format!("e+{e:02}"));
+        } else {
+            out.push_str(&format!("e-{:02}", -e));
+        }
+        out
     }
 }
 
@@ -592,3 +961,188 @@ const STYLES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
 <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
 </styleSheet>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stored zip with one worksheet, the workbook plumbing, and the given
+    /// styles and sheet XML.
+    fn package(sheet: &str, styles: Option<&str>) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new();
+        zip.add_stored("[Content_Types].xml", CONTENT_TYPES).unwrap();
+        zip.add_stored("_rels/.rels", ROOT_RELS).unwrap();
+        zip.add_stored("xl/workbook.xml", WORKBOOK).unwrap();
+        zip.add_stored("xl/_rels/workbook.xml.rels", WORKBOOK_RELS).unwrap();
+        zip.add_stored("xl/styles.xml", styles.unwrap_or_default().as_bytes()).unwrap();
+        zip.add_stored("xl/worksheets/sheet1.xml", sheet.as_bytes()).unwrap();
+        zip.finish().unwrap()
+    }
+
+    fn sheet_xml(body: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+             <worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"\
+             xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">{body}</worksheet>"
+        )
+    }
+
+    fn rows_of(sheet: &str, styles: Option<&str>) -> Vec<Vec<String>> {
+        let bytes = package(sheet, styles);
+        read_first_sheet(&bytes).unwrap().0
+    }
+
+    #[test]
+    fn date_serials_become_iso_datetimes_and_times() {
+        // cellXfs[1] = builtin 14 (mm-dd-yy), cellXfs[2] = custom "yyyy-mm-dd",
+        // cellXfs[3] = builtin 20 (h:mm).
+        let styles = concat!(
+            "<?xml version=\"1.0\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">",
+            "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"yyyy-mm-dd\"/></numFmts>",
+            "<cellXfs count=\"4\"><xf numFmtId=\"0\"/><xf numFmtId=\"14\"/>",
+            "<xf numFmtId=\"164\"/><xf numFmtId=\"20\"/></cellXfs></styleSheet>"
+        );
+        let sheet = sheet_xml(concat!(
+            "<sheetData>",
+            "<row r=\"1\"><c r=\"A1\" s=\"1\"><v>45296</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" s=\"2\"><v>45296</v></c></row>",
+            "<row r=\"3\"><c r=\"A3\" s=\"3\"><v>0.6041666666666666</v></c></row>",
+            "<row r=\"4\"><c r=\"A4\" s=\"2\"><v>45296.60416666666</v></c></row>",
+            "</sheetData>"
+        ));
+        let rows = rows_of(&sheet, Some(styles));
+        assert_eq!(rows[0][0], "2024-01-05T00:00:00");
+        assert_eq!(rows[1][0], "2024-01-05T00:00:00");
+        assert_eq!(rows[2][0], "14:30:00");
+        assert_eq!(rows[3][0], "2024-01-05T14:30:00");
+    }
+
+    #[test]
+    fn the_1900_leap_bug_shifts_serials_one_to_fifty_nine() {
+        // Serial 1 is 1900-01-01, serial 59 is 1900-02-28, serial 61 is 1900-03-01.
+        let sheet = sheet_xml(concat!(
+            "<sheetData>",
+            "<row r=\"1\"><c r=\"A1\" s=\"1\"><v>1</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" s=\"1\"><v>59</v></c></row>",
+            "<row r=\"3\"><c r=\"A3\" s=\"1\"><v>61</v></c></row>",
+            "</sheetData>"
+        ));
+        let styles = "<?xml version=\"1.0\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cellXfs count=\"2\"><xf numFmtId=\"0\"/><xf numFmtId=\"14\"/></cellXfs></styleSheet>";
+        let rows = rows_of(&sheet, Some(styles));
+        assert_eq!(rows[0][0], "1900-01-01T00:00:00");
+        assert_eq!(rows[1][0], "1900-02-28T00:00:00");
+        assert_eq!(rows[2][0], "1900-03-01T00:00:00");
+    }
+
+    #[test]
+    fn booleans_print_true_and_false() {
+        let sheet = sheet_xml(concat!(
+            "<sheetData>",
+            "<row r=\"1\"><c r=\"A1\" t=\"b\"><v>1</v></c><c r=\"B1\" t=\"b\"><v>0</v></c></row>",
+            "</sheetData>"
+        ));
+        let rows = rows_of(&sheet, None);
+        assert_eq!(rows[0][0], "True");
+        assert_eq!(rows[0][1], "False");
+    }
+
+    #[test]
+    fn a_dimension_rectangle_pads_and_trims() {
+        // Row 4 is outside the rectangle; rows 2-3 are short.
+        let sheet = sheet_xml(concat!(
+            "<dimension ref=\"A1:C3\"/>",
+            "<sheetData>",
+            "<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>2</v></c><c r=\"C1\"><v>3</v></c><c r=\"D1\"><v>4</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\"><v>5</v></c></row>",
+            "<row r=\"4\"><c r=\"A4\"><v>9</v></c></row>",
+            "</sheetData>"
+        ));
+        let rows = rows_of(&sheet, None);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], vec!["1", "2", "3"], "D1 is outside the rectangle");
+        assert_eq!(rows[1], vec!["5", "", ""]);
+        assert_eq!(rows[2], vec!["", "", ""], "row 3 exists inside the rectangle");
+    }
+
+    #[test]
+    fn without_a_dimension_rows_come_back_as_stored() {
+        let sheet = sheet_xml(concat!(
+            "<sheetData>",
+            "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><v>3</v></c></row>",
+            "</sheetData>"
+        ));
+        let rows = rows_of(&sheet, None);
+        assert_eq!(rows, vec![vec!["1"], vec!["2", "3"]]);
+    }
+
+    #[test]
+    fn floats_print_what_a_python_repr_prints() {
+        let sheet = sheet_xml(concat!(
+            "<sheetData>",
+            "<row r=\"1\">",
+            "<c r=\"A1\"><v>3.50</v></c>",
+            "<c r=\"B1\"><v>1e5</v></c>",
+            "<c r=\"C1\"><v>0.0001</v></c>",
+            "<c r=\"D1\"><v>1e16</v></c>",
+            "<c r=\"E1\"><v>-2.5</v></c>",
+            "</row>",
+            "</sheetData>"
+        ));
+        let rows = rows_of(&sheet, None);
+        assert_eq!(rows[0], vec!["3.5", "100000.0", "0.0001", "1e+16", "-2.5"]);
+    }
+
+    #[test]
+    fn the_active_sheet_is_read_not_always_the_first() {
+        let mut zip = zip::ZipWriter::new();
+        zip.add_stored("[Content_Types].xml", CONTENT_TYPES).unwrap();
+        zip.add_stored("_rels/.rels", ROOT_RELS).unwrap();
+        zip.add_stored(
+            "xl/workbook.xml",
+            concat!(
+                "<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+                "<bookViews><workbookView activeTab=\"1\"/></bookViews>",
+                "<sheets><sheet name=\"One\" sheetId=\"1\" r:id=\"rId1\"/>",
+                "<sheet name=\"Two\" sheetId=\"2\" r:id=\"rId2\"/></sheets></workbook>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.add_stored(
+            "xl/_rels/workbook.xml.rels",
+            concat!(
+                "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+                "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>",
+                "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>",
+                "</Relationships>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.add_stored("xl/styles.xml", STYLES).unwrap();
+        zip.add_stored(
+            "xl/worksheets/sheet1.xml",
+            sheet_xml("<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>").as_bytes(),
+        )
+        .unwrap();
+        zip.add_stored(
+            "xl/worksheets/sheet2.xml",
+            sheet_xml("<sheetData><row r=\"1\"><c r=\"A1\"><v>22</v></c></row></sheetData>").as_bytes(),
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap();
+        let (rows, _) = read_first_sheet(&bytes).unwrap();
+        assert_eq!(rows, vec![vec!["22"]]);
+    }
+
+    #[test]
+    fn python_round_halves_go_to_the_even_neighbour() {
+        assert_eq!(py_round(2.5), 2.0);
+        assert_eq!(py_round(3.5), 4.0);
+        assert_eq!(py_round(-2.5), -2.0);
+        assert_eq!(py_round(0.4), 0.0);
+        assert_eq!(py_round(1.6), 2.0);
+    }
+}

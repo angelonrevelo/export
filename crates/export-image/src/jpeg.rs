@@ -528,6 +528,30 @@ impl Reader<'_> {
         Ok(())
     }
 
+    /// At a restart boundary: drop pending bits, skip to the RST marker,
+    /// and continue after it. Predictors reset at the caller.
+    fn resync(&mut self) -> Result<(), Error> {
+        self.n = 0;
+        self.acc = 0;
+        while self.i + 1 < self.data.len() {
+            if self.data[self.i] == 0xff {
+                let next = self.data[self.i + 1];
+                if (0xd0..=0xd7).contains(&next) {
+                    self.i += 2;
+                    return Ok(());
+                }
+                if next == 0xff {
+                    self.i += 1;
+                    continue;
+                }
+                // EOI or any other marker: the scan is over.
+                return Err(TRUNCATED);
+            }
+            self.i += 1;
+        }
+        Err(TRUNCATED)
+    }
+
     fn bit(&mut self) -> Result<u32, Error> {
         if self.n == 0 {
             self.ensure()?;
@@ -632,6 +656,7 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
     let mut width = 0u32;
     let mut height = 0u32;
     let mut comps: Vec<Comp> = Vec::new();
+    let mut restart_interval: u16 = 0;
     loop {
         let marker = read_marker(bytes, &mut i)?;
         if marker == 0xd9 {
@@ -685,13 +710,16 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
                         ac: 0,
                     });
                 }
-                if comps[0].h != 2
-                    || comps[0].v != 2
-                    || comps[1].h != 1
-                    || comps[1].v != 1
-                    || comps[2].h != 1
-                    || comps[2].v != 1
+                if comps.iter().any(|c| c.h == 0 || c.v == 0 || c.h > 2 || c.v > 2) {
+                    return Err(UNSUPPORTED);
+                }
+                let hmax = comps.iter().map(|c| c.h).max().unwrap_or(1);
+                let vmax = comps.iter().map(|c| c.v).max().unwrap_or(1);
+                if comps.iter().any(|c| c.h != hmax && c.h != 1)
+                    || comps.iter().any(|c| c.v != vmax && c.v != 1)
                 {
+                    // Mixed densities like 2x2 with 2x1 stay unsupported;
+                    // 4:2:0, 4:2:2, and 4:4:4 cover what phones produce.
                     return Err(UNSUPPORTED);
                 }
             }
@@ -748,9 +776,10 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
                 break;
             }
             0xdd => {
-                if payload != [0, 0] {
-                    return Err(UNSUPPORTED);
+                if payload.len() != 2 {
+                    return Err(INVALID);
                 }
+                restart_interval = u16::from_be_bytes([payload[0], payload[1]]);
             }
             0xe0..=0xef | 0xfe => {}
             _ => return Err(UNSUPPORTED),
@@ -770,70 +799,84 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Raster, Error> {
         n: 0,
     };
     let mut pixels = vec![0u8; width as usize * height as usize * 3];
-    let mcus_x = width.div_ceil(16);
-    let mcus_y = height.div_ceil(16);
+    let hmax = comps.iter().map(|c| c.h).max().unwrap_or(1) as usize;
+    let vmax = comps.iter().map(|c| c.v).max().unwrap_or(1) as usize;
+    let mcu_w = 8 * hmax;
+    let mcu_h = 8 * vmax;
+    let mcus_x = width.div_ceil(mcu_w as u32) as usize;
+    let mcus_y = height.div_ceil(mcu_h as u32) as usize;
     let mut prev = [0i32; 3];
+    let restart = usize::from(restart_interval);
+    let mut mcu_index = 0usize;
     for comp in &comps {
         let tq = usize::from(comp.tq);
         if tq > 3 || !quant_set[tq] {
             return Err(INVALID);
         }
     }
-    let qy = &quant[usize::from(comps[0].tq)];
-    let qc1 = &quant[usize::from(comps[1].tq)];
-    let qc2 = &quant[usize::from(comps[2].tq)];
+    // One plane per component at its own sampling density; blocks decode
+    // MCU by MCU, each component contributing h x v blocks.
+    let plane_w = |h: usize| mcus_x * h * 8;
+    let plane_h = |v: usize| mcus_y * v * 8;
+    let mut planes: Vec<Vec<u8>> = comps
+        .iter()
+        .map(|c| vec![0u8; plane_w(c.h as usize) * plane_h(c.v as usize)])
+        .collect();
     for my in 0..mcus_y {
         for mx in 0..mcus_x {
-            let mut yplane = [0u8; 256];
-            for by in 0..2u32 {
-                for bx in 0..2u32 {
-                    let block = decode_block(
-                        &mut reader,
-                        table(&huff_dc, usize::from(comps[0].dc))?,
-                        table(&huff_ac, usize::from(comps[0].ac))?,
-                        qy,
-                        &mut prev[0],
-                    )?;
-                    for ly in 0..8 {
-                        for lx in 0..8 {
-                            yplane[((by * 8 + ly) * 16 + bx * 8 + lx) as usize] =
-                                block[(ly * 8 + lx) as usize];
+            if restart > 0 && mcu_index > 0 && mcu_index % restart == 0 {
+                // The entropy stream carries an RSTn here: byte-align,
+                // skip it, and reset the DC predictions.
+                reader.resync()?;
+                prev = [0i32; 3];
+            }
+            mcu_index += 1;
+            for (s, comp) in comps.iter().enumerate() {
+                let (h, v) = (comp.h as usize, comp.v as usize);
+                for by in 0..v {
+                    for bx in 0..h {
+                        let block = decode_block(
+                            &mut reader,
+                            table(&huff_dc, usize::from(comp.dc))?,
+                            table(&huff_ac, usize::from(comp.ac))?,
+                            &quant[usize::from(comp.tq)],
+                            &mut prev[s],
+                        )?;
+                        let pw = plane_w(h);
+                        let x0 = mx * h * 8 + bx * 8;
+                        let y0 = my * v * 8 + by * 8;
+                        for ly in 0..8 {
+                            let dst = (y0 + ly) * pw + x0;
+                            for lx in 0..8 {
+                                planes[s][dst + lx] = block[ly * 8 + lx];
+                            }
                         }
                     }
                 }
             }
-            let cb = decode_block(
-                &mut reader,
-                table(&huff_dc, usize::from(comps[1].dc))?,
-                table(&huff_ac, usize::from(comps[1].ac))?,
-                qc1,
-                &mut prev[1],
-            )?;
-            let cr = decode_block(
-                &mut reader,
-                table(&huff_dc, usize::from(comps[2].dc))?,
-                table(&huff_ac, usize::from(comps[2].ac))?,
-                qc2,
-                &mut prev[2],
-            )?;
-            let x0 = mx * 16;
-            let y0 = my * 16;
-            for py in 0..16u32 {
-                for px in 0..16u32 {
-                    let x = x0 + px;
-                    let y = y0 + py;
-                    if x >= width || y >= height {
-                        continue;
-                    }
-                    let ys = f32::from(yplane[(py * 16 + px) as usize]);
-                    let ci = ((py / 2) * 8 + px / 2) as usize;
-                    let (r, g, b) = rgb_from(ys, f32::from(cb[ci]), f32::from(cr[ci]));
-                    let o = ((y as usize * width as usize) + x as usize) * 3;
-                    pixels[o] = r;
-                    pixels[o + 1] = g;
-                    pixels[o + 2] = b;
-                }
+        }
+    }
+    // Map output pixels through each plane with nearest upsampling: a
+    // component with sampling h,v covers an hmax x vmax pixel cell with
+    // h x v samples.
+    for py in 0..height as usize {
+        for px in 0..width as usize {
+            let o = (py * width as usize + px) * 3;
+            let mut rgb = [0u8; 3];
+            for (s, comp) in comps.iter().enumerate() {
+                let sx = px * comp.h as usize / hmax;
+                let sy = py * comp.v as usize / vmax;
+                let pw = plane_w(comp.h as usize);
+                rgb[s] = planes[s][sy * pw + sx];
             }
+            let (r, g, b) = rgb_from(
+                f32::from(rgb[0]),
+                f32::from(rgb[1]),
+                f32::from(rgb[2]),
+            );
+            pixels[o] = r;
+            pixels[o + 1] = g;
+            pixels[o + 2] = b;
         }
     }
     Raster::new(width, height, 3, pixels)

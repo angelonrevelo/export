@@ -67,6 +67,15 @@ name = "export-opus"
 version = "0.1.0"
 
 [[package]]
+name = "export-oracle"
+version = "0.1.0"
+dependencies = [
+ "export-docs",
+ "export-image",
+ "export-sheet",
+]
+
+[[package]]
 name = "export-pack"
 version = "0.1.0"
 

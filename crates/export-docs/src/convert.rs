@@ -44,7 +44,7 @@ const PAIRS: &[Pair] = &[
     Pair { source: "htm", target: "pdf", ready: true, note: "same path as html" },
     Pair { source: "txt", target: "html", ready: true, note: "paragraph wrap" },
     Pair { source: "txt", target: "pdf", ready: true, note: "txt→html→text PDF" },
-    Pair { source: "pdf", target: "txt", ready: true, note: "literal strings in content streams; no ToUnicode" },
+    Pair { source: "pdf", target: "txt", ready: true, note: "text state machine with ToUnicode CMaps, font encodings, and widths; shaped like pdfplumber" },
     Pair { source: "pdf", target: "split", ready: true, note: "one PDF per page, classic xref rewritten" },
     Pair { source: "pdf", target: "merge", ready: true, note: "new trailer, pages concatenated" },
     Pair { source: "pdf", target: "rotate", ready: true, note: "sets /Rotate, does not rasterize" },
@@ -276,6 +276,12 @@ pub fn pdf_page_count(input: &[u8]) -> Result<usize> {
 
 pub fn pdf_text(input: &[u8]) -> Result<String> {
     pdf::plain_text(input)
+}
+
+/// Per-page literal strings, in page order, so a caller can shape per-page
+/// output like the Python app does.
+pub fn pdf_text_pages(input: &[u8]) -> Result<Vec<String>> {
+    pdf::plain_text_pages(input)
 }
 
 pub fn pdf_image_matches(input: &[u8], width: u32, height: u32, rgb: &[u8]) -> Result<bool> {
